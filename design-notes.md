@@ -1,3 +1,196 @@
+My goal was Yes, so I'm making, I want to make a screen recorder, which should be simple, fast, and be efficient, which I'll make on my Windows. So I need to create that type of screen recorder, which will help me record my screen. That's it. That's all what it should do, where I should be able to pause it and mute it or unmute it, and it should be automatically get saved in some of the directory.
+
+so I thought to 
+
+```
+**Assigned Expert Role:**
+You are a Senior Windows Desktop Application Engineer with expertise in system-level multimedia capture, performance optimization, and native Windows development.
+
+---
+
+## Task Overview
+
+Design and implement a lightweight, high-performance screen recorder application for Windows.
+
+---
+
+## Objective
+
+Create a simple, fast, and efficient screen recording application for Windows that:
+
+* Records the full screen
+* Allows pause and resume functionality
+* Supports mute and unmute for audio
+* Automatically saves recordings to a predefined directory
+
+The application should focus exclusively on reliable screen recording functionality without unnecessary features.
+
+---
+
+## Context
+
+The application will run on a Windows operating system. It is intended to be minimal, responsive, and resource-efficient. The primary goal is performance and simplicity, not feature richness.
+
+---
+
+## Scope
+
+### Core Functional Requirements
+
+1. Record the entire screen.
+2. Support pause and resume recording.
+3. Allow audio mute and unmute during recording.
+4. Automatically save recordings to a specified local directory.
+5. Use a common video format (e.g., MP4 with H.264 encoding).
+6. Generate unique filenames (e.g., timestamp-based naming).
+
+### Non-Functional Requirements
+
+1. Fast startup time.
+2. Low CPU and memory usage.
+3. Minimal UI with intuitive controls.
+4. Stable recording without frame drops under normal usage.
+5. Clean and maintainable architecture.
+
+---
+
+## Detailed Instructions / Requirements
+
+### 1. Technology Stack Recommendation
+
+* Use a Windows-native framework (e.g., .NET with WPF/WinUI or C++ with Win32/DirectX).
+* Use efficient screen capture APIs such as:
+
+  * Desktop Duplication API (DXGI)
+  * Windows Graphics Capture API
+* Use hardware-accelerated encoding (e.g., Media Foundation or FFmpeg with hardware acceleration).
+
+### 2. Application Architecture
+
+* Separate layers:
+
+  * UI Layer
+  * Capture Engine
+  * Encoding Module
+  * File Management Module
+* Use asynchronous processing for:
+
+  * Frame capture
+  * Encoding
+  * File writing
+
+### 3. Recording Behavior
+
+* Start Recording:
+
+  * Initialize capture session
+  * Initialize audio capture (if enabled)
+  * Begin encoding pipeline
+* Pause:
+
+  * Temporarily halt frame/audio submission without finalizing file
+* Resume:
+
+  * Continue feeding frames/audio into encoder
+* Stop:
+
+  * Finalize encoding
+  * Close file properly
+  * Save automatically to predefined directory
+
+### 4. Audio Handling
+
+* Capture system audio and/or microphone (define clearly).
+* Mute:
+
+  * Stop passing audio frames to encoder.
+* Unmute:
+
+  * Resume audio stream.
+
+### 5. File Handling
+
+* Save recordings automatically to:
+
+  * Example: `C:\Users\<User>\Videos\ScreenRecordings`
+* Ensure directory exists; create if not.
+* Use timestamp-based filenames:
+
+  * `ScreenRecording_YYYYMMDD_HHMMSS.mp4`
+
+### 6. UI Requirements
+
+* Minimal window with:
+
+  * Start button
+  * Pause/Resume button
+  * Stop button
+  * Mute/Unmute toggle
+* Optional: system tray support.
+* Show recording status indicator (e.g., red dot).
+
+---
+
+## Constraints
+
+* Must run on modern Windows versions (Windows 10+).
+* No unnecessary third-party heavy dependencies.
+* Must prioritize performance and stability.
+* Avoid blocking UI thread.
+* Avoid excessive memory buffering.
+
+---
+
+## Assumptions
+
+* Recording full screen only (not region selection).
+* Output format: MP4 (H.264).
+* Default frame rate: 30 FPS (configurable if needed).
+
+---
+
+## Edge Cases / Considerations
+
+1. Handle sudden application crash gracefully (avoid corrupted file if possible).
+2. Handle low disk space.
+3. Handle display resolution changes during recording.
+4. Handle multiple monitor setups (define behavior clearly).
+5. Ensure encoder finalization on stop is reliable.
+6. Prevent recording infinite file growth without warning.
+
+---
+
+## Expected Output Format
+
+Provide:
+
+1. Recommended tech stack and justification.
+2. High-level architecture diagram (text-based).
+3. Core module breakdown.
+4. Key API usage examples (pseudo-code or real code).
+5. Performance optimization strategies.
+6. Step-by-step implementation roadmap.
+
+---
+
+## Deliverables
+
+* Clear system design.
+* Implementation plan.
+* Code structure outline.
+* Critical code snippets for:
+
+  * Screen capture
+  * Encoding pipeline
+  * Pause/resume logic
+  * File saving logic
+* Performance and stability recommendations.
+
+The response must be practical, implementation-ready, and optimized for building a production-quality minimal Windows screen recorder.
+```
+
+So plan was 
+
 # 1. Recommended Tech Stack (Clear Decision)
 
 ## Primary stack (recommended):
