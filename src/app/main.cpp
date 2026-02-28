@@ -347,6 +347,37 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
 
+    // T030: Orphan detection — scan for *.partial.mp4 left by a previous crash
+    {
+        auto orphans = g_storage.findOrphanedFiles();
+        for (const auto& orphan : orphans) {
+            std::wstring msg =
+                L"An incomplete recording was found:\n\n" + orphan +
+                L"\n\nWhat would you like to do?\n\n"
+                L"Yes     \u2192 Recover (rename to .mp4 for playback)\n"
+                L"No      \u2192 Delete the incomplete file\n"
+                L"Cancel  \u2192 Ignore (keep as-is)";
+            int choice = MessageBoxW(g_hwnd, msg.c_str(),
+                                     L"Incomplete Recording Found",
+                                     MB_YESNOCANCEL | MB_ICONQUESTION);
+            if (choice == IDYES) {
+                std::wstring final_path = sr::StorageManager::partialToFinal(orphan);
+                if (MoveFileExW(orphan.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                    SR_LOG_INFO(L"Orphan recovered: %s", final_path.c_str());
+                    MessageBoxW(g_hwnd,
+                        (L"Recording recovered:\n" + final_path).c_str(),
+                        L"Recovery Complete", MB_ICONINFORMATION | MB_OK);
+                } else {
+                    SR_LOG_ERROR(L"Orphan recovery failed: %u", GetLastError());
+                }
+            } else if (choice == IDNO) {
+                DeleteFileW(orphan.c_str());
+                SR_LOG_INFO(L"Orphan deleted: %s", orphan.c_str());
+            }
+            // IDCANCEL = ignore, leave file as-is
+        }
+    }
+
     // Reflect loaded settings in the profile label
     if (g_lbl_profile) {
         wchar_t prof_buf[64];

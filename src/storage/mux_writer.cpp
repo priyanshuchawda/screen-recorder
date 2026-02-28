@@ -39,6 +39,26 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
         return false;
     }
 
+    // T029: Acquire exclusive write lock (FILE_SHARE_READ only).
+    // MFSinkWriter already opened the file; we open a second handle from our
+    // process with FILE_SHARE_READ so external processes cannot open for write.
+    lock_handle_ = CreateFileW(
+        partial_path.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ,   // allow only readers, block external writers
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (lock_handle_ == INVALID_HANDLE_VALUE) {
+        // Non-fatal: log and continue — recording still works, just without exclusive lock
+        SR_LOG_WARN(L"Could not acquire exclusive file lock on '%s': %u",
+                    partial_path.c_str(), GetLastError());
+        lock_handle_ = INVALID_HANDLE_VALUE;
+    } else {
+        SR_LOG_INFO(L"Exclusive write lock acquired on partial file");
+    }
+
     // ===================================================================
     // VIDEO STREAM — H.264 output
     // ===================================================================
@@ -163,6 +183,13 @@ bool MuxWriter::finalize() {
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"SinkWriter::Finalize failed: 0x%08X", hr);
         // Even on failure, try to rename so the file is accessible
+    }
+
+    // T029: Release exclusive write lock before rename so MoveFileEx succeeds
+    if (lock_handle_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(lock_handle_);
+        lock_handle_ = INVALID_HANDLE_VALUE;
+        SR_LOG_INFO(L"Exclusive write lock released");
     }
 
     // Rename .partial.mp4 -> .mp4

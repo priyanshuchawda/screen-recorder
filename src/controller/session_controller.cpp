@@ -165,6 +165,18 @@ bool SessionController::start() {
     }
     audio_->start();
 
+    // T031: Start async disk space polling — auto-stop on < 500 MB free
+    if (storage_) {
+        storage_->startDiskSpacePolling([this]() {
+            // Runs on poll thread — use atomic transition to safely trigger stop
+            if (!machine_.is_idle()) {
+                SR_LOG_WARN(L"Auto-stopping: disk space critically low");
+                notify_error(L"\u26A0 Disk space critically low! Recording auto-stopped.");
+                stop(); // safe: atomic state transitions; stopDiskSpacePolling detaches
+            }
+        });
+    }
+
     notify_status(L"Recording...");
     SR_LOG_INFO(L"Recording started -> %s", current_output_path_.c_str());
     return true;
@@ -175,6 +187,9 @@ bool SessionController::stop() {
 
     if (!machine_.transition(SessionEvent::Stop)) return false;
     notify_status(L"Stopping...");
+
+    // T031: Stop disk space polling (handles re-entrant call from poll thread)
+    if (storage_) storage_->stopDiskSpacePolling();
 
     // Stop producers first
     capture_->stop();
