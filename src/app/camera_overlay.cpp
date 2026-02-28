@@ -153,8 +153,51 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
     }
 
     switch (msg) {
+    case WM_NCHITTEST: {
+        LRESULT hit = DefWindowProcW(hwnd, msg, wp, lp);
+        if (hit != HTCLIENT) {
+            return hit;
+        }
+
+        RECT rc{};
+        GetWindowRect(hwnd, &rc);
+        const int border = 8;
+        const int x = static_cast<int>(static_cast<short>(LOWORD(lp)));
+        const int y = static_cast<int>(static_cast<short>(HIWORD(lp)));
+
+        const bool left   = x >= rc.left && x < rc.left + border;
+        const bool right  = x < rc.right && x >= rc.right - border;
+        const bool top    = y >= rc.top && y < rc.top + border;
+        const bool bottom = y < rc.bottom && y >= rc.bottom - border;
+
+        if (top && left) return HTTOPLEFT;
+        if (top && right) return HTTOPRIGHT;
+        if (bottom && left) return HTBOTTOMLEFT;
+        if (bottom && right) return HTBOTTOMRIGHT;
+        if (left) return HTLEFT;
+        if (right) return HTRIGHT;
+        if (top) return HTTOP;
+        if (bottom) return HTBOTTOM;
+
+        return HTCLIENT;
+    }
     case WM_ERASEBKGND:
         return 1;
+    case WM_LBUTTONDOWN: {
+        const int x = static_cast<short>(LOWORD(lp));
+        const int y = static_cast<short>(HIWORD(lp));
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        const RECT close_rc{ rc.right - 28, 6, rc.right - 6, 28 };
+        if (x >= close_rc.left && x < close_rc.right && y >= close_rc.top && y < close_rc.bottom) {
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+        }
+
+        ReleaseCapture();
+        SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+        return 0;
+    }
     case WM_SIZE:
         if (self) self->resize_capture_to_client();
         return 0;
@@ -195,7 +238,7 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 }
 
 void CameraOverlay::apply_preview_tuning() {
-    capture_interval_ms_.store(on_battery_ ? 80 : 33, std::memory_order_relaxed);
+    capture_interval_ms_.store(16, std::memory_order_relaxed);
 }
 
 void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
@@ -209,6 +252,10 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
         SetTextColor(hdc, RGB(210, 210, 210));
         RECT txt = rc;
         DrawTextW(hdc, L"No camera frame", -1, &txt, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        RECT close_rc{ rc.right - 28, 6, rc.right - 6, 28 };
+        SetTextColor(hdc, RGB(235, 235, 235));
+        DrawTextW(hdc, L"×", -1, &close_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         return;
     }
 
@@ -225,27 +272,37 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
     const double src_ar = frame_height_ ? (static_cast<double>(frame_width_) / static_cast<double>(frame_height_)) : 1.0;
     const double dst_ar = dst_h > 0 ? (static_cast<double>(dst_w) / static_cast<double>(dst_h)) : src_ar;
 
-    int draw_w = dst_w;
-    int draw_h = dst_h;
-    int draw_x = 0;
-    int draw_y = 0;
+    int src_x = 0;
+    int src_y = 0;
+    int src_w = static_cast<int>(frame_width_);
+    int src_h = static_cast<int>(frame_height_);
     if (src_ar > dst_ar) {
-        draw_h = static_cast<int>(dst_w / src_ar);
-        draw_y = (dst_h - draw_h) / 2;
-    } else {
-        draw_w = static_cast<int>(dst_h * src_ar);
-        draw_x = (dst_w - draw_w) / 2;
+        src_w = static_cast<int>(static_cast<double>(frame_height_) * dst_ar);
+        if (src_w < 1) src_w = 1;
+        src_x = (static_cast<int>(frame_width_) - src_w) / 2;
+    } else if (src_ar < dst_ar) {
+        src_h = static_cast<int>(static_cast<double>(frame_width_) / dst_ar);
+        if (src_h < 1) src_h = 1;
+        src_y = (static_cast<int>(frame_height_) - src_h) / 2;
     }
 
     SetStretchBltMode(hdc, HALFTONE);
     StretchDIBits(
         hdc,
-        draw_x, draw_y, draw_w, draw_h,
-        0, 0, static_cast<int>(frame_width_), static_cast<int>(frame_height_),
+        0, 0, dst_w, dst_h,
+        src_x, src_y, src_w, src_h,
         latest_frame_.data(),
         &bmi,
         DIB_RGB_COLORS,
         SRCCOPY);
+
+    RECT close_rc{ rc.right - 28, 6, rc.right - 6, 28 };
+    HBRUSH close_bg = CreateSolidBrush(RGB(24, 24, 24));
+    FillRect(hdc, &close_rc, close_bg);
+    DeleteObject(close_bg);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(235, 235, 235));
+    DrawTextW(hdc, L"×", -1, &close_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
 void CameraOverlay::capture_loop() {
@@ -303,6 +360,7 @@ void CameraOverlay::capture_loop() {
     ComPtr<IMFAttributes> reader_attrs;
     MFCreateAttributes(&reader_attrs, 1);
     reader_attrs->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+    reader_attrs->SetUINT32(MF_LOW_LATENCY, TRUE);
 
     ComPtr<IMFSourceReader> reader;
     hr = MFCreateSourceReaderFromMediaSource(source.Get(), reader_attrs.Get(), &reader);
@@ -325,6 +383,7 @@ void CameraOverlay::capture_loop() {
     }
 
     capture_running_.store(true, std::memory_order_release);
+    ULONGLONG last_present_ms = 0;
     while (capture_running_.load(std::memory_order_acquire)) {
         DWORD stream_index = 0, flags = 0;
         LONGLONG ts = 0;
@@ -333,12 +392,12 @@ void CameraOverlay::capture_loop() {
                                 &stream_index, &flags, &ts, &sample);
         if (FAILED(hr)) {
             SR_LOG_WARN(L"CameraOverlay: ReadSample failed: 0x%08X", hr);
-            Sleep(80);
+            Sleep(5);
             continue;
         }
 
         if (flags & MF_SOURCE_READERF_STREAMTICK) {
-            Sleep(10);
+            Sleep(1);
             continue;
         }
 
@@ -390,12 +449,17 @@ void CameraOverlay::capture_loop() {
                     }
 
                     buf->Unlock();
-                    if (host_hwnd_) InvalidateRect(host_hwnd_, nullptr, FALSE);
+                    if (host_hwnd_) {
+                        const int present_interval_ms = capture_interval_ms_.load(std::memory_order_relaxed);
+                        const ULONGLONG now_ms = GetTickCount64();
+                        if (present_interval_ms <= 0 || (now_ms - last_present_ms) >= static_cast<ULONGLONG>(present_interval_ms)) {
+                            InvalidateRect(host_hwnd_, nullptr, FALSE);
+                            last_present_ms = now_ms;
+                        }
+                    }
                 }
             }
         }
-
-        Sleep(capture_interval_ms_.load(std::memory_order_relaxed));
     }
 
     source->Shutdown();
@@ -406,8 +470,8 @@ void CameraOverlay::capture_loop() {
 bool CameraOverlay::start(HWND owner) {
     if (running_) return true;
 
-    constexpr int host_w = 360;
-    constexpr int host_h = 220;
+    constexpr int host_w = 280;
+    constexpr int host_h = 210;
 
     int x = 40;
     int y = 40;
@@ -436,10 +500,10 @@ bool CameraOverlay::start(HWND owner) {
     host_hwnd_ = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         L"SRCameraOverlayHost",
-        L"Camera Preview",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        L"",
+        WS_POPUP | WS_VISIBLE,
         x, y, host_w, host_h,
-        owner,
+        nullptr,
         nullptr,
         GetModuleHandleW(nullptr),
         this);
@@ -458,19 +522,13 @@ bool CameraOverlay::start(HWND owner) {
     capture_thread_ = std::thread(&CameraOverlay::capture_loop, this);
 
     running_ = true;
-    SR_LOG_INFO(L"CameraOverlay: started (%s power)", on_battery_ ? L"battery" : L"AC");
+    SR_LOG_INFO(L"CameraOverlay: started (stable mode)");
     return true;
 }
 
 void CameraOverlay::refresh_power_profile() {
     if (!running_) return;
-
-    bool now_battery = detect_on_battery();
-    if (now_battery != on_battery_) {
-        on_battery_ = now_battery;
-        apply_preview_tuning();
-        SR_LOG_INFO(L"CameraOverlay: power mode changed -> %s", on_battery_ ? L"battery" : L"AC");
-    }
+    apply_preview_tuning();
 }
 
 void CameraOverlay::stop() {

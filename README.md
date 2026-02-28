@@ -56,16 +56,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `build\ScreenRecorder-0.2.1-windows-x64.zip`
+- `build\ScreenRecorder-0.2.2-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.2.1
-git push origin v0.2.1
-gh release create v0.2.1 build\ScreenRecorder-0.2.1-windows-x64.zip --title "v0.2.1" --notes "Stable Windows package release."
+git tag v0.2.2
+git push origin v0.2.2
+gh release create v0.2.2 build\ScreenRecorder-0.2.2-windows-x64.zip --title "v0.2.2" --notes "Stable Windows package release."
 ```
 
 ## Project Layout
