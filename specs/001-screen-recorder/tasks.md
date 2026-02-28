@@ -15,22 +15,22 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 — Create native C++20 project structure per implementation plan
+- [X] T001 — Create native C++20 project structure per implementation plan
   - INPUT: `plan.md` project structure diagram
   - OUTPUT: Directory tree created: `src/{app,controller,capture,audio,encoder,sync,storage,utils}`, `tests/{unit,integration}`
   - VERIFY: All directories exist, root `CMakeLists.txt` created
 
-- [ ] T002 — Initialize CMake configuration linking WinRT, D3D11, WASAPI, and Media Foundation
+- [X] T002 — Initialize CMake configuration linking WinRT, D3D11, WASAPI, and Media Foundation
   - INPUT: Empty `CMakeLists.txt`, Windows SDK 10.0.26100
   - OUTPUT: CMake builds a minimal Win32 "hello world" window with all libs linked
   - VERIFY: `cmake --build . --config Debug` succeeds, `.exe` runs and shows a window
 
-- [ ] T003 [P] — Configure Google Test framework in `tests/` directory
+- [X] T003 [P] — Configure Google Test framework in `tests/` directory
   - INPUT: CMake project from T002
   - OUTPUT: `tests/CMakeLists.txt` with GTest fetched via FetchContent, a sample test passes
   - VERIFY: `ctest --test-dir build` runs and reports 1 passing test
 
-- [ ] T004 [P] — Setup basic logging and QPC timing wrappers in `src/utils/`
+- [X] T004 [P] — Setup basic logging and QPC timing wrappers in `src/utils/`
   - INPUT: None (self-contained utility)
   - OUTPUT: `src/utils/logging.h`, `src/utils/qpc_clock.h` with QPC timestamp helpers
   - VERIFY: Unit test confirms QPC timestamps are monotonic and nanosecond-resolution
@@ -43,27 +43,27 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 **CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T005 — Implement thread ownership primitives and bounded lock-free queue (max 5 frames) in `src/utils/`
+- [X] T005 — Implement thread ownership primitives and bounded lock-free queue (max 5 frames) in `src/utils/`
   - INPUT: `data-model.md` type definitions
   - OUTPUT: `BoundedQueue<T>` template with try_push/try_pop, `ThreadOwner` RAII wrapper
   - VERIFY: Multi-threaded unit test: 2 producers + 1 consumer, queue never exceeds 5 items, no data races (run under TSAN or similar)
 
-- [ ] T006 [P] — Implement `StorageManager` scaffolding and directory resolution in `src/storage/`
+- [X] T006 [P] — Implement `StorageManager` scaffolding and directory resolution in `src/storage/`
   - INPUT: `FOLDERID_Videos` shell API
   - OUTPUT: `StorageManager` resolves `%USERPROFILE%\Videos\Recordings`, creates folder if missing, generates unique filenames (`ScreenRec_YYYY-MM-DD_HH-mm-ss.mp4`) with `_001` conflict suffix
   - VERIFY: Unit test creates temp dir, generates 3 filenames, verifies uniqueness and format
 
-- [ ] T007 — Implement `SessionMachine` state transitions in `src/controller/`
+- [X] T007 — Implement `SessionMachine` state transitions in `src/controller/`
   - INPUT: State diagram from `data-model.md`
   - OUTPUT: `SessionMachine` class: `Idle -> Recording -> Paused -> Recording -> Stopping -> Idle`, rejects invalid transitions, emits state-change events
   - VERIFY: Unit tests cover all valid transitions AND all invalid transition rejections (at least 10 test cases)
 
-- [ ] T008 — Setup D3D11 device and HW Encoder enumeration in `src/encoder/`
+- [X] T008 — Setup D3D11 device and HW Encoder enumeration in `src/encoder/`
   - INPUT: Windows SDK, D3D11 headers
   - OUTPUT: `EncoderProbe` class that creates D3D11 device, enumerates `MFT_ENUM_FLAG_HARDWARE`, checks NV12 and DXGI device manager support
   - VERIFY: Run on target machine (Iris Xe) — logs "HW encoder found: Intel Quick Sync" or appropriate fallback
 
-- [ ] T009 — Create `RenderFrame` and `AudioPacket` standard structs in `src/utils/`
+- [X] T009 — Create `RenderFrame` and `AudioPacket` standard structs in `src/utils/`
   - INPUT: `data-model.md` type definitions
   - OUTPUT: `RenderFrame` (ID3D11Texture2D, int64_t pts), `AudioPacket` (PCM buffer, size, int64_t pts, bool is_silence), `FileContext` (paths, lock handle)
   - VERIFY: Structs compile, sizeof checks documented, move semantics work correctly

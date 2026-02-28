@@ -118,8 +118,8 @@ cmake --build build
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| Phase 1 | Project setup & CMake | ⬜ Not started |
-| Phase 2 | Core infrastructure (queues, state machine) | ⬜ Not started |
+| Phase 1 | Project setup & CMake | ✅ Complete |
+| Phase 2 | Core infrastructure (queues, state machine) | ✅ Complete |
 | Phase 3 | **MVP** — Screen + mic capture, encode, save | ⬜ Not started |
 | Phase 4 | Pause & Resume | ⬜ Not started |
 | Phase 5 | Mute & Unmute | ⬜ Not started |
