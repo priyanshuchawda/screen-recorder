@@ -99,7 +99,7 @@ public:
     static std::wstring partialToFinal(const std::wstring& partial_path) {
         std::wstring result = partial_path;
         size_t pos = result.rfind(L".partial.mp4");
-        if (pos != std::wstring::npos) {
+        if (pos != std::wstring::npos && pos + 12 == result.size()) {
             result.replace(pos, 12, L".mp4");
         }
         return result;
