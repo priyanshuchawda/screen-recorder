@@ -80,42 +80,42 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 1
 
-- [ ] T010 [P] [US1] — Implement `CaptureEngine` using WGC for fullscreen in `src/capture/`
+- [X] T010 [P] [US1] — Implement `CaptureEngine` using WGC for fullscreen in `src/capture/`
   - INPUT: D3D11 device from T008, primary monitor GraphicsCaptureItem
   - OUTPUT: `CaptureEngine` class that acquires WGC permission, creates frame pool, pushes `RenderFrame` into `BoundedQueue`
   - VERIFY: Standalone test captures 30 frames at 30fps target, frames are valid D3D11 textures with monotonic timestamps
 
-- [ ] T011 [P] [US1] — Implement GPU BGRA->NV12 color conversion in `src/capture/`
+- [X] T011 [P] [US1] — Implement GPU BGRA->NV12 color conversion in `src/capture/`
   - INPUT: `RenderFrame` with BGRA texture from WGC
   - OUTPUT: GPU-side conversion (D3D11 Video Processor or pixel shader) producing NV12 texture in-place
   - VERIFY: Capture 1 frame, convert, read back to CPU, verify NV12 plane layout (Y plane + interleaved UV plane)
 
-- [ ] T012 [P] [US1] — Implement WASAPI shared event-driven mic capture in `src/audio/`
+- [X] T012 [P] [US1] — Implement WASAPI shared event-driven mic capture in `src/audio/`
   - INPUT: Default audio capture device
   - OUTPUT: `AudioEngine` class that captures PCM at device native rate, pushes `AudioPacket` to queue, event-driven (no polling)
   - VERIFY: Capture 2 seconds of audio, write to WAV, verify playback matches
 
-- [ ] T013 [US1] — Implement Media Foundation H.264 Encoder with fallback in `src/encoder/`
+- [X] T013 [US1] — Implement Media Foundation H.264 Encoder with fallback in `src/encoder/`
   - INPUT: NV12 textures from T011, encoder probe from T008
   - OUTPUT: `VideoEncoder` class: CBR, 2s GOP, low-latency, no B-frames, Baseline/Main profile. Implements 3-step fallback chain (TC-009)
   - VERIFY: Encode 60 frames to raw H.264 bitstream, verify with `ffprobe` or `MFCreateSourceReaderFromByteStream`
 
-- [ ] T014 [US1] — Implement `SyncManager` for A/V PTS alignment in `src/sync/`
+- [X] T014 [US1] — Implement `SyncManager` for A/V PTS alignment in `src/sync/`
   - INPUT: QPC clock from T004, video frame timestamps, audio sample timestamps
   - OUTPUT: `SyncManager` class: master clock, aligns video/audio PTS, tracks paused duration offset, frame pacing (duplicate if delta > 1.5x interval, drop newest if queue full)
   - VERIFY: Unit test with synthetic timestamps, assert output PTS sequence is monotonic and correctly paced
 
-- [ ] T015 [US1] — Implement MP4 SinkWriter with async IO in `src/storage/`
+- [X] T015 [US1] — Implement MP4 SinkWriter with async IO in `src/storage/`
   - INPUT: Encoded H.264 + AAC samples
   - OUTPUT: `MuxWriter` class wrapping IMFSinkWriter, writes to `.partial.mp4`, async IO thread with overlapped writes
   - VERIFY: Mux 5 seconds of test video+audio, verify file plays in Windows Media Player / VLC
 
-- [ ] T016 [US1] — Wire engines together via `SessionController` in `src/controller/`
+- [X] T016 [US1] — Wire engines together via `SessionController` in `src/controller/`
   - INPUT: All engines from T010-T015, state machine from T007
   - OUTPUT: `SessionController` class: Start initializes all engines, runs capture->preprocess->encode->mux pipeline, Stop finalizes and renames file
   - VERIFY: Full pipeline test: record 10s -> stop -> verify MP4 file exists, plays, has audio
 
-- [ ] T017 [US1] — Construct minimal Win32/C++ UI window in `src/app/`
+- [X] T017 [US1] — Construct minimal Win32/C++ UI window in `src/app/`
   - INPUT: `SessionController` from T016
   - OUTPUT: Compact Win32 window with Start/Stop buttons, elapsed time display, FPS counter, dropped frame counter, output path display
   - VERIFY: Manual test: buttons trigger state transitions, timer updates, file is saved

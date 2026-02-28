@@ -1,0 +1,303 @@
+// session_controller.cpp — Wires all engines together into the recording pipeline
+// T016: Start -> init engines -> run capture->encode->mux loop -> Stop -> finalize
+
+#include "controller/session_controller.h"
+#include "capture/capture_engine.h"
+#include "audio/audio_engine.h"
+#include "encoder/video_encoder.h"
+#include "storage/mux_writer.h"
+#include "storage/storage_manager.h"
+#include "utils/logging.h"
+
+#include <mfapi.h>
+#include <thread>
+#include <chrono>
+
+namespace sr {
+
+SessionController::SessionController()
+    : capture_(std::make_unique<CaptureEngine>())
+    , audio_  (std::make_unique<AudioEngine>())
+    , encoder_(std::make_unique<VideoEncoder>())
+    , muxer_  (std::make_unique<MuxWriter>())
+    , frame_queue_(std::make_unique<FrameQueue>())
+    , audio_queue_(std::make_unique<AudioQueue>())
+{}
+
+SessionController::~SessionController() {
+    if (!machine_.is_idle()) {
+        // Force stop if destroyed while recording
+        encode_running_.store(false, std::memory_order_release);
+        capture_->stop();
+        audio_->stop();
+        if (encode_thread_.joinable()) encode_thread_.join();
+        muxer_->finalize();
+    }
+}
+
+bool SessionController::initialize(StorageManager* storage,
+                                    StatusCallback on_status,
+                                    ErrorCallback  on_error)
+{
+    storage_   = storage;
+    on_status_ = std::move(on_status);
+    on_error_  = std::move(on_error);
+
+    // Initialize Media Foundation
+    HRESULT hr = MFStartup(MF_VERSION);
+    if (FAILED(hr)) {
+        SR_LOG_ERROR(L"MFStartup failed: 0x%08X", hr);
+        return false;
+    }
+
+    // Probe D3D11 + HW encoder
+    if (!EncoderProbe::run(probe_)) {
+        notify_error(L"D3D11 initialization failed");
+        return false;
+    }
+
+    SR_LOG_INFO(L"SessionController initialized. Adapter: %s, HW encoder: %s",
+        probe_.adapter_name.c_str(),
+        probe_.hw_encoder_available ? probe_.encoder_name.c_str() : L"not available"
+    );
+    return true;
+}
+
+bool SessionController::start() {
+    if (!machine_.transition(SessionEvent::Start)) return false;
+
+    notify_status(L"Starting...");
+
+    // ---------------------------------------------------------------
+    // Determine output paths
+    // generateFilename() returns the .partial.mp4 path
+    // ---------------------------------------------------------------
+    current_partial_path_ = storage_ ? storage_->generateFilename() : L"ScreenRec.partial.mp4";
+    current_output_path_  = StorageManager::partialToFinal(current_partial_path_);
+
+    // ---------------------------------------------------------------
+    // Anchor sync clock
+    // ---------------------------------------------------------------
+    sync_.start();
+
+    // ---------------------------------------------------------------
+    // Initialize CaptureEngine
+    // ---------------------------------------------------------------
+    if (!capture_->initialize(probe_.d3d_device.Get(),
+                               probe_.d3d_context.Get(),
+                               frame_queue_.get()))
+    {
+        notify_error(L"Capture engine initialization failed");
+        machine_.transition(SessionEvent::Stop);
+        machine_.transition(SessionEvent::Finalized);
+        return false;
+    }
+    capture_->set_sync_anchor_100ns(0); // anchor is always 0; PTS computed from sync_
+
+    // ---------------------------------------------------------------
+    // Initialize AudioEngine
+    // ---------------------------------------------------------------
+    if (!audio_->initialize(audio_queue_.get())) {
+        notify_error(L"Audio engine initialization failed (no microphone?)");
+        // Non-fatal — continue without audio
+        SR_LOG_WARN(L"Continuing without audio");
+    } else {
+        audio_->set_sync_anchor_100ns(0);
+    }
+
+    // ---------------------------------------------------------------
+    // Initialize VideoEncoder
+    // ---------------------------------------------------------------
+    EncoderProfile enc_prof;
+    enc_prof.fps        = 30;
+    enc_prof.bitrate_bps= 8'000'000;
+    enc_prof.width      = capture_->width()  ? capture_->width()  : 1920;
+    enc_prof.height     = capture_->height() ? capture_->height() : 1080;
+
+    if (!encoder_->initialize(enc_prof,
+                               probe_.dxgi_device_manager.Get(),
+                               probe_.d3d_device.Get(),
+                               probe_.d3d_context.Get()))
+    {
+        notify_error(L"Video encoder initialization failed");
+        machine_.transition(SessionEvent::Stop);
+        machine_.transition(SessionEvent::Finalized);
+        return false;
+    }
+
+    // ---------------------------------------------------------------
+    // Initialize MuxWriter
+    // ---------------------------------------------------------------
+    MuxConfig mux_cfg;
+    mux_cfg.video_width  = encoder_->output_width();
+    mux_cfg.video_height = encoder_->output_height();
+    mux_cfg.video_fps_num= encoder_->output_fps();
+    mux_cfg.audio_sample_rate      = audio_->sample_rate();
+    mux_cfg.audio_channels         = audio_->channels();
+    mux_cfg.audio_bits_per_sample  = audio_->bits_per_sample();
+    mux_cfg.audio_is_float         = (audio_->bits_per_sample() == 32);
+
+    if (!muxer_->initialize(current_partial_path_, current_output_path_, mux_cfg)) {
+        notify_error(L"Mux writer initialization failed");
+        machine_.transition(SessionEvent::Stop);
+        machine_.transition(SessionEvent::Finalized);
+        return false;
+    }
+
+    // ---------------------------------------------------------------
+    // Start engines
+    // ---------------------------------------------------------------
+    frames_encoded_.store(0, std::memory_order_relaxed);
+    audio_written_.store(0,  std::memory_order_relaxed);
+
+    encode_running_.store(true, std::memory_order_release);
+    encode_thread_ = std::thread(&SessionController::encode_loop, this);
+
+    if (!capture_->start()) {
+        notify_error(L"Capture start failed");
+        stop();
+        return false;
+    }
+    audio_->start();
+
+    notify_status(L"Recording...");
+    SR_LOG_INFO(L"Recording started -> %s", current_output_path_.c_str());
+    return true;
+}
+
+bool SessionController::stop() {
+    bool was_recording = machine_.is_recording() || machine_.is_paused();
+
+    if (!machine_.transition(SessionEvent::Stop)) return false;
+    notify_status(L"Stopping...");
+
+    // Stop producers first
+    capture_->stop();
+    audio_->stop();
+
+    // Stop encode loop (it drains remaining frames)
+    encode_running_.store(false, std::memory_order_release);
+    if (encode_thread_.joinable()) encode_thread_.join();
+
+    // Flush encoder and write remaining samples
+    if (was_recording) {
+        std::vector<ComPtr<IMFSample>> leftover;
+        encoder_->flush(leftover);
+        for (auto& s : leftover) {
+            muxer_->write_video(s.Get());
+        }
+    }
+
+    // Finalize mux (rename .partial.mp4 -> .mp4)
+    muxer_->finalize();
+
+    machine_.transition(SessionEvent::Finalized);
+    notify_status(L"Idle");
+    SR_LOG_INFO(L"Recording stopped. Encoded: %u frames, audio pkts: %u",
+                frames_encoded_.load(), audio_written_.load());
+    return true;
+}
+
+bool SessionController::pause() {
+    if (!machine_.transition(SessionEvent::Pause)) return false;
+    sync_.pause();
+    notify_status(L"Paused");
+    return true;
+}
+
+bool SessionController::resume() {
+    if (!machine_.transition(SessionEvent::Resume)) return false;
+    sync_.resume();
+    notify_status(L"Recording...");
+    return true;
+}
+
+void SessionController::set_muted(bool muted) {
+    audio_->set_muted(muted);
+}
+
+bool SessionController::is_muted() const {
+    return audio_->is_muted();
+}
+
+uint32_t SessionController::frames_captured()       const { return capture_->frames_captured(); }
+uint32_t SessionController::frames_dropped()        const { return capture_->frames_dropped(); }
+uint32_t SessionController::frames_encoded()        const { return frames_encoded_.load(); }
+uint32_t SessionController::audio_packets_written() const { return audio_written_.load(); }
+
+// ---------------------------------------------------------------------------
+// Encode loop — runs on encode_thread_
+// Drains both frame_queue_ and audio_queue_, feeds encoder + muxer
+// ---------------------------------------------------------------------------
+void SessionController::encode_loop() {
+    // Register this thread with MMCSS for higher priority
+    // (same priority class as capture)
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+    // Interleave video and audio: write video first, then any pending audio
+    while (encode_running_.load(std::memory_order_acquire) ||
+           !frame_queue_->empty())
+    {
+        // --- Video ---
+        if (auto opt_frame = frame_queue_->try_pop()) {
+            auto& frame = *opt_frame;
+
+            // Skip frames while paused
+            if (machine_.is_paused()) {
+                continue;
+            }
+
+            // Encode
+            ComPtr<IMFSample> encoded;
+            if (encoder_->encode_frame(frame.texture.Get(), frame.pts, encoded)) {
+                muxer_->write_video(encoded.Get());
+                frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+
+        // --- Audio: drain all pending packets ---
+        while (auto opt_audio = audio_queue_->try_pop()) {
+            auto& audio_pkt = *opt_audio;
+            if (machine_.is_paused()) continue;
+
+            // Build IMFSample from PCM buffer
+            ComPtr<IMFSample>      sample;
+            ComPtr<IMFMediaBuffer> buf;
+            MFCreateSample(&sample);
+            MFCreateMemoryBuffer(static_cast<DWORD>(audio_pkt.buffer.size()), &buf);
+
+            BYTE* data = nullptr;
+            buf->Lock(&data, nullptr, nullptr);
+            std::memcpy(data, audio_pkt.buffer.data(), audio_pkt.buffer.size());
+            buf->Unlock();
+            buf->SetCurrentLength(static_cast<DWORD>(audio_pkt.buffer.size()));
+
+            sample->AddBuffer(buf.Get());
+            sample->SetSampleTime(audio_pkt.pts);
+
+            // Duration: frame_count / sample_rate in 100ns
+            int64_t dur = static_cast<int64_t>(audio_pkt.frame_count) *
+                          10'000'000LL / static_cast<int64_t>(audio_pkt.sample_rate);
+            sample->SetSampleDuration(dur);
+
+            muxer_->write_audio(sample.Get());
+            audio_written_.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        // Brief yield when queue is empty
+        if (frame_queue_->empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+void SessionController::notify_status(const std::wstring& msg) {
+    if (on_status_) on_status_(msg);
+}
+void SessionController::notify_error(const std::wstring& msg) {
+    SR_LOG_ERROR(L"%s", msg.c_str());
+    if (on_error_) on_error_(msg);
+}
+
+} // namespace sr
