@@ -51,6 +51,9 @@ public:
     // Resume — Paused->Recording
     bool resume();
 
+    // Override encoder profile (fps/bitrate/resolution) — must be called before start()
+    void set_encoder_profile(const EncoderProfile& profile) { pending_profile_ = profile; has_pending_profile_ = true; }
+
     // Mute/Unmute audio
     void set_muted(bool muted);
     bool is_muted() const;
@@ -100,6 +103,10 @@ private:
     // Output path for current recording
     std::wstring current_output_path_;
     std::wstring current_partial_path_;
+
+    // Optional encoder profile override (set via set_encoder_profile before start)
+    EncoderProfile pending_profile_;
+    bool           has_pending_profile_ = false;
 
     // Callbacks
     StatusCallback on_status_;

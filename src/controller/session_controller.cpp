@@ -109,10 +109,15 @@ bool SessionController::start() {
     // Initialize VideoEncoder
     // ---------------------------------------------------------------
     EncoderProfile enc_prof;
-    enc_prof.fps        = 30;
-    enc_prof.bitrate_bps= 8'000'000;
-    enc_prof.width      = capture_->width()  ? capture_->width()  : 1920;
-    enc_prof.height     = capture_->height() ? capture_->height() : 1080;
+    if (has_pending_profile_) {
+        enc_prof = pending_profile_;
+        SR_LOG_INFO(L"Using custom encoder profile: %ufps, %u bps", enc_prof.fps, enc_prof.bitrate_bps);
+    } else {
+        enc_prof.fps         = 30;
+        enc_prof.bitrate_bps = 8'000'000;
+    }
+    enc_prof.width  = capture_->width()  ? capture_->width()  : 1920;
+    enc_prof.height = capture_->height() ? capture_->height() : 1080;
 
     if (!encoder_->initialize(enc_prof,
                                probe_.dxgi_device_manager.Get(),

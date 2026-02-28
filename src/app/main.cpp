@@ -9,6 +9,8 @@
 #include "utils/qpc_clock.h"
 #include "storage/storage_manager.h"
 #include "controller/session_controller.h"
+#include "app/app_settings.h"
+#include "app/settings_dialog.h"
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -22,6 +24,8 @@
 #define ID_LABEL_FPS     1007
 #define ID_LABEL_PATH    1008
 #define ID_LABEL_DROPPED 1009
+#define ID_BTN_SETTINGS  1010
+#define ID_LABEL_PROFILE 1011
 #define ID_TIMER_UPDATE  1
 
 // Custom messages for marshalling background thread callbacks to UI thread
@@ -29,19 +33,22 @@
 #define WM_SR_ERROR   (WM_USER + 2)
 
 // Global state
+static sr::AppSettings       g_settings;
 static sr::StorageManager    g_storage;
 static sr::SessionController g_controller;
 
-static HWND g_hwnd        = nullptr;
-static HWND g_btn_start   = nullptr;
-static HWND g_btn_stop    = nullptr;
-static HWND g_btn_pause   = nullptr;
-static HWND g_btn_mute    = nullptr;
-static HWND g_lbl_status  = nullptr;
-static HWND g_lbl_time    = nullptr;
-static HWND g_lbl_fps     = nullptr;
-static HWND g_lbl_path    = nullptr;
-static HWND g_lbl_dropped = nullptr;
+static HWND g_hwnd          = nullptr;
+static HWND g_btn_start     = nullptr;
+static HWND g_btn_stop      = nullptr;
+static HWND g_btn_pause     = nullptr;
+static HWND g_btn_mute      = nullptr;
+static HWND g_btn_settings  = nullptr;
+static HWND g_lbl_status    = nullptr;
+static HWND g_lbl_time      = nullptr;
+static HWND g_lbl_fps       = nullptr;
+static HWND g_lbl_path      = nullptr;
+static HWND g_lbl_dropped   = nullptr;
+static HWND g_lbl_profile   = nullptr;
 
 static int64_t g_record_start_ms = 0;
 static int64_t g_paused_total_ms = 0;
@@ -159,6 +166,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                       WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
                       280, y, 80, 30, hwnd, (HMENU)ID_BTN_MUTE, nullptr, nullptr);
 
+        y += 36;
+        g_btn_settings = CreateWindowW(L"BUTTON", L"\u2699 Settings",
+                         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                         10, y, 100, 26, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
+
+        // Profile label: e.g. "30 fps | 8 Mbps"
+        g_lbl_profile = CreateWindowW(L"STATIC", L"30 fps | 8 Mbps",
+                        WS_VISIBLE | WS_CHILD | SS_LEFT,
+                        120, y + 5, 250, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
+
         SetTimer(hwnd, ID_TIMER_UPDATE, 250, nullptr);
         UpdateUI();
         break;
@@ -223,6 +240,41 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SR_LOG_INFO(L"Mic %s", g_controller.is_muted() ? L"muted" : L"unmuted");
             UpdateUI();
             break;
+
+        case ID_BTN_SETTINGS:
+            if (!g_controller.state_is_idle()) {
+                MessageBoxW(hwnd,
+                    L"Please stop the recording before changing settings.",
+                    L"Settings", MB_ICONINFORMATION | MB_OK);
+                break;
+            }
+            if (sr::ShowSettingsDialog(hwnd, g_settings)) {
+                // Apply output directory
+                if (!g_settings.output_dir.empty()) {
+                    g_storage.setOutputDirectory(g_settings.output_dir);
+                } else {
+                    g_storage.resolveDefaultDirectory();
+                }
+                // Apply encoder profile for next recording
+                sr::EncoderProfile profile;
+                profile.fps         = g_settings.fps;
+                profile.bitrate_bps = g_settings.bitrate_bps;
+                g_controller.set_encoder_profile(profile);
+                // Persist
+                g_settings.save();
+                // Update profile label
+                wchar_t prof_buf[64];
+                _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
+                    L"%u fps  |  %u Mbps",
+                    g_settings.fps, g_settings.bitrate_bps / 1'000'000);
+                SetWindowTextW(g_lbl_profile, prof_buf);
+                // Refresh path display
+                SetWindowTextW(g_lbl_path, g_storage.outputDirectory().c_str());
+                SR_LOG_INFO(L"Settings applied: %u fps, dir=%s",
+                            g_settings.fps,
+                            g_settings.output_dir.empty() ? L"(default)" : g_settings.output_dir.c_str());
+            }
+            break;
         }
         break;
 
@@ -245,6 +297,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     // T033 (Phase 8): SetProcessPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 
     SR_LOG_INFO(L"ScreenRecorder starting...");
+
+    // Load persisted settings and apply to storage + encoder profile
+    g_settings.load();
+    if (!g_settings.output_dir.empty()) {
+        g_storage.setOutputDirectory(g_settings.output_dir);
+    }
+    {
+        sr::EncoderProfile profile;
+        profile.fps         = g_settings.fps;
+        profile.bitrate_bps = g_settings.bitrate_bps;
+        g_controller.set_encoder_profile(profile);
+    }
 
     g_controller.initialize(
         &g_storage,
@@ -276,12 +340,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     g_hwnd = CreateWindowExW(
         0, L"ScreenRecorderClass", L"Screen Recorder v1.0",
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 390, 270,
+        CW_USEDEFAULT, CW_USEDEFAULT, 390, 310,
         nullptr, nullptr, hInstance, nullptr
     );
 
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
+
+    // Reflect loaded settings in the profile label
+    if (g_lbl_profile) {
+        wchar_t prof_buf[64];
+        _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
+            L"%u fps  |  %u Mbps",
+            g_settings.fps, g_settings.bitrate_bps / 1'000'000);
+        SetWindowTextW(g_lbl_profile, prof_buf);
+    }
 
     MSG msg_loop{};
     while (GetMessageW(&msg_loop, nullptr, 0, 0)) {
