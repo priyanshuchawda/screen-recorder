@@ -6,7 +6,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-green)
-![Tests](https://img.shields.io/badge/Tests-109%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-111%20passing-brightgreen)
 
 ## Features
 
@@ -29,7 +29,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 
 ```powershell
 # Configure
-cmake -B build -G "Visual Studio 18 2026" -A x64
+cmake -B build -G "Visual Studio 17 2022" -A x64
 
 # Build (Debug)
 cmake --build build --config Debug
