@@ -208,6 +208,9 @@ bool SessionController::pause() {
 bool SessionController::resume() {
     if (!machine_.transition(SessionEvent::Resume)) return false;
     sync_.resume();
+    // Force an IDR keyframe on the next encoded frame so the resumed segment
+    // is independently decodable and seeks work correctly after pause gaps.
+    encoder_->request_keyframe();
     notify_status(L"Recording...");
     return true;
 }

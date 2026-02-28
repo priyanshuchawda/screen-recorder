@@ -132,22 +132,22 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 2
 
-- [ ] T018 [P] [US2] — Update `SessionMachine` for `Recording -> Paused -> Recording` in `src/controller/`
+- [X] T018 [P] [US2] — Update `SessionMachine` for `Recording -> Paused -> Recording` in `src/controller/`
   - INPUT: State machine from T007
   - OUTPUT: Pause/Resume transitions added, `pause_start_qpc` captured on pause
   - VERIFY: Unit tests: Idle->Recording->Paused->Recording->Stopping->Idle valid, Idle->Paused rejected
 
-- [ ] T019 [US2] — Implement pause timestamp rebasing in `src/sync/`
+- [X] T019 [US2] — Implement pause timestamp rebasing in `src/sync/`
   - INPUT: `SyncManager` from T014
   - OUTPUT: `paused_accumulator` tracks total pause duration, output PTS = raw PTS - paused_accumulator. Force keyframe on resume
   - VERIFY: Unit test with simulated 5s pause, verify output PTS jumps correctly without gap
 
-- [ ] T020 [US2] — Ensure Encoder/SinkWriter preserved during pause in `src/encoder/`
+- [X] T020 [US2] — Ensure Encoder/SinkWriter preserved during pause in `src/encoder/`
   - INPUT: `VideoEncoder` + `MuxWriter` from T013/T015
   - OUTPUT: Pause stops sample submission but does NOT call `Finalize()` or release MFTs. Resume resumes submission
   - VERIFY: Pause 3s, resume, encode 30 more frames — final file plays correctly
 
-- [ ] T021 [US2] — Update UI with Pause/Resume toggle in `src/app/`
+- [X] T021 [US2] — Update UI with Pause/Resume toggle in `src/app/`
   - INPUT: UI from T017
   - OUTPUT: Pause/Resume toggle button, timer pauses during pause, visual indicator (pulsing "Paused" label)
   - VERIFY: Manual test: button toggles state, timer freezes/resumes
@@ -164,17 +164,17 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 3
 
-- [ ] T022 [P] [US3] — Implement silence injection in `src/audio/`
+- [X] T022 [P] [US3] — Implement silence injection in `src/audio/`
   - INPUT: `AudioEngine` from T012
   - OUTPUT: `injectSilence()` method: pushes zeroed PCM `AudioPacket` with correct timestamp continuity when muted
   - VERIFY: Unit test: 1s real audio -> 1s silence -> 1s real audio, verify PCM buffer contents
 
-- [ ] T023 [US3] — Wire Mute state through `SessionController` in `src/controller/`
+- [X] T023 [US3] — Wire Mute state through `SessionController` in `src/controller/`
   - INPUT: `SessionController` from T016, `AudioEngine` from T012
   - OUTPUT: Mute flag in controller, toggles between WASAPI capture and silence injection. Audio timeline remains continuous
   - VERIFY: Integration test: record 5s with mute at 2-3s, verify final MP4 has silence in correct segment
 
-- [ ] T024 [US3] — Update UI with Mic Mute/Unmute toggle in `src/app/`
+- [X] T024 [US3] — Update UI with Mic Mute/Unmute toggle in `src/app/`
   - INPUT: UI from T021
   - OUTPUT: Mic mute toggle button with visual indicator (e.g., mic icon with strikethrough), state reflected in real-time
   - VERIFY: Manual test: toggle works, visual feedback immediate

@@ -367,6 +367,18 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     int64_t duration = 10'000'000LL / static_cast<int64_t>(out_fps_);
     sample->SetSampleDuration(duration);
 
+    // Force IDR keyframe if requested (e.g. after resume from pause)
+    if (force_keyframe_next_.exchange(false, std::memory_order_acq_rel)) {
+        ComPtr<ICodecAPI> codec_api;
+        if (SUCCEEDED(mft_->QueryInterface(IID_PPV_ARGS(&codec_api)))) {
+            VARIANT v{};
+            v.vt   = VT_UI4;
+            v.ulVal = 1;  // 1 = force next frame as IDR
+            codec_api->SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &v);
+            SR_LOG_INFO(L"VideoEncoder: forced IDR keyframe on resume");
+        }
+    }
+
     // Feed to MFT
     hr = mft_->ProcessInput(0, sample.Get(), 0);
     if (FAILED(hr) && hr != MF_E_NOTACCEPTING) {
