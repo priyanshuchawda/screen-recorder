@@ -13,6 +13,8 @@
 #include <wmcodecdsp.h>
 #include <d3d11.h>
 #include <d3d11_1.h>
+#include <cstdlib>
+#include <atomic>
 
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfuuid.lib")
@@ -47,6 +49,23 @@ static HRESULT CreateMftOutputSample(uint32_t sample_size, IMFSample** sample_ou
 
     *sample_out = sample.Detach();
     return S_OK;
+}
+
+static void LogProcessOutputFailureRateLimited(HRESULT hr) {
+    static std::atomic<uint32_t> fail_count{ 0 };
+    static std::atomic<long> last_hr{ S_OK };
+
+    const uint32_t count = fail_count.fetch_add(1, std::memory_order_relaxed) + 1;
+    const long prev_hr = last_hr.exchange(static_cast<long>(hr), std::memory_order_relaxed);
+
+    if (count == 1 || prev_hr != static_cast<long>(hr)) {
+        SR_LOG_ERROR(L"ProcessOutput failed: 0x%08X (count=%u)", hr, count);
+        return;
+    }
+
+    if ((count % 120) == 0) {
+        SR_LOG_WARN(L"ProcessOutput failed repeatedly (0x%08X), total=%u", hr, count);
+    }
 }
 
 // Configure output H.264 media type on the MFT
@@ -320,6 +339,59 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     SR_LOG_INFO(L"[Encoder Fallback Chain] Starting — profile: %ux%u @ %u fps, %u bps",
                 profile.width, profile.height, profile.fps, profile.bitrate_bps);
 
+    active_bitrate_bps_ = profile.bitrate_bps;
+    hw_output_fail_count_ = 0;
+    switched_to_sw_due_to_hw_errors_ = false;
+
+    wchar_t* order_env = nullptr;
+    size_t order_env_len = 0;
+    _wdupenv_s(&order_env, &order_env_len, L"SR_ENCODER_ORDER");
+    bool prefer_hw_first = true;
+    if (order_env) {
+        if (_wcsicmp(order_env, L"sw-first") == 0 ||
+            _wcsicmp(order_env, L"stability-first") == 0)
+        {
+            prefer_hw_first = false;
+        } else if (_wcsicmp(order_env, L"hw-first") == 0) {
+            prefer_hw_first = true;
+        }
+    }
+    if (order_env) {
+        free(order_env);
+    }
+
+    if (prefer_hw_first) {
+        SR_LOG_INFO(L"[Encoder Fallback Chain] Mode: HW-first (default)");
+
+        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1: Hardware MFT...");
+        if (try_init_hw(profile, dxgi_mgr)) {
+            SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1 SUCCESS — using HW encoder");
+            initialized_ = true;
+            return true;
+        }
+        SR_LOG_WARN(L"[Encoder Fallback Chain] Step 1 FAILED — HW encoder unavailable or unstable");
+
+        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2: SW MFT (%ux%u @ %u fps)...",
+                    profile.width, profile.height, profile.fps);
+        if (try_init_sw(profile, profile.width, profile.height, profile.fps)) {
+            SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2 SUCCESS — using SW encoder (original res)");
+            initialized_ = true;
+            return true;
+        }
+        SR_LOG_WARN(L"[Encoder Fallback Chain] Step 2 FAILED — SW encoder at original resolution failed");
+
+        SR_LOG_WARN(L"[Encoder Fallback Chain] Step 3: SW MFT 720p30 (degraded)...");
+        if (try_init_sw(profile, 1280, 720, 30)) {
+            SR_LOG_WARN(L"[Encoder Fallback Chain] Step 3 SUCCESS — using SW 720p30 degraded fallback");
+            initialized_ = true;
+            return true;
+        }
+        SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
+        return false;
+    }
+
+    SR_LOG_INFO(L"[Encoder Fallback Chain] Mode: stability-first (env override)");
+
     // ─── Attempt 1: Software MFT at original resolution (stability-first) ─────
     SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1: SW MFT (%ux%u @ %u fps)...",
                 profile.width, profile.height, profile.fps);
@@ -481,10 +553,26 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
 
         if (FAILED(hr)) {
-            SR_LOG_ERROR(L"ProcessOutput failed: 0x%08X", hr);
+            LogProcessOutputFailureRateLimited(hr);
+            if (hw_path_) {
+                ++hw_output_fail_count_;
+                if (hr == static_cast<HRESULT>(0x8000FFFF) &&
+                    hw_output_fail_count_ >= 30 &&
+                    !switched_to_sw_due_to_hw_errors_)
+                {
+                    if (switch_to_software_fallback()) {
+                        switched_to_sw_due_to_hw_errors_ = true;
+                        SR_LOG_WARN(L"HW encoder became unstable (0x8000FFFF). Switched to SW fallback for this session.");
+                    }
+                }
+            }
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
             return false;
+        }
+
+        if (hw_path_) {
+            hw_output_fail_count_ = 0;
         }
 
         if (out_buf.pSample) {
@@ -496,6 +584,32 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         if (out_buf.pSample) out_buf.pSample->Release();
         if (out_buf.pEvents) out_buf.pEvents->Release();
     }
+}
+
+bool VideoEncoder::switch_to_software_fallback() {
+    if (!initialized_ || !mft_) return false;
+
+    const uint32_t width = out_width_;
+    const uint32_t height = out_height_;
+    const uint32_t fps = out_fps_;
+
+    mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+    mft_.Reset();
+
+    EncoderProfile profile{};
+    profile.width = width;
+    profile.height = height;
+    profile.fps = fps;
+    profile.bitrate_bps = active_bitrate_bps_;
+
+    if (!try_init_sw(profile, width, height, fps)) {
+        SR_LOG_ERROR(L"Failed to switch to SW fallback after HW encoder instability");
+        return false;
+    }
+
+    hw_path_ = false;
+    hw_output_fail_count_ = 0;
+    return true;
 }
 
 // ---------------------------------------------------------------------------

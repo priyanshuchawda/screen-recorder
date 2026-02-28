@@ -28,10 +28,11 @@ struct CameraFormatChoice {
 };
 
 LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool on_battery) {
-    const UINT32 max_w = on_battery ? 1280 : 1920;
-    const UINT32 max_h = on_battery ? 720 : 1080;
-    const UINT32 pref_w = on_battery ? 1280 : 1920;
-    const UINT32 pref_h = on_battery ? 720 : 1080;
+    (void)on_battery;
+    const UINT32 max_w = 960;
+    const UINT32 max_h = 540;
+    const UINT32 pref_w = 960;
+    const UINT32 pref_h = 540;
 
     const LONGLONG pixels = static_cast<LONGLONG>(w) * static_cast<LONGLONG>(h);
     const LONGLONG max_pixels = static_cast<LONGLONG>(max_w) * static_cast<LONGLONG>(max_h);
@@ -238,7 +239,7 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 }
 
 void CameraOverlay::apply_preview_tuning() {
-    capture_interval_ms_.store(16, std::memory_order_relaxed);
+    capture_interval_ms_.store(33, std::memory_order_relaxed);
 }
 
 void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {

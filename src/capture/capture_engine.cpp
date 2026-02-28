@@ -302,17 +302,23 @@ bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* contex
     }
 
     auto size = impl_->item.Size();
-    capture_width_  = static_cast<uint32_t>(size.Width);
-    capture_height_ = static_cast<uint32_t>(size.Height);
+    const uint32_t source_width  = static_cast<uint32_t>(size.Width);
+    const uint32_t source_height = static_cast<uint32_t>(size.Height);
+    capture_width_  = source_width;
+    capture_height_ = source_height;
     SR_LOG_INFO(L"WGC item: %ux%u", capture_width_, capture_height_);
 
-    // T034: fix output to initial capture size so encoder is never reset on
-    // runtime resolution changes.  The VP will scale any new source size back.
-    impl_->out_width_  = capture_width_;
-    impl_->out_height_ = capture_height_;
+    // T034: fix output resolution so encoder is never reset on runtime changes.
+    // For stability/load reduction, cap recording output at 1280x720.
+    impl_->out_width_  = (capture_width_  > 1280) ? 1280 : capture_width_;
+    impl_->out_height_ = (capture_height_ >  720) ?  720 : capture_height_;
+
+    // Expose actual encoder-feed dimensions (post-cap) to controller/profile setup.
+    capture_width_ = impl_->out_width_;
+    capture_height_ = impl_->out_height_;
 
     // --- BGRA -> NV12 Video Processor ---
-    if (!impl_->setup_video_processor(capture_width_, capture_height_,
+    if (!impl_->setup_video_processor(source_width, source_height,
                                       impl_->out_width_, impl_->out_height_)) {
         return false;
     }

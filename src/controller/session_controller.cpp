@@ -12,6 +12,8 @@
 #include <mfapi.h>
 #include <thread>
 #include <chrono>
+#include <algorithm>
+#include <psapi.h>
 
 namespace sr {
 
@@ -118,6 +120,10 @@ bool SessionController::start() {
     }
     enc_prof.width  = capture_->width()  ? capture_->width()  : 1920;
     enc_prof.height = capture_->height() ? capture_->height() : 1080;
+
+    // Stability profile: lower frame rate/bitrate for better HW encoder reliability.
+    enc_prof.fps = std::min(enc_prof.fps, 24u);
+    enc_prof.bitrate_bps = std::min(enc_prof.bitrate_bps, 6'000'000u);
 
     // T042: Apply power-mode clamping (battery → 30fps/8Mbps)
     last_power_ac_ = PowerModeDetector::is_on_ac_power();
@@ -304,6 +310,7 @@ void SessionController::encode_loop() {
     ComPtr<ID3D11Texture2D> last_texture;
     bool        have_last_frame  = false;
     int64_t     last_paced_pts   = 0;
+    ULONGLONG   last_mem_sample_ms = 0;
 
     // Interleave video and audio: write video first, then any pending audio
     while (encode_running_.load(std::memory_order_acquire) ||
@@ -391,6 +398,22 @@ void SessionController::encode_loop() {
         // Brief yield when queue is empty
         if (frame_queue_->empty()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+
+        const ULONGLONG now_ms = GetTickCount64();
+        if (now_ms - last_mem_sample_ms >= 5000) {
+            PROCESS_MEMORY_COUNTERS_EX mem{};
+            mem.cb = sizeof(mem);
+            if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&mem), sizeof(mem))) {
+                const uint64_t ws_mb = static_cast<uint64_t>(mem.WorkingSetSize / (1024ull * 1024ull));
+                const uint64_t private_mb = static_cast<uint64_t>(mem.PrivateUsage / (1024ull * 1024ull));
+                if (private_mb >= 700) {
+                    SR_LOG_WARN(L"[Perf] High process memory: private=%llu MB, working_set=%llu MB", private_mb, ws_mb);
+                } else {
+                    SR_LOG_INFO(L"[Perf] Process memory: private=%llu MB, working_set=%llu MB", private_mb, ws_mb);
+                }
+            }
+            last_mem_sample_ms = now_ms;
         }
     }
 }
