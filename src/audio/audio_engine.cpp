@@ -1,5 +1,7 @@
 // audio_engine.cpp — WASAPI shared-mode event-driven microphone capture
 // T012: Event-driven, MMCSS registered, silence injection for mute
+// T032: MF Resampler integration for native-rate → 48 kHz conversion;
+//       IMMNotificationClient for device invalidation/removal detection.
 
 #include "audio/audio_engine.h"
 #include "utils/logging.h"
@@ -52,7 +54,15 @@ bool AudioEngine::initialize(AudioQueue* queue) {
     channels_        = mix_fmt->nChannels;
     bits_per_sample_ = mix_fmt->wBitsPerSample;
     block_align_     = mix_fmt->nBlockAlign;
-    SR_LOG_INFO(L"Audio: %u Hz, %u ch, %u-bit", sample_rate_, channels_, bits_per_sample_);
+    SR_LOG_INFO(L"Audio device: %u Hz, %u ch, %u-bit", sample_rate_, channels_, bits_per_sample_);
+
+    // T032: Initialize MF Resampler if device rate differs from 48 kHz
+    if (!resampler_.initialize(sample_rate_, static_cast<uint16_t>(channels_),
+                                bits_per_sample_, 48000)) {
+        SR_LOG_WARN(L"AudioResampler init failed — continuing at native rate %u Hz", sample_rate_);
+    } else if (!resampler_.is_passthrough()) {
+        SR_LOG_INFO(L"AudioResampler active: %u Hz -> 48000 Hz", sample_rate_);
+    }
 
     // Initialize shared mode — 100ms buffer, event-driven
     // AUTOCONVERTPCM + SRC_DEFAULT_QUALITY handles sample rate mismatches
@@ -90,6 +100,18 @@ bool AudioEngine::initialize(AudioQueue* queue) {
         return false;
     }
 
+    // T032: Register IMMNotificationClient for device invalidation
+    {
+        LPWSTR dev_id = nullptr;
+        if (SUCCEEDED(device_->GetId(&dev_id)) && dev_id) {
+            notifier_.setup(dev_id, device_invalid_cb_);
+            CoTaskMemFree(dev_id);
+        }
+        // RegisterEndpointNotificationCallback keeps a COM ref; notifier_ is
+        // alive for the lifetime of AudioEngine (destroyed in stop()).
+        enumerator_->RegisterEndpointNotificationCallback(&notifier_);
+    }
+
     return true;
 }
 
@@ -123,6 +145,15 @@ void AudioEngine::stop() {
         CloseHandle(event_handle_);
         event_handle_ = nullptr;
     }
+    // Unregister device notification (T032)
+    if (enumerator_) {
+        enumerator_->UnregisterEndpointNotificationCallback(&notifier_);
+    }
+    // Flush any buffered resampler tail
+    if (!resampler_.is_passthrough()) {
+        std::vector<uint8_t> tail;
+        resampler_.flush(tail);  // discard — no queue after stop
+    }
 }
 
 void AudioEngine::capture_loop() {
@@ -155,22 +186,41 @@ void AudioEngine::capture_loop() {
                 static_cast<int64_t>(sample_count_) * 10'000'000LL /
                 static_cast<int64_t>(sample_rate_);
 
-            AudioPacket pkt;
-            pkt.frame_count  = frames_available;
-            pkt.pts          = pts;
-            pkt.sample_rate  = sample_rate_;
-            pkt.channels     = channels_;
-
             uint32_t byte_count = frames_available * block_align_;
-            pkt.buffer.resize(byte_count);
 
             bool silence = muted_.load(std::memory_order_relaxed)
                           || (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+
+            // T032: resample if native rate != 48 kHz
+            std::vector<uint8_t> resampled_buf;
+            const uint8_t* pkt_data = nullptr;
+            uint32_t       pkt_bytes = byte_count;
+
+            if (!resampler_.is_passthrough() && !silence) {
+                resampler_.process(data, byte_count, resampled_buf);
+                pkt_data  = resampled_buf.data();
+                pkt_bytes = static_cast<uint32_t>(resampled_buf.size());
+            } else {
+                pkt_data = data;
+            }
+
+            // Compute resampled frame count from byte count
+            uint32_t resampled_frames = (block_align_ > 0)
+                ? (pkt_bytes / block_align_)
+                : frames_available;
+
+            AudioPacket pkt;
+            pkt.frame_count  = resampled_frames;
+            pkt.pts          = pts;
+            pkt.sample_rate  = sample_rate(); // reports 48 kHz after resampling
+            pkt.channels     = channels_;
+
+            pkt.buffer.resize(pkt_bytes);
             if (silence) {
-                std::memset(pkt.buffer.data(), 0, byte_count);
+                std::memset(pkt.buffer.data(), 0, pkt_bytes);
                 pkt.is_silence = true;
             } else {
-                std::memcpy(pkt.buffer.data(), data, byte_count);
+                std::memcpy(pkt.buffer.data(), pkt_data, pkt_bytes);
                 pkt.is_silence = false;
             }
 

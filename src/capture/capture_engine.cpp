@@ -1,5 +1,7 @@
 // capture_engine.cpp — Windows Graphics Capture + GPU BGRA->NV12 via D3D11 Video Processor
 // T010/T011: WGC free-threaded frame pool, BGRA->NV12 conversion, push to BoundedQueue
+// T034: Dynamic resolution change detection — GPU scaler maintains fixed 1920x1080 output
+//        without resetting the encoder. VP is recreated on resolution change.
 
 // WinRT / WGC includes (kept in .cpp to isolate from header via PIMPL)
 #include <winrt/base.h>
@@ -48,8 +50,10 @@ struct CaptureEngineImpl {
     winrt::com_ptr<ID3D11Texture2D>                nv12_tex;
     winrt::com_ptr<ID3D11VideoProcessorOutputView> vp_out_view;
 
-    uint32_t vp_width  = 0;
-    uint32_t vp_height = 0;
+    uint32_t vp_width    = 0;  // current VP input width
+    uint32_t vp_height   = 0;  // current VP input height
+    uint32_t out_width_  = 0;  // fixed output width  (1920 or capture size)
+    uint32_t out_height_ = 0;  // fixed output height (1080 or capture size)
 
     // Back-pointer to parent
     CaptureEngine* parent          = nullptr;
@@ -58,19 +62,31 @@ struct CaptureEngineImpl {
     LARGE_INTEGER  qpc_freq        = {};
 
     // -----------------------------------------------------------------------
-    bool setup_video_processor(uint32_t width, uint32_t height) {
-        HRESULT hr = d3d_device->QueryInterface(IID_PPV_ARGS(video_device.put()));
-        if (FAILED(hr)) { SR_LOG_ERROR(L"QueryInterface(ID3D11VideoDevice) failed: 0x%08X", hr); return false; }
+    // setup_video_processor — create D3D11 VP from in_w x in_h (BGRA) to
+    // out_w x out_h (NV12). Handles aspect-ratio-preserving GPU scaling
+    // when the source resolution differs from the target.
+    bool setup_video_processor(uint32_t in_w, uint32_t in_h,
+                               uint32_t out_w, uint32_t out_h) {
+        // Release old GPU objects so they can be recreated
+        vp_out_view.put(); vp_out_view = nullptr;
+        nv12_tex.put();    nv12_tex    = nullptr;
+        vp.put();          vp          = nullptr;
+        vp_enum.put();     vp_enum     = nullptr;
 
-        hr = d3d_context->QueryInterface(IID_PPV_ARGS(video_context.put()));
-        if (FAILED(hr)) { SR_LOG_ERROR(L"QueryInterface(ID3D11VideoContext) failed: 0x%08X", hr); return false; }
+        HRESULT hr;
+        if (!video_device) {
+            hr = d3d_device->QueryInterface(IID_PPV_ARGS(video_device.put()));
+            if (FAILED(hr)) { SR_LOG_ERROR(L"QueryInterface(ID3D11VideoDevice) failed: 0x%08X", hr); return false; }
+            hr = d3d_context->QueryInterface(IID_PPV_ARGS(video_context.put()));
+            if (FAILED(hr)) { SR_LOG_ERROR(L"QueryInterface(ID3D11VideoContext) failed: 0x%08X", hr); return false; }
+        }
 
         D3D11_VIDEO_PROCESSOR_CONTENT_DESC vpcd{};
         vpcd.InputFrameFormat  = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
-        vpcd.InputWidth        = width;
-        vpcd.InputHeight       = height;
-        vpcd.OutputWidth       = width;
-        vpcd.OutputHeight      = height;
+        vpcd.InputWidth        = in_w;
+        vpcd.InputHeight       = in_h;
+        vpcd.OutputWidth       = out_w;
+        vpcd.OutputHeight      = out_h;
         vpcd.Usage             = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
 
         hr = video_device->CreateVideoProcessorEnumerator(&vpcd, vp_enum.put());
@@ -79,10 +95,10 @@ struct CaptureEngineImpl {
         hr = video_device->CreateVideoProcessor(vp_enum.get(), 0, vp.put());
         if (FAILED(hr)) { SR_LOG_ERROR(L"CreateVideoProcessor failed: 0x%08X", hr); return false; }
 
-        // NV12 output texture
+        // NV12 output texture — always at fixed output resolution
         D3D11_TEXTURE2D_DESC td{};
-        td.Width            = width;
-        td.Height           = height;
+        td.Width            = out_w;
+        td.Height           = out_h;
         td.MipLevels        = 1;
         td.ArraySize        = 1;
         td.Format           = DXGI_FORMAT_NV12;
@@ -100,9 +116,12 @@ struct CaptureEngineImpl {
             nv12_tex.get(), vp_enum.get(), &ovd, vp_out_view.put());
         if (FAILED(hr)) { SR_LOG_ERROR(L"CreateVideoProcessorOutputView failed: 0x%08X", hr); return false; }
 
-        vp_width  = width;
-        vp_height = height;
-        SR_LOG_INFO(L"D3D11 Video Processor ready (%ux%u BGRA->NV12)", width, height);
+        vp_width   = in_w;
+        vp_height  = in_h;
+        out_width_ = out_w;
+        out_height_= out_h;
+        SR_LOG_INFO(L"D3D11 Video Processor ready: %ux%u -> %ux%u BGRA->NV12",
+                    in_w, in_h, out_w, out_h);
         return true;
     }
 
@@ -139,6 +158,21 @@ struct CaptureEngineImpl {
         auto frame = pool.TryGetNextFrame();
         if (!frame) return;
 
+        // T034: Detect resolution change — compare WGC content size to VP input
+        auto content_size = frame.ContentSize();
+        uint32_t frame_w = static_cast<uint32_t>(content_size.Width);
+        uint32_t frame_h = static_cast<uint32_t>(content_size.Height);
+
+        if (frame_w != vp_width || frame_h != vp_height) {
+            SR_LOG_INFO(L"WGC resolution changed: %ux%u -> %ux%u — recreating VP",
+                        vp_width, vp_height, frame_w, frame_h);
+            // Keep fixed output dimensions; only input changes
+            if (!setup_video_processor(frame_w, frame_h, out_width_, out_height_)) {
+                SR_LOG_ERROR(L"VP resize failed — dropping frame");
+                return;
+            }
+        }
+
         auto surface = frame.Surface();
         auto access  = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
 
@@ -155,8 +189,8 @@ struct CaptureEngineImpl {
         RenderFrame rf;
         // nv12_tex holds the converted texture; ComPtr Attach/copy with AddRef
         rf.texture = nv12_tex.get();
-        rf.width   = vp_width;
-        rf.height  = vp_height;
+        rf.width   = out_width_;   // T034: always report fixed output dimensions
+        rf.height  = out_height_;
 
         // PTS: relative to session start in 100ns units
         LARGE_INTEGER now{};
@@ -228,8 +262,14 @@ bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* contex
     capture_height_ = static_cast<uint32_t>(size.Height);
     SR_LOG_INFO(L"WGC item: %ux%u", capture_width_, capture_height_);
 
+    // T034: fix output to initial capture size so encoder is never reset on
+    // runtime resolution changes.  The VP will scale any new source size back.
+    impl_->out_width_  = capture_width_;
+    impl_->out_height_ = capture_height_;
+
     // --- BGRA -> NV12 Video Processor ---
-    if (!impl_->setup_video_processor(capture_width_, capture_height_)) {
+    if (!impl_->setup_video_processor(capture_width_, capture_height_,
+                                      impl_->out_width_, impl_->out_height_)) {
         return false;
     }
 

@@ -260,8 +260,9 @@ bool VideoEncoder::try_init_sw(const EncoderProfile& profile,
     return false;
 }
 
-// ---------------------------------------------------------------------------
-// VideoEncoder::initialize — 3-step fallback chain
+// VideoEncoder::initialize — 3-step deterministic fallback chain (T035)
+// Each attempt is explicitly logged so diagnostics are always clear.
+// Chain: [1] HW MFT → [2] SW MFT same-res → [3] SW MFT 720p30
 // ---------------------------------------------------------------------------
 bool VideoEncoder::initialize(const EncoderProfile& profile,
                                IMFDXGIDeviceManager* dxgi_mgr,
@@ -272,27 +273,37 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     d3d_context_ = d3d_context;
     if (dxgi_mgr) dxgi_mgr_ = dxgi_mgr;
 
-    // Attempt 1: Hardware MFT
+    SR_LOG_INFO(L"[Encoder Fallback Chain] Starting — profile: %ux%u @ %u fps, %u bps",
+                profile.width, profile.height, profile.fps, profile.bitrate_bps);
+
+    // ─── Attempt 1: Hardware MFT (Intel Quick Sync / AMD VCE / NVIDIA NVENC) ───
+    SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1: Hardware MFT...");
     if (try_init_hw(profile, dxgi_mgr)) {
+        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1 SUCCESS — using HW encoder");
         initialized_ = true;
         return true;
     }
-    SR_LOG_WARN(L"HW encoder failed — trying SW MFT at original resolution");
+    SR_LOG_WARN(L"[Encoder Fallback Chain] Step 1 FAILED — HW encoder unavailable");
 
-    // Attempt 2: Software MFT at original resolution
+    // ─── Attempt 2: Software MFT at original resolution ───────────────────────
+    SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2: SW MFT (%ux%u @ %u fps)...",
+                profile.width, profile.height, profile.fps);
     if (try_init_sw(profile, profile.width, profile.height, profile.fps)) {
+        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2 SUCCESS — using SW encoder (original res)");
         initialized_ = true;
         return true;
     }
-    SR_LOG_WARN(L"SW encoder failed — trying 720p30 degraded fallback");
+    SR_LOG_WARN(L"[Encoder Fallback Chain] Step 2 FAILED — SW encoder at original resolution failed");
 
-    // Attempt 3: Software MFT at 720p30
+    // ─── Attempt 3: Software MFT at 720p30 (degraded safety fallback) ─────────
+    SR_LOG_WARN(L"[Encoder Fallback Chain] Step 3: SW MFT 720p30 (degraded)...");
     if (try_init_sw(profile, 1280, 720, 30)) {
+        SR_LOG_WARN(L"[Encoder Fallback Chain] Step 3 SUCCESS — using SW 720p30 degraded fallback");
         initialized_ = true;
         return true;
     }
+    SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
 
-    SR_LOG_ERROR(L"All encoder attempts failed");
     return false;
 }
 

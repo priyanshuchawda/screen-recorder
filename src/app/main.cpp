@@ -294,7 +294,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    // T033 (Phase 8): SetProcessPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+
+    // T033: Elevate process to ABOVE_NORMAL so OS scheduler favours our
+    // capture, encode and audio threads over typical background tasks.
+    // This is safe for a single-purpose recorder app.
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 
     SR_LOG_INFO(L"ScreenRecorder starting...");
 
