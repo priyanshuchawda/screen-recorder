@@ -19,6 +19,9 @@ struct AppSettings {
     // Storage settings (T025)
     std::wstring output_dir;                 // empty = use Videos\Recordings default
 
+    // Camera overlay settings
+    bool         camera_overlay_enabled = false;
+
     // --------------------------------------------------------------------------
     // Load from %APPDATA%\ScreenRecorder\settings.ini
     // Returns false only on hard failure; missing file is treated as "use defaults"
@@ -40,8 +43,13 @@ struct AppSettings {
                                  buf, MAX_PATH, ini.c_str());
         output_dir = buf;
 
-        SR_LOG_INFO(L"Settings loaded: fps=%u, output_dir=%s",
-                    fps, output_dir.empty() ? L"(default)" : output_dir.c_str());
+        camera_overlay_enabled =
+            GetPrivateProfileIntW(L"Camera", L"overlay_enabled", 0, ini.c_str()) != 0;
+
+        SR_LOG_INFO(L"Settings loaded: fps=%u, output_dir=%s, camera_overlay=%s",
+                    fps,
+                    output_dir.empty() ? L"(default)" : output_dir.c_str(),
+                    camera_overlay_enabled ? L"on" : L"off");
         return true;
     }
 
@@ -64,9 +72,13 @@ struct AppSettings {
         _snwprintf_s(buf, _countof(buf), _TRUNCATE, L"%u", fps);
         WritePrivateProfileStringW(L"Video",   L"fps",        buf,             ini.c_str());
         WritePrivateProfileStringW(L"Storage", L"output_dir", output_dir.c_str(), ini.c_str());
+        WritePrivateProfileStringW(L"Camera",  L"overlay_enabled",
+                                   camera_overlay_enabled ? L"1" : L"0", ini.c_str());
 
-        SR_LOG_INFO(L"Settings saved: fps=%u, output_dir=%s",
-                    fps, output_dir.empty() ? L"(default)" : output_dir.c_str());
+        SR_LOG_INFO(L"Settings saved: fps=%u, output_dir=%s, camera_overlay=%s",
+                    fps,
+                    output_dir.empty() ? L"(default)" : output_dir.c_str(),
+                    camera_overlay_enabled ? L"on" : L"off");
         return true;
     }
 

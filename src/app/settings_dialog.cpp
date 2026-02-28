@@ -24,6 +24,7 @@ constexpr int IDC_BTN_OK     = 2005;
 constexpr int IDC_BTN_CANCEL = 2006;
 constexpr int IDC_LBL_FPS    = 2007;
 constexpr int IDC_LBL_DIR    = 2008;
+constexpr int IDC_CHK_CAMERA = 2009;
 
 // ============================================================================
 // Dialog internal state (per-instance, allocated on the stack of the caller)
@@ -120,8 +121,15 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             WS_CHILD | WS_VISIBLE | SS_LEFT,
             12, y, 340, 18, hwnd, nullptr, nullptr, nullptr);
 
-        // ---------- OK / Cancel ----------
         y += 24;
+        CreateWindowW(L"BUTTON", L"Enable floating camera overlay (always on top)",
+            WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+            14, y, 330, 20, hwnd, (HMENU)IDC_CHK_CAMERA, nullptr, nullptr);
+        CheckDlgButton(hwnd, IDC_CHK_CAMERA,
+            state->settings->camera_overlay_enabled ? BST_CHECKED : BST_UNCHECKED);
+
+        // ---------- OK / Cancel ----------
+        y += 30;
         CreateWindowW(L"BUTTON", L"OK",
             WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
             160, y, 80, 28, hwnd, (HMENU)IDC_BTN_OK, nullptr, nullptr);
@@ -157,6 +165,9 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 wchar_t dir[MAX_PATH]{};
                 GetDlgItemTextW(hwnd, IDC_EDIT_DIR, dir, MAX_PATH);
                 state->settings->output_dir = dir;
+
+                state->settings->camera_overlay_enabled =
+                    (IsDlgButtonChecked(hwnd, IDC_CHK_CAMERA) == BST_CHECKED);
 
                 state->ok = true;
             }
@@ -211,7 +222,7 @@ bool ShowSettingsDialog(HWND parent, AppSettings& settings) {
     // Compute centered position relative to parent
     RECT parent_rect{};
     if (parent) GetWindowRect(parent, &parent_rect);
-    int dlg_w = 358, dlg_h = 278;
+    int dlg_w = 358, dlg_h = 312;
     int x = parent_rect.left + (parent_rect.right  - parent_rect.left - dlg_w) / 2;
     int y = parent_rect.top  + (parent_rect.bottom - parent_rect.top  - dlg_h) / 2;
 

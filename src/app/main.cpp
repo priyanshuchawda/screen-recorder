@@ -17,6 +17,7 @@
 #include "app/app_settings.h"
 #include "app/settings_dialog.h"
 #include "app/telemetry.h"             // T037: TelemetrySnapshot
+#include "app/camera_overlay.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -43,6 +44,7 @@
 static sr::AppSettings       g_settings;
 static sr::StorageManager    g_storage;
 static sr::SessionController g_controller;
+static sr::CameraOverlay     g_camera_overlay;
 
 static HWND g_hwnd          = nullptr;
 static HWND g_btn_start     = nullptr;
@@ -348,7 +350,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_TIMER:
-        if (wParam == ID_TIMER_UPDATE) UpdateUI();
+        if (wParam == ID_TIMER_UPDATE) {
+            UpdateUI();
+            g_camera_overlay.refresh_power_profile();
+        }
         break;
 
     case WM_SR_STATUS: {
@@ -428,6 +433,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 g_controller.set_encoder_profile(profile);
                 // Persist
                 g_settings.save();
+
+                // Camera overlay
+                if (g_settings.camera_overlay_enabled) {
+                    g_camera_overlay.start(g_hwnd);
+                } else {
+                    g_camera_overlay.stop();
+                }
+
                 // Update profile label
                 wchar_t prof_buf[64];
                 _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
@@ -447,6 +460,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         KillTimer(hwnd, ID_TIMER_UPDATE);
         if (!g_controller.state_is_idle()) g_controller.stop();
+        g_camera_overlay.stop();
         if (g_font_ui) {
             DeleteObject(g_font_ui);
             g_font_ui = nullptr;
@@ -589,6 +603,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
             L"%u fps  |  %u Mbps",
             g_settings.fps, g_settings.bitrate_bps / 1'000'000);
         SetWindowTextW(g_lbl_profile, prof_buf);
+    }
+
+    if (g_settings.camera_overlay_enabled) {
+        g_camera_overlay.start(g_hwnd);
     }
 
     MSG msg_loop{};
