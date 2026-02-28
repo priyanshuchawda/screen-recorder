@@ -75,6 +75,16 @@ TEST_F(StorageManagerTest, PartialToFinal) {
     EXPECT_EQ(result, L"C:\\test\\ScreenRec_2026.mp4");
 }
 
+TEST_F(StorageManagerTest, PartialToFinalLeavesNonSuffixUnchanged) {
+    auto result = StorageManager::partialToFinal(L"C:\\test\\ScreenRec_2026.partial.mp4.bak");
+    EXPECT_EQ(result, L"C:\\test\\ScreenRec_2026.partial.mp4.bak");
+}
+
+TEST_F(StorageManagerTest, PartialToFinalLeavesUnrelatedPathUnchanged) {
+    auto result = StorageManager::partialToFinal(L"C:\\test\\ScreenRec_2026.mp4");
+    EXPECT_EQ(result, L"C:\\test\\ScreenRec_2026.mp4");
+}
+
 TEST_F(StorageManagerTest, DiskSpaceCheck) {
     StorageManager mgr;
     uint64_t free = mgr.getFreeDiskSpace();

@@ -63,3 +63,11 @@ target_link_libraries(ScreenRecorder PRIVATE ${WIN_LIBS})
 # Tests
 enable_testing()
 add_subdirectory(tests)
+
+# Packaging
+set(CPACK_PACKAGE_NAME "ScreenRecorder")
+set(CPACK_PACKAGE_VENDOR "ScreenRecorder")
+set(CPACK_PACKAGE_VERSION "0.1.0")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Native Windows screen recorder")
+set(CPACK_GENERATOR "ZIP")
+include(CPack)
