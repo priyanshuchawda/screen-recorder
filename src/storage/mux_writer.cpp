@@ -122,8 +122,10 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
     audio_in->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, cfg.audio_sample_rate);
     audio_in->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,       cfg.audio_channels);
     audio_in->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,    cfg.audio_bits_per_sample);
-    audio_in->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT,
-                         cfg.audio_channels * (cfg.audio_bits_per_sample / 8));
+    uint32_t block_align = cfg.audio_channels * (cfg.audio_bits_per_sample / 8);
+    audio_in->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, block_align);
+    audio_in->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+                         cfg.audio_sample_rate * block_align);
 
     hr = sink_writer_->SetInputMediaType(audio_stream_index_, audio_in.Get(), nullptr);
     if (FAILED(hr)) {
@@ -180,16 +182,17 @@ bool MuxWriter::finalize() {
     HRESULT hr = sink_writer_->Finalize();
     sink_writer_.Reset();
 
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"SinkWriter::Finalize failed: 0x%08X", hr);
-        // Even on failure, try to rename so the file is accessible
-    }
-
     // T029: Release exclusive write lock before rename so MoveFileEx succeeds
     if (lock_handle_ != INVALID_HANDLE_VALUE) {
         CloseHandle(lock_handle_);
         lock_handle_ = INVALID_HANDLE_VALUE;
         SR_LOG_INFO(L"Exclusive write lock released");
+    }
+
+    if (FAILED(hr)) {
+        SR_LOG_ERROR(L"SinkWriter::Finalize failed: 0x%08X", hr);
+        SR_LOG_WARN(L"Keeping partial file (not renaming to .mp4): %s", partial_path_.c_str());
+        return false;
     }
 
     // Rename .partial.mp4 -> .mp4

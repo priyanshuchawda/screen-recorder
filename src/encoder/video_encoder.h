@@ -69,6 +69,8 @@ private:
     uint32_t    out_height_  = 1080;
     uint32_t    out_fps_     = 30;
     bool        initialized_ = false;
+    bool        mft_provides_output_samples_ = true;
+    uint32_t    mft_output_sample_size_      = 1 << 20;
 
     // For HW path: need staging texture to share with MFT
     bool        hw_path_     = false;
