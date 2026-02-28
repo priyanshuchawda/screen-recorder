@@ -75,6 +75,8 @@ _deps/
 vcpkg_installed/
 
 # Local agent/spec tooling
+.agent/
+.egent/
 .gemini/
 .specify/
 .specify copy/
