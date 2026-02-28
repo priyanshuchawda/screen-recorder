@@ -5,7 +5,8 @@ A lightweight, high-performance native Windows screen recorder built with C++20 
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-Private-red)
-![Status](https://img.shields.io/badge/Status-Planning-yellow)
+![Status](https://img.shields.io/badge/Status-Active%20Development-green)
+![Tests](https://img.shields.io/badge/Tests-72%20passing-brightgreen)
 
 ## Overview
 
@@ -18,8 +19,11 @@ A minimal, fast, and efficient screen recording application for Windows that cap
 - **Microphone Audio** — WASAPI event-driven capture with AAC-LC encoding
 - **Pause & Resume** — Seamless timestamp rebasing, no file corruption
 - **Mute & Unmute** — Silence injection maintains continuous timeline
+- **Settings Panel** — FPS preset (30/60), output directory, persisted to INI
 - **Auto-Save** — Recordings saved to `%USERPROFILE%\Videos\Recordings`
-- **Crash Recovery** — `.partial.mp4` temp files with startup recovery flow
+- **Crash Recovery** — `.partial.mp4` temp files with startup recovery dialog (Recover / Delete / Ignore)
+- **Low-Disk Auto-Stop** — Background polling stops recording gracefully when disk < 500 MB free
+- **Exclusive File Lock** — `.partial.mp4` allows readers but blocks external writers
 - **Low Resource Usage** — Target < 500 MB RAM, < 5% frame drops at 1080p60
 
 ## Tech Stack
@@ -34,7 +38,7 @@ A minimal, fast, and efficient screen recording application for Windows that cap
 | **Audio Encode** | AAC-LC via Media Foundation |
 | **Container** | MP4 via IMFSinkWriter |
 | **Color Convert** | D3D11 Video Processor (BGRA → NV12, GPU-only) |
-| **Build System** | CMake + Ninja |
+| **Build System** | CMake + Visual Studio 2022 (MSBuild) |
 
 ## Architecture
 
@@ -104,15 +108,23 @@ specs/
 ## Building
 
 ```powershell
-# Configure (Ninja — fastest)
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+# Configure (first time)
+cmake -B build -G "Visual Studio 18 2026" -A x64
 
-# Build
-cmake --build build
+# Debug build
+cmake --build build --config Debug
 
-# Run
-.\build\ScreenRecorder.exe
+# Release build
+cmake --build build --config Release
+
+# Run tests
+.\build\tests\Debug\unit_tests.exe
+
+# Run the app
+.\build\Debug\ScreenRecorder.exe
 ```
+
+> ⚠️ **Note**: Use the Visual Studio generator — Ninja fails on this project due to `rc.exe` path issues. See `BUILD_NOTES.md` for details.
 
 ## Development Roadmap
 
@@ -120,12 +132,12 @@ cmake --build build
 |-------|-------------|--------|
 | Phase 1 | Project setup & CMake | ✅ Complete |
 | Phase 2 | Core infrastructure (queues, state machine) | ✅ Complete |
-| Phase 3 | **MVP** — Screen + mic capture, encode, save | ⬜ Not started |
-| Phase 4 | Pause & Resume | ⬜ Not started |
-| Phase 5 | Mute & Unmute | ⬜ Not started |
-| Phase 6 | Settings (FPS, output dir) | ⬜ Not started |
-| Phase 7 | Crash recovery & fault tolerance | ⬜ Not started |
-| Phase 8 | Polish & edge cases | ⬜ Not started |
+| Phase 3 | **MVP** — Screen + mic capture, encode, save | ✅ Complete |
+| Phase 4 | Pause & Resume | ✅ Complete |
+| Phase 5 | Mute & Unmute | ✅ Complete |
+| Phase 6 | Settings (FPS preset, output dir, INI persistence) | ✅ Complete |
+| Phase 7 | Fault tolerance & crash recovery | ✅ Complete |
+| Phase 8 | Polish & edge cases | 🔄 Up next |
 | Phase 9 | Robustness & telemetry | ⬜ Not started |
 
 ## Target System
