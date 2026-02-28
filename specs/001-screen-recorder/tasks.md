@@ -216,22 +216,22 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 5
 
-- [ ] T028 [P] [US5] — Implement async disk space polling (`GetDiskFreeSpaceEx`) in `src/storage/`
+- [X] T028 [P] [US5] — Implement async disk space polling (`GetDiskFreeSpaceEx`) in `src/storage/`
   - INPUT: `StorageManager` from T025
   - OUTPUT: Background check every 5 seconds, fires callback when free space < 500 MB
   - VERIFY: Unit test with mock: simulate low space, verify callback fires within 10s
 
-- [ ] T029 [P] [US5] — Implement `.partial.mp4` with exclusive write lock in `src/storage/`
+- [X] T029 [P] [US5] — Implement `.partial.mp4` with exclusive write lock in `src/storage/`
   - INPUT: `MuxWriter` from T015
   - OUTPUT: CreateFile with GENERIC_WRITE + FILE_SHARE_READ. Rename to final `.mp4` on successful stop
   - VERIFY: While recording, open partial file in another process for reading — succeeds. Attempt write — fails (locked)
 
-- [ ] T030 [US5] — Add startup orphan detection and recovery UI in `src/app/`
+- [X] T030 [US5] — Add startup orphan detection and recovery UI in `src/app/`
   - INPUT: `StorageManager` from T028
   - OUTPUT: On startup, scan for `*.partial.mp4` in output dir. Show dialog: "Found incomplete recording. Recover / Delete / Ignore"
   - VERIFY: Create a dummy .partial.mp4, launch app, verify dialog appears
 
-- [ ] T031 [US5] — Implement graceful auto-finalize on low disk in `src/controller/`
+- [X] T031 [US5] — Implement graceful auto-finalize on low disk in `src/controller/`
   - INPUT: `SessionController` from T016, disk space callback from T028
   - OUTPUT: On low-disk callback, trigger `Stopping` state, finalize file, show user notification
   - VERIFY: Integration test: fill temp partition to near-full, start recording, verify auto-stop and notification

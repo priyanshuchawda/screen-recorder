@@ -63,6 +63,8 @@ private:
     DWORD                 audio_stream_index_ = 1;
     bool                  initialized_        = false;
     uint64_t              bytes_written_      = 0;
+    // T029: exclusive write lock — FILE_SHARE_READ only, prevents external writes
+    HANDLE                lock_handle_        = INVALID_HANDLE_VALUE;
 };
 
 } // namespace sr

@@ -1,5 +1,5 @@
 #pragma once
-// storage_manager.h — Manages output directory, unique filenames, and disk space
+// storage_manager.h — Manages output directory, unique filenames, disk space, and file locking
 
 #include <windows.h>
 #include <shlobj.h>
@@ -7,14 +7,24 @@
 #include <filesystem>
 #include <ctime>
 #include <cstdio>
+#include <functional>
+#include <thread>
+#include <atomic>
+#include <chrono>
 #include "utils/logging.h"
 
 namespace sr {
+
+using DiskSpaceLowCallback = std::function<void()>;
 
 class StorageManager {
 public:
     StorageManager() {
         resolveDefaultDirectory();
+    }
+
+    ~StorageManager() {
+        stopDiskSpacePolling();
     }
 
     // Resolve default output directory: %USERPROFILE%\Videos\Recordings
@@ -104,10 +114,9 @@ public:
         return 0;
     }
 
-    // Check if disk space is critically low (< 500 MB)
-    bool isDiskSpaceLow() const {
-        constexpr uint64_t MIN_SPACE = 500ULL * 1024 * 1024; // 500 MB
-        return getFreeDiskSpace() < MIN_SPACE;
+    // Check if disk space is critically low (< threshold_bytes, default 500 MB)
+    bool isDiskSpaceLow(uint64_t threshold_bytes = 500ULL * 1024 * 1024) const {
+        return getFreeDiskSpace() < threshold_bytes;
     }
 
     // Scan for orphaned .partial.mp4 files
@@ -127,8 +136,56 @@ public:
 
     const std::wstring& outputDirectory() const { return output_dir_; }
 
+    // -----------------------------------------------------------------------
+    // T028 — Async disk space polling
+    // Fires callback on main thread (or poll thread) when free space < threshold.
+    // interval_ms: polling interval (default 5000 ms)
+    // threshold_bytes: low-disk threshold (default 500 MB; configurable for tests)
+    // -----------------------------------------------------------------------
+    void startDiskSpacePolling(DiskSpaceLowCallback callback,
+                               std::chrono::milliseconds interval = std::chrono::milliseconds(5000),
+                               uint64_t threshold_bytes = 500ULL * 1024 * 1024)
+    {
+        stopDiskSpacePolling(); // stop any existing poll thread
+        low_disk_cb_  = std::move(callback);
+        poll_running_.store(true, std::memory_order_release);
+        poll_thread_  = std::thread([this, interval, threshold_bytes]() {
+            while (poll_running_.load(std::memory_order_acquire)) {
+                if (isDiskSpaceLow(threshold_bytes) && low_disk_cb_) {
+                    SR_LOG_WARN(L"Disk space low! Free: %llu MB",
+                                getFreeDiskSpace() / (1024 * 1024));
+                    low_disk_cb_();
+                }
+                // Sleep in 250ms increments so stop is responsive
+                auto deadline = std::chrono::steady_clock::now() + interval;
+                while (poll_running_.load(std::memory_order_acquire) &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                }
+            }
+        });
+    }
+
+    void stopDiskSpacePolling() {
+        poll_running_.store(false, std::memory_order_release);
+        if (poll_thread_.joinable()) {
+            if (poll_thread_.get_id() == std::this_thread::get_id()) {
+                // Called re-entrantly from the poll thread (e.g. low-disk callback -> stop())
+                // Detach to avoid deadlock — the thread will exit naturally
+                poll_thread_.detach();
+            } else {
+                poll_thread_.join();
+            }
+        }
+    }
+
 private:
     std::wstring output_dir_;
+
+    // T028 — polling state
+    std::thread              poll_thread_;
+    std::atomic<bool>        poll_running_{ false };
+    DiskSpaceLowCallback     low_disk_cb_;
 };
 
 } // namespace sr
