@@ -80,42 +80,42 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 1
 
-- [X] T010 [P] [US1] — Implement `CaptureEngine` using WGC for fullscreen in `src/capture/`
+- [ ] T010 [P] [US1] — Implement `CaptureEngine` using WGC for fullscreen in `src/capture/`
   - INPUT: D3D11 device from T008, primary monitor GraphicsCaptureItem
   - OUTPUT: `CaptureEngine` class that acquires WGC permission, creates frame pool, pushes `RenderFrame` into `BoundedQueue`
   - VERIFY: Standalone test captures 30 frames at 30fps target, frames are valid D3D11 textures with monotonic timestamps
 
-- [X] T011 [P] [US1] — Implement GPU BGRA->NV12 color conversion in `src/capture/`
+- [ ] T011 [P] [US1] — Implement GPU BGRA->NV12 color conversion in `src/capture/`
   - INPUT: `RenderFrame` with BGRA texture from WGC
   - OUTPUT: GPU-side conversion (D3D11 Video Processor or pixel shader) producing NV12 texture in-place
   - VERIFY: Capture 1 frame, convert, read back to CPU, verify NV12 plane layout (Y plane + interleaved UV plane)
 
-- [X] T012 [P] [US1] — Implement WASAPI shared event-driven mic capture in `src/audio/`
+- [ ] T012 [P] [US1] — Implement WASAPI shared event-driven mic capture in `src/audio/`
   - INPUT: Default audio capture device
   - OUTPUT: `AudioEngine` class that captures PCM at device native rate, pushes `AudioPacket` to queue, event-driven (no polling)
   - VERIFY: Capture 2 seconds of audio, write to WAV, verify playback matches
 
-- [X] T013 [US1] — Implement Media Foundation H.264 Encoder with fallback in `src/encoder/`
+- [ ] T013 [US1] — Implement Media Foundation H.264 Encoder with fallback in `src/encoder/`
   - INPUT: NV12 textures from T011, encoder probe from T008
   - OUTPUT: `VideoEncoder` class: CBR, 2s GOP, low-latency, no B-frames, Baseline/Main profile. Implements 3-step fallback chain (TC-009)
   - VERIFY: Encode 60 frames to raw H.264 bitstream, verify with `ffprobe` or `MFCreateSourceReaderFromByteStream`
 
-- [X] T014 [US1] — Implement `SyncManager` for A/V PTS alignment in `src/sync/`
+- [ ] T014 [US1] — Implement `SyncManager` for A/V PTS alignment in `src/sync/`
   - INPUT: QPC clock from T004, video frame timestamps, audio sample timestamps
   - OUTPUT: `SyncManager` class: master clock, aligns video/audio PTS, tracks paused duration offset, frame pacing (duplicate if delta > 1.5x interval, drop newest if queue full)
   - VERIFY: Unit test with synthetic timestamps, assert output PTS sequence is monotonic and correctly paced
 
-- [X] T015 [US1] — Implement MP4 SinkWriter with async IO in `src/storage/`
+- [ ] T015 [US1] — Implement MP4 SinkWriter with async IO in `src/storage/`
   - INPUT: Encoded H.264 + AAC samples
   - OUTPUT: `MuxWriter` class wrapping IMFSinkWriter, writes to `.partial.mp4`, async IO thread with overlapped writes
   - VERIFY: Mux 5 seconds of test video+audio, verify file plays in Windows Media Player / VLC
 
-- [X] T016 [US1] — Wire engines together via `SessionController` in `src/controller/`
+- [ ] T016 [US1] — Wire engines together via `SessionController` in `src/controller/`
   - INPUT: All engines from T010-T015, state machine from T007
   - OUTPUT: `SessionController` class: Start initializes all engines, runs capture->preprocess->encode->mux pipeline, Stop finalizes and renames file
   - VERIFY: Full pipeline test: record 10s -> stop -> verify MP4 file exists, plays, has audio
 
-- [X] T017 [US1] — Construct minimal Win32/C++ UI window in `src/app/`
+- [ ] T017 [US1] — Construct minimal Win32/C++ UI window in `src/app/`
   - INPUT: `SessionController` from T016
   - OUTPUT: Compact Win32 window with Start/Stop buttons, elapsed time display, FPS counter, dropped frame counter, output path display
   - VERIFY: Manual test: buttons trigger state transitions, timer updates, file is saved
@@ -132,22 +132,22 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 2
 
-- [X] T018 [P] [US2] — Update `SessionMachine` for `Recording -> Paused -> Recording` in `src/controller/`
+- [ ] T018 [P] [US2] — Update `SessionMachine` for `Recording -> Paused -> Recording` in `src/controller/`
   - INPUT: State machine from T007
   - OUTPUT: Pause/Resume transitions added, `pause_start_qpc` captured on pause
   - VERIFY: Unit tests: Idle->Recording->Paused->Recording->Stopping->Idle valid, Idle->Paused rejected
 
-- [X] T019 [US2] — Implement pause timestamp rebasing in `src/sync/`
+- [ ] T019 [US2] — Implement pause timestamp rebasing in `src/sync/`
   - INPUT: `SyncManager` from T014
   - OUTPUT: `paused_accumulator` tracks total pause duration, output PTS = raw PTS - paused_accumulator. Force keyframe on resume
   - VERIFY: Unit test with simulated 5s pause, verify output PTS jumps correctly without gap
 
-- [X] T020 [US2] — Ensure Encoder/SinkWriter preserved during pause in `src/encoder/`
+- [ ] T020 [US2] — Ensure Encoder/SinkWriter preserved during pause in `src/encoder/`
   - INPUT: `VideoEncoder` + `MuxWriter` from T013/T015
   - OUTPUT: Pause stops sample submission but does NOT call `Finalize()` or release MFTs. Resume resumes submission
   - VERIFY: Pause 3s, resume, encode 30 more frames — final file plays correctly
 
-- [X] T021 [US2] — Update UI with Pause/Resume toggle in `src/app/`
+- [ ] T021 [US2] — Update UI with Pause/Resume toggle in `src/app/`
   - INPUT: UI from T017
   - OUTPUT: Pause/Resume toggle button, timer pauses during pause, visual indicator (pulsing "Paused" label)
   - VERIFY: Manual test: button toggles state, timer freezes/resumes
@@ -164,17 +164,17 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 3
 
-- [X] T022 [P] [US3] — Implement silence injection in `src/audio/`
+- [ ] T022 [P] [US3] — Implement silence injection in `src/audio/`
   - INPUT: `AudioEngine` from T012
   - OUTPUT: `injectSilence()` method: pushes zeroed PCM `AudioPacket` with correct timestamp continuity when muted
   - VERIFY: Unit test: 1s real audio -> 1s silence -> 1s real audio, verify PCM buffer contents
 
-- [X] T023 [US3] — Wire Mute state through `SessionController` in `src/controller/`
+- [ ] T023 [US3] — Wire Mute state through `SessionController` in `src/controller/`
   - INPUT: `SessionController` from T016, `AudioEngine` from T012
   - OUTPUT: Mute flag in controller, toggles between WASAPI capture and silence injection. Audio timeline remains continuous
   - VERIFY: Integration test: record 5s with mute at 2-3s, verify final MP4 has silence in correct segment
 
-- [X] T024 [US3] — Update UI with Mic Mute/Unmute toggle in `src/app/`
+- [ ] T024 [US3] — Update UI with Mic Mute/Unmute toggle in `src/app/`
   - INPUT: UI from T021
   - OUTPUT: Mic mute toggle button with visual indicator (e.g., mic icon with strikethrough), state reflected in real-time
   - VERIFY: Manual test: toggle works, visual feedback immediate
@@ -191,17 +191,17 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 4
 
-- [X] T025 [P] [US4] — Update `StorageManager` for dynamic directory overrides in `src/storage/`
+- [ ] T025 [P] [US4] — Update `StorageManager` for dynamic directory overrides in `src/storage/`
   - INPUT: `StorageManager` from T006
   - OUTPUT: `setOutputDirectory()` method, validates path exists (or creates it), persists preference
   - VERIFY: Unit test: set custom dir, generate filename, verify path is correct
 
-- [X] T026 [P] [US4] — Abstract encoder profile for dynamic FPS presets in `src/encoder/`
+- [ ] T026 [P] [US4] — Abstract encoder profile for dynamic FPS presets in `src/encoder/`
   - INPUT: `VideoEncoder` from T013
   - OUTPUT: `EncoderProfile` struct: {fps: 30|60, bitrate: 8|14 Mbps, resolution: 1080p}. Encoder accepts profile at init
   - VERIFY: Create encoder with 60fps profile, verify MFT attributes match
 
-- [X] T027 [US4] — Implement Settings Panel UI in `src/app/`
+- [ ] T027 [US4] — Implement Settings Panel UI in `src/app/`
   - INPUT: UI from T024
   - OUTPUT: Settings overlay/dialog: FPS dropdown (30/60), output directory selector (folder browser dialog), settings persisted to JSON/INI
   - VERIFY: Manual test: change settings, restart app, settings restored
@@ -216,22 +216,22 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 5
 
-- [X] T028 [P] [US5] — Implement async disk space polling (`GetDiskFreeSpaceEx`) in `src/storage/`
+- [ ] T028 [P] [US5] — Implement async disk space polling (`GetDiskFreeSpaceEx`) in `src/storage/`
   - INPUT: `StorageManager` from T025
   - OUTPUT: Background check every 5 seconds, fires callback when free space < 500 MB
   - VERIFY: Unit test with mock: simulate low space, verify callback fires within 10s
 
-- [X] T029 [P] [US5] — Implement `.partial.mp4` with exclusive write lock in `src/storage/`
+- [ ] T029 [P] [US5] — Implement `.partial.mp4` with exclusive write lock in `src/storage/`
   - INPUT: `MuxWriter` from T015
   - OUTPUT: CreateFile with GENERIC_WRITE + FILE_SHARE_READ. Rename to final `.mp4` on successful stop
   - VERIFY: While recording, open partial file in another process for reading — succeeds. Attempt write — fails (locked)
 
-- [X] T030 [US5] — Add startup orphan detection and recovery UI in `src/app/`
+- [ ] T030 [US5] — Add startup orphan detection and recovery UI in `src/app/`
   - INPUT: `StorageManager` from T028
   - OUTPUT: On startup, scan for `*.partial.mp4` in output dir. Show dialog: "Found incomplete recording. Recover / Delete / Ignore"
   - VERIFY: Create a dummy .partial.mp4, launch app, verify dialog appears
 
-- [X] T031 [US5] — Implement graceful auto-finalize on low disk in `src/controller/`
+- [ ] T031 [US5] — Implement graceful auto-finalize on low disk in `src/controller/`
   - INPUT: `SessionController` from T016, disk space callback from T028
   - OUTPUT: On low-disk callback, trigger `Stopping` state, finalize file, show user notification
   - VERIFY: Integration test: fill temp partition to near-full, start recording, verify auto-stop and notification
@@ -242,27 +242,27 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 **Purpose**: Addressing specific edge cases and mandatory technical constraints from the specification.
 
-- [X] T032 [P] — Implement `MFResampler` for audio sample rate mismatches in `src/audio/`
+- [ ] T032 [P] — Implement `MFResampler` for audio sample rate mismatches in `src/audio/`
   - INPUT: `AudioEngine` from T012
   - OUTPUT: Resampler converts device native rate to 48 kHz AAC pipeline rate. Handles device invalidation callbacks
   - VERIFY: Test with device at 44.1 kHz, verify resampled output is 48 kHz without drift
 
-- [X] T033 [P] — Implement thread/process priority optimizations in `src/app/`
+- [ ] T033 [P] — Implement thread/process priority optimizations in `src/app/`
   - INPUT: Thread model from plan.md
   - OUTPUT: `SetProcessPriorityClass(ABOVE_NORMAL)`, `SetThreadPriority` for capture/encode threads, `MMCSS` registration for audio thread
   - VERIFY: Verify via Task Manager / Process Explorer that priorities are set correctly
 
-- [X] T034 [P] — Implement dynamic resolution change handling in `src/capture/`
+- [ ] T034 [P] — Implement dynamic resolution change handling in `src/capture/`
   - INPUT: `CaptureEngine` from T010
   - OUTPUT: Detect WGC frame size change, log event, route through GPU scaler to fixed 1920x1080 output. No encoder reset
   - VERIFY: Change display resolution during recording, verify video continues without corruption
 
-- [X] T035 [P] — Implement encoder software fallback chain in `src/encoder/`
+- [ ] T035 [P] — Implement encoder software fallback chain in `src/encoder/`
   - INPUT: `VideoEncoder` from T013
   - OUTPUT: Deterministic fallback: HW MFT -> SW MFT (same res) -> 720p30 SW. Each attempt logged
   - VERIFY: Block HW encoder via mock, verify SW fallback activates and produces valid output
 
-- [X] T036 — Memory and queue stability review
+- [ ] T036 — Memory and queue stability review
   - INPUT: All modules
   - OUTPUT: Code review confirming: queues bounded at 5 frames, no unbounded allocations, COM pointers properly released
   - VERIFY: Run 10-minute recording, check memory graph for growth trends

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="63" failures="1" disabled="0" errors="0" time="1.012" timestamp="2026-02-28T14:06:22.280" name="AllTests">
+  <testsuite name="AppSettingsTest" tests="7" failures="0" disabled="0" skipped="0" errors="0" time="0.051" timestamp="2026-02-28T14:06:22.283">
+    <testcase name="DefaultsAre30FpsAndEmptyDir" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="59" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.285" classname="AppSettingsTest" />
+    <testcase name="SaveAndLoadFps60" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="66" status="run" result="completed" time="0.008" timestamp="2026-02-28T14:06:22.287" classname="AppSettingsTest" />
+    <testcase name="SaveAndLoadFps30" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="79" status="run" result="completed" time="0.01" timestamp="2026-02-28T14:06:22.298" classname="AppSettingsTest" />
+    <testcase name="SaveAndLoadOutputDir" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="91" status="run" result="completed" time="0.006" timestamp="2026-02-28T14:06:22.312" classname="AppSettingsTest" />
+    <testcase name="InvalidFpsDefaultsTo30" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="102" status="run" result="completed" time="0.004" timestamp="2026-02-28T14:06:22.322" classname="AppSettingsTest" />
+    <testcase name="BitrateAutoSelectsFor60fps" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="110" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.329" classname="AppSettingsTest" />
+    <testcase name="BitrateAutoSelectsFor30fps" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="117" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.332" classname="AppSettingsTest" />
+  </testsuite>
+  <testsuite name="AppSettingsStaticTest" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.007" timestamp="2026-02-28T14:06:22.339">
+    <testcase name="IniPathNonEmpty" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="125" status="run" result="completed" time="0.004" timestamp="2026-02-28T14:06:22.340" classname="AppSettingsStaticTest" />
+  </testsuite>
+  <testsuite name="EncoderProfileTest" tests="2" failures="0" disabled="0" skipped="0" errors="0" time="0.008" timestamp="2026-02-28T14:06:22.349">
+    <testcase name="Fps60ProfileValues" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="135" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.351" classname="EncoderProfileTest" />
+    <testcase name="Fps30ProfileValues" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_app_settings.cpp" line="154" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.356" classname="EncoderProfileTest" />
+  </testsuite>
+  <testsuite name="BoundedQueueTest" tests="10" failures="1" disabled="0" skipped="0" errors="0" time="0.1" timestamp="2026-02-28T14:06:22.361">
+    <testcase name="StartsEmpty" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="12" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.362" classname="BoundedQueueTest" />
+    <testcase name="PushAndPop" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="19" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.364" classname="BoundedQueueTest" />
+    <testcase name="RejectsWhenFull" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="30" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.367" classname="BoundedQueueTest" />
+    <testcase name="PopFromEmpty" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="40" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.369" classname="BoundedQueueTest" />
+    <testcase name="FIFOOrder" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="46" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.372" classname="BoundedQueueTest" />
+    <testcase name="WaitPopTimeout" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="57" status="run" result="completed" time="0.063" timestamp="2026-02-28T14:06:22.374" classname="BoundedQueueTest" />
+    <testcase name="WaitPopSucceeds" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="63" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.441" classname="BoundedQueueTest" />
+    <testcase name="MoveSemantics" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="71" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.446" classname="BoundedQueueTest" />
+    <testcase name="MultiThreadedProducerConsumer" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="79" status="run" result="completed" time="0.006" timestamp="2026-02-28T14:06:22.449" classname="BoundedQueueTest">
+      <failure message="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp:119&#x0A;Value of: q.empty()&#x0A;  Actual: false&#x0A;Expected: true&#x0A;" type=""><![CDATA[C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp:119
+Value of: q.empty()
+  Actual: false
+Expected: true
+]]></failure>
+    </testcase>
+    <testcase name="QueueNeverExceedsCapacity" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_bounded_queue.cpp" line="122" status="run" result="completed" time="0.002" timestamp="2026-02-28T14:06:22.458" classname="BoundedQueueTest" />
+  </testsuite>
+  <testsuite name="QPCClockTest" tests="6" failures="0" disabled="0" skipped="0" errors="0" time="0.088" timestamp="2026-02-28T14:06:22.464">
+    <testcase name="FrequencyIsPositive" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_qpc_clock.cpp" line="10" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.465" classname="QPCClockTest" />
+    <testcase name="TimestampsAreMonotonic" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_qpc_clock.cpp" line="15" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.469" classname="QPCClockTest" />
+    <testcase name="NanosecondResolution" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_qpc_clock.cpp" line="25" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.475" classname="QPCClockTest" />
+    <testcase name="HnsConversionWorks" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_qpc_clock.cpp" line="31" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.478" classname="QPCClockTest" />
+    <testcase name="MillisecondTimingAccuracy" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_qpc_clock.cpp" line="37" status="run" result="completed" time="0.061" timestamp="2026-02-28T14:06:22.482" classname="QPCClockTest" />
+    <testcase name="TicksToHnsConsistent" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_qpc_clock.cpp" line="48" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.550" classname="QPCClockTest" />
+  </testsuite>
+  <testsuite name="SessionMachineTest" tests="20" failures="0" disabled="0" skipped="0" errors="0" time="0.058" timestamp="2026-02-28T14:06:22.556">
+    <testcase name="StartsInIdle" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="18" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.559" classname="SessionMachineTest" />
+    <testcase name="IdleToRecording" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="23" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.563" classname="SessionMachineTest" />
+    <testcase name="RecordingToPaused" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="28" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.567" classname="SessionMachineTest" />
+    <testcase name="PausedToRecording" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="34" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.571" classname="SessionMachineTest" />
+    <testcase name="RecordingToStopping" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="41" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.574" classname="SessionMachineTest" />
+    <testcase name="PausedToStopping" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="47" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.577" classname="SessionMachineTest" />
+    <testcase name="StoppingToIdle" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="54" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.579" classname="SessionMachineTest" />
+    <testcase name="FullCycle" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="61" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.582" classname="SessionMachineTest" />
+    <testcase name="IdleCannotPause" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="73" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.586" classname="SessionMachineTest" />
+    <testcase name="IdleCannotStop" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="78" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.588" classname="SessionMachineTest" />
+    <testcase name="IdleCannotResume" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="83" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.590" classname="SessionMachineTest" />
+    <testcase name="IdleCannotFinalize" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="88" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.592" classname="SessionMachineTest" />
+    <testcase name="RecordingCannotStart" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="93" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.595" classname="SessionMachineTest" />
+    <testcase name="RecordingCannotResume" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="99" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.597" classname="SessionMachineTest" />
+    <testcase name="PausedCannotStart" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="105" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.599" classname="SessionMachineTest" />
+    <testcase name="PausedCannotPause" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="112" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.601" classname="SessionMachineTest" />
+    <testcase name="StoppingCannotStart" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="119" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.604" classname="SessionMachineTest" />
+    <testcase name="StoppingCannotStop" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="126" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.606" classname="SessionMachineTest" />
+    <testcase name="CallbackFiredOnTransition" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="135" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.609" classname="SessionMachineTest" />
+    <testcase name="CallbackNotFiredOnInvalidTransition" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_session_machine.cpp" line="152" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.613" classname="SessionMachineTest" />
+  </testsuite>
+  <testsuite name="StorageManagerTest" tests="7" failures="0" disabled="0" skipped="0" errors="0" time="0.053" timestamp="2026-02-28T14:06:22.618">
+    <testcase name="DefaultDirectoryResolved" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_storage_manager.cpp" line="28" status="run" result="completed" time="0.004" timestamp="2026-02-28T14:06:22.620" classname="StorageManagerTest" />
+    <testcase name="SetCustomDirectory" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_storage_manager.cpp" line="33" status="run" result="completed" time="0.006" timestamp="2026-02-28T14:06:22.629" classname="StorageManagerTest" />
+    <testcase name="GenerateUniqueFilenames" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_storage_manager.cpp" line="39" status="run" result="completed" time="0.006" timestamp="2026-02-28T14:06:22.638" classname="StorageManagerTest" />
+    <testcase name="FilenameFormat" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_storage_manager.cpp" line="60" status="run" result="completed" time="0.003" timestamp="2026-02-28T14:06:22.647" classname="StorageManagerTest" />
+    <testcase name="PartialToFinal" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_storage_manager.cpp" line="73" status="run" result="completed" time="0.002" timestamp="2026-02-28T14:06:22.653" classname="StorageManagerTest" />
+    <testcase name="DiskSpaceCheck" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_storage_manager.cpp" line="78" status="run" result="completed" time="0.002" timestamp="2026-02-28T14:06:22.658" classname="StorageManagerTest" />
+    <testcase name="FindOrphanedFiles" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_storage_manager.cpp" line="84" status="run" result="completed" time="0.006" timestamp="2026-02-28T14:06:22.664" classname="StorageManagerTest" />
+  </testsuite>
+  <testsuite name="SyncManagerTest" tests="10" failures="0" disabled="0" skipped="0" errors="0" time="0.614" timestamp="2026-02-28T14:06:22.675">
+    <testcase name="AnchorPTSIsZero" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="47" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.675" classname="SyncManagerTest" />
+    <testcase name="PTSIncreasesWithTime" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="54" status="run" result="completed" time="0.025" timestamp="2026-02-28T14:06:22.677" classname="SyncManagerTest" />
+    <testcase name="PTSIsMonotonic" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="63" status="run" result="completed" time="0.155" timestamp="2026-02-28T14:06:22.705" classname="SyncManagerTest" />
+    <testcase name="PausedTotalInitiallyZero" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="75" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:22.865" classname="SyncManagerTest" />
+    <testcase name="PauseAccumulatorGrowsAfterResume" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="81" status="run" result="completed" time="0.052" timestamp="2026-02-28T14:06:22.873" classname="SyncManagerTest" />
+    <testcase name="PTSSubtractsPauseDuration" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="99" status="run" result="completed" time="0.183" timestamp="2026-02-28T14:06:22.929" classname="SyncManagerTest" />
+    <testcase name="MultiplePauseCyclesAccumulate" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="126" status="run" result="completed" time="0.137" timestamp="2026-02-28T14:06:23.117" classname="SyncManagerTest" />
+    <testcase name="ResumeWithoutPauseIsNoop" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="145" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:23.258" classname="SyncManagerTest" />
+    <testcase name="ToPtsConvertsQPCCorrectly" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="153" status="run" result="completed" time="0." timestamp="2026-02-28T14:06:23.260" classname="SyncManagerTest" />
+    <testcase name="PTSNonNegativeDuringPause" file="C:\Users\Admin\Desktop\screen-recorder\tests\unit\test_sync_manager.cpp" line="167" status="run" result="completed" time="0.023" timestamp="2026-02-28T14:06:23.263" classname="SyncManagerTest" />
+  </testsuite>
+</testsuites>
