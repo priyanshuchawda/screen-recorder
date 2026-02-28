@@ -1,5 +1,7 @@
 #pragma once
-// bounded_queue.h — Lock-free bounded SPSC/MPSC queue
+// bounded_queue.h — Bounded MPSC queue (multi-producer, single-consumer)
+// Push side is protected by a spinlock to allow concurrent producers.
+// Pop side is lock-free (single consumer assumed).
 // Max depth configurable (default 5 for video, 10 for audio)
 
 #include <atomic>
@@ -8,6 +10,7 @@
 #include <cstdint>
 #include <chrono>
 #include <thread>
+#include <mutex>
 
 namespace sr {
 
@@ -16,8 +19,10 @@ class BoundedQueue {
 public:
     BoundedQueue() : head_(0), tail_(0) {}
 
-    // Non-blocking push. Returns false if queue is full (caller applies drop policy)
+    // Non-blocking push. Returns false if queue is full (caller applies drop policy).
+    // Thread-safe for multiple concurrent producers (mutex-protected).
     bool try_push(T&& item) {
+        std::lock_guard<std::mutex> lock(push_mutex_);
         size_t head = head_.load(std::memory_order_relaxed);
         size_t next = (head + 1) % (Capacity + 1);
         if (next == tail_.load(std::memory_order_acquire)) {
@@ -72,6 +77,7 @@ private:
     std::array<T, Capacity + 1> buffer_; // One extra slot for ring buffer
     alignas(64) std::atomic<size_t> head_;
     alignas(64) std::atomic<size_t> tail_;
+    std::mutex push_mutex_; // Serializes concurrent producers
 };
 
 } // namespace sr
