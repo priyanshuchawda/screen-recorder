@@ -58,6 +58,7 @@ private:
     bool try_init_sw(const EncoderProfile& profile, uint32_t width, uint32_t height, uint32_t fps);
     bool configure_encoder(IMFTransform* mft, uint32_t width, uint32_t height,
                            uint32_t fps, uint32_t bitrate_bps, bool use_hw);
+    bool switch_to_software_fallback();
 
     ComPtr<IMFTransform>       mft_;
     ComPtr<IMFDXGIDeviceManager> dxgi_mgr_;
@@ -71,9 +72,12 @@ private:
     bool        initialized_ = false;
     bool        mft_provides_output_samples_ = true;
     uint32_t    mft_output_sample_size_      = 1 << 20;
+    uint32_t    active_bitrate_bps_          = 8'000'000;
 
     // For HW path: need staging texture to share with MFT
     bool        hw_path_     = false;
+    uint32_t    hw_output_fail_count_ = 0;
+    bool        switched_to_sw_due_to_hw_errors_ = false;
 
     // Force next frame to be an IDR keyframe (set on resume from pause)
     std::atomic<bool> force_keyframe_next_{ false };
