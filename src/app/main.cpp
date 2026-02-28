@@ -1,5 +1,7 @@
 // main.cpp — ScreenRecorder entry point
 // T017: Minimal Win32 window wired to SessionController for Start/Stop/Pause/Mute
+// T037: Debug telemetry overlay uses TelemetrySnapshot
+// T043: WGC availability check disables Start button on unsupported hardware
 
 #include <windows.h>
 #include <processthreadsapi.h>
@@ -9,8 +11,10 @@
 #include "utils/qpc_clock.h"
 #include "storage/storage_manager.h"
 #include "controller/session_controller.h"
+#include "capture/capture_engine.h"   // T043: is_wgc_supported()
 #include "app/app_settings.h"
 #include "app/settings_dialog.h"
+#include "app/telemetry.h"             // T037: TelemetrySnapshot
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -95,21 +99,26 @@ void UpdateUI()
         SetWindowTextW(g_lbl_time, L"00:00:00");
     }
 
-    // Counters
+    // Counters — T037: use the rich telemetry snapshot
     if (state == sr::SessionState::Recording || state == sr::SessionState::Paused) {
-        wchar_t fps_buf[80];
+        auto ts = g_controller.telemetry_snapshot();
+        wchar_t fps_buf[120];
         _snwprintf_s(fps_buf, _countof(fps_buf), _TRUNCATE,
-            L"Captured:%u  Encoded:%u",
-            g_controller.frames_captured(), g_controller.frames_encoded());
+            L"Cap:%u  Enc:%u  Drop:%u  Queue:%u  Enc:%s%s",
+            ts.frames_captured, ts.frames_encoded, ts.frames_dropped,
+            ts.frames_backlogged,
+            ts.encoder_mode_label(),
+            ts.is_on_ac ? L"" : L" \U0001F50B");
         SetWindowTextW(g_lbl_fps, fps_buf);
 
-        wchar_t drp_buf[32];
+        wchar_t drp_buf[64];
         _snwprintf_s(drp_buf, _countof(drp_buf), _TRUNCATE,
-            L"Dropped: %u", g_controller.frames_dropped());
+            L"Dup:%u  AudioPkts:%u",
+            ts.dup_frames, ts.audio_packets);
         SetWindowTextW(g_lbl_dropped, drp_buf);
     } else {
-        SetWindowTextW(g_lbl_fps,     L"Captured:0  Encoded:0");
-        SetWindowTextW(g_lbl_dropped, L"Dropped: 0");
+        SetWindowTextW(g_lbl_fps,     L"Cap:0  Enc:0  Drop:0  Queue:0");
+        SetWindowTextW(g_lbl_dropped, L"Dup:0  AudioPkts:0");
     }
 
     // Output path
@@ -350,6 +359,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
+
+    // T043: Check WGC availability — disable Start if screen capture is unsupported.
+    if (!sr::CaptureEngine::is_wgc_supported()) {
+        SR_LOG_ERROR(L"[T043] Windows Graphics Capture is not supported on this system.");
+        MessageBoxW(g_hwnd,
+            L"Screen capture is not available on this system.\n"
+            L"Requires Windows 10 version 1903 (build 18362) or later.\n\n"
+            L"Recording is disabled.",
+            L"Screen Capture Unavailable", MB_ICONERROR | MB_OK);
+        EnableWindow(g_btn_start, FALSE);
+    }
 
     // T030: Orphan detection — scan for *.partial.mp4 left by a previous crash
     {

@@ -55,7 +55,7 @@ if(INTEGRATION_TEST_SRC)
     target_link_libraries(integration_tests PRIVATE
         GTest::gtest_main
         d3d11 dxgi dxguid mfplat mfuuid mfreadwrite mf
-        wmcodecdspuuid ole32 windowsapp Shlwapi Propsys
+        wmcodecdspuuid ole32 windowsapp Shlwapi Propsys psapi
     )
     target_compile_definitions(integration_tests PRIVATE
         WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE WINRT_LEAN_AND_MEAN

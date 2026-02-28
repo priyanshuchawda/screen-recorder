@@ -134,7 +134,13 @@ struct CaptureEngineImpl {
         HRESULT hr = video_device->CreateVideoProcessorInputView(
             bgra_tex, vp_enum.get(), &ivd, in_view.put());
         if (FAILED(hr)) {
-            SR_LOG_ERROR(L"CreateVideoProcessorInputView failed: 0x%08X", hr);
+            // T039: check for device-lost conditions
+            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+                SR_LOG_ERROR(L"[T039] D3D11 device lost (CreateInputView): 0x%08X — signalling recovery", hr);
+                signal_device_lost();
+            } else {
+                SR_LOG_ERROR(L"CreateVideoProcessorInputView failed: 0x%08X", hr);
+            }
             return false;
         }
 
@@ -145,10 +151,24 @@ struct CaptureEngineImpl {
         hr = video_context->VideoProcessorBlt(
             vp.get(), vp_out_view.get(), 0, 1, &stream);
         if (FAILED(hr)) {
-            SR_LOG_ERROR(L"VideoProcessorBlt failed: 0x%08X", hr);
+            // T039: device-lost detection on VideoProcessorBlt
+            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
+                SR_LOG_ERROR(L"[T039] D3D11 device lost (VideoProcessorBlt): 0x%08X — signalling recovery", hr);
+                signal_device_lost();
+            } else {
+                SR_LOG_ERROR(L"VideoProcessorBlt failed: 0x%08X", hr);
+            }
             return false;
         }
         return true;
+    }
+
+    // T039: Fire the device-lost callback once (idempotent via atomic flag)
+    void signal_device_lost() {
+        bool already = parent->device_lost_.exchange(true, std::memory_order_acq_rel);
+        if (!already && parent->device_lost_cb_) {
+            parent->device_lost_cb_();
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -213,6 +233,19 @@ struct CaptureEngineImpl {
 // CaptureEngine methods
 // ---------------------------------------------------------------------------
 
+// T043: Check WGC availability before attempting capture
+bool CaptureEngine::is_wgc_supported() {
+    // Ensure WinRT apartment is initialized (safe to call multiple times)
+    try { winrt::init_apartment(winrt::apartment_type::multi_threaded); } catch (...) {}
+    // GraphicsCaptureSession::IsSupported() is available on Win10 1903+
+    // and returns false on older builds or when WGC components are missing.
+    try {
+        return wgc::GraphicsCaptureSession::IsSupported();
+    } catch (...) {
+        return false;
+    }
+}
+
 CaptureEngine::CaptureEngine()  = default;
 CaptureEngine::~CaptureEngine() { stop(); }
 
@@ -222,6 +255,9 @@ bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* contex
     // WinRT apartment: multi-threaded (matches COM init in wWinMain)
     try { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
     catch (...) {}  // already initialised is fine
+
+    // T039: reset device-lost flag for fresh session
+    device_lost_.store(false, std::memory_order_relaxed);
 
     impl_ = std::make_unique<CaptureEngineImpl>();
     impl_->d3d_device  = device;
@@ -253,7 +289,15 @@ bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* contex
         winrt::put_abi(impl_->item)
     );
     if (FAILED(hr)) {
-        SR_LOG_ERROR(L"WGC CreateForMonitor failed: 0x%08X", hr);
+        // T043: Distinguish consent / permission denial from other WGC errors.
+        // E_ACCESSDENIED means the user or policy blocked screen capture.
+        if (hr == E_ACCESSDENIED) {
+            SR_LOG_ERROR(L"[T043] WGC screen capture permission denied (E_ACCESSDENIED). "
+                         L"Check Privacy Settings > Screen capture.");
+        } else {
+            SR_LOG_ERROR(L"[T043] WGC CreateForMonitor failed: 0x%08X. "
+                         L"Ensure Windows 10 1903+ and screen capture is permitted.", hr);
+        }
         return false;
     }
 
