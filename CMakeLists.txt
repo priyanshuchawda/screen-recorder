@@ -33,6 +33,7 @@ set(WIN_LIBS
     windowsapp
     Shlwapi
     Propsys
+    avrt
 )
 
 # Collect all source files by module
