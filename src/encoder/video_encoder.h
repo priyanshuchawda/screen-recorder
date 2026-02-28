@@ -9,6 +9,7 @@
 #include <mfreadwrite.h>
 #include <mftransform.h>
 #include <wrl/client.h>
+#include <atomic>
 #include <cstdint>
 #include "utils/render_frame.h"
 
@@ -43,6 +44,10 @@ public:
 
     void shutdown();
 
+    // Request that the next encoded frame be a keyframe (IDR).
+    // Call this immediately on resume from pause to ensure seekability.
+    void request_keyframe() { force_keyframe_next_.store(true, std::memory_order_release); }
+
     EncoderMode  mode()         const { return mode_; }
     uint32_t     output_width() const { return out_width_; }
     uint32_t     output_height()const { return out_height_; }
@@ -67,6 +72,9 @@ private:
 
     // For HW path: need staging texture to share with MFT
     bool        hw_path_     = false;
+
+    // Force next frame to be an IDR keyframe (set on resume from pause)
+    std::atomic<bool> force_keyframe_next_{ false };
 };
 
 } // namespace sr
