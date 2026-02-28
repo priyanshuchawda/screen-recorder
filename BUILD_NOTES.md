@@ -31,7 +31,7 @@ cmake --build build --config Release
 .\build\tests\Debug\unit_tests.exe
 
 # Or via CTest
-ctest --test-dir build --config Debug --output-on-failure
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
 ## Output Paths (VS Generator)

@@ -29,6 +29,26 @@ static HRESULT SetUINT64Attr(IMFAttributes* a, REFGUID k, UINT64 v) {
     return a->SetUINT64(k, v);
 }
 
+static HRESULT CreateMftOutputSample(uint32_t sample_size, IMFSample** sample_out) {
+    if (!sample_out) return E_POINTER;
+    *sample_out = nullptr;
+
+    ComPtr<IMFSample> sample;
+    ComPtr<IMFMediaBuffer> buffer;
+
+    HRESULT hr = MFCreateSample(&sample);
+    if (FAILED(hr)) return hr;
+
+    hr = MFCreateMemoryBuffer(sample_size, &buffer);
+    if (FAILED(hr)) return hr;
+
+    hr = sample->AddBuffer(buffer.Get());
+    if (FAILED(hr)) return hr;
+
+    *sample_out = sample.Detach();
+    return S_OK;
+}
+
 // Configure output H.264 media type on the MFT
 static HRESULT ConfigureOutputType(IMFTransform* mft,
                                    uint32_t w, uint32_t h,
@@ -175,6 +195,7 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
 
         hr = mft->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
         hr = mft->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+        hr = mft->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
 
         mft_  = mft;
         mode_ = EncoderMode::HardwareMFT;
@@ -182,6 +203,16 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
         out_height_ = profile.height;
         out_fps_    = profile.fps;
         hw_path_    = true;
+
+        MFT_OUTPUT_STREAM_INFO output_stream_info{};
+        hr = mft_->GetOutputStreamInfo(0, &output_stream_info);
+        if (SUCCEEDED(hr)) {
+            mft_provides_output_samples_ = (output_stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
+            mft_output_sample_size_ = output_stream_info.cbSize > 0 ? output_stream_info.cbSize : (1 << 20);
+        } else {
+            mft_provides_output_samples_ = true;
+            mft_output_sample_size_ = 1 << 20;
+        }
 
         SR_LOG_INFO(L"HW H.264 encoder active: %s (%ux%u @ %u fps, %u bps)",
             name, profile.width, profile.height, profile.fps, profile.bitrate_bps);
@@ -235,12 +266,23 @@ bool VideoEncoder::try_init_sw(const EncoderProfile& profile,
         ApplyEncoderAttributes(mft.Get(), fps, profile.bitrate_bps, false);
 
         hr = mft->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+        hr = mft->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
 
         mft_       = mft;
         out_width_  = width;
         out_height_ = height;
         out_fps_    = fps;
         hw_path_    = false;
+
+        MFT_OUTPUT_STREAM_INFO output_stream_info{};
+        hr = mft_->GetOutputStreamInfo(0, &output_stream_info);
+        if (SUCCEEDED(hr)) {
+            mft_provides_output_samples_ = (output_stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
+            mft_output_sample_size_ = output_stream_info.cbSize > 0 ? output_stream_info.cbSize : (1 << 20);
+        } else {
+            mft_provides_output_samples_ = true;
+            mft_output_sample_size_ = 1 << 20;
+        }
 
         if (width == 1280) {
             mode_ = EncoderMode::SoftwareMFT720p;
@@ -276,24 +318,24 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     SR_LOG_INFO(L"[Encoder Fallback Chain] Starting — profile: %ux%u @ %u fps, %u bps",
                 profile.width, profile.height, profile.fps, profile.bitrate_bps);
 
-    // ─── Attempt 1: Hardware MFT (Intel Quick Sync / AMD VCE / NVIDIA NVENC) ───
-    SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1: Hardware MFT...");
-    if (try_init_hw(profile, dxgi_mgr)) {
-        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1 SUCCESS — using HW encoder");
-        initialized_ = true;
-        return true;
-    }
-    SR_LOG_WARN(L"[Encoder Fallback Chain] Step 1 FAILED — HW encoder unavailable");
-
-    // ─── Attempt 2: Software MFT at original resolution ───────────────────────
-    SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2: SW MFT (%ux%u @ %u fps)...",
+    // ─── Attempt 1: Software MFT at original resolution (stability-first) ─────
+    SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1: SW MFT (%ux%u @ %u fps)...",
                 profile.width, profile.height, profile.fps);
     if (try_init_sw(profile, profile.width, profile.height, profile.fps)) {
-        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2 SUCCESS — using SW encoder (original res)");
+        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1 SUCCESS — using SW encoder (original res)");
         initialized_ = true;
         return true;
     }
-    SR_LOG_WARN(L"[Encoder Fallback Chain] Step 2 FAILED — SW encoder at original resolution failed");
+    SR_LOG_WARN(L"[Encoder Fallback Chain] Step 1 FAILED — SW encoder at original resolution failed");
+
+    // ─── Attempt 2: Hardware MFT (Intel Quick Sync / AMD VCE / NVIDIA NVENC) ───
+    SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2: Hardware MFT...");
+    if (try_init_hw(profile, dxgi_mgr)) {
+        SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2 SUCCESS — using HW encoder");
+        initialized_ = true;
+        return true;
+    }
+    SR_LOG_WARN(L"[Encoder Fallback Chain] Step 2 FAILED — HW encoder unavailable or unstable");
 
     // ─── Attempt 3: Software MFT at 720p30 (degraded safety fallback) ─────────
     SR_LOG_WARN(L"[Encoder Fallback Chain] Step 3: SW MFT 720p30 (degraded)...");
@@ -397,19 +439,44 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         return false;
     }
 
-    // Get output
-    MFT_OUTPUT_DATA_BUFFER out_buf{};
-    DWORD status = 0;
-    hr = mft_->ProcessOutput(0, 1, &out_buf, &status);
+    // Drain available output. Some encoders buffer internally and may not
+    // return a sample for every input frame.
+    while (true) {
+        MFT_OUTPUT_DATA_BUFFER out_buf{};
+        DWORD status = 0;
 
-    if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return false; // normal
-    if (FAILED(hr)) return false;
+        if (!mft_provides_output_samples_) {
+            HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
+            if (FAILED(alloc_hr)) {
+                SR_LOG_ERROR(L"Failed to allocate MFT output sample: 0x%08X", alloc_hr);
+                return false;
+            }
+        }
 
-    if (out_buf.pSample) {
-        out_sample.Attach(out_buf.pSample);
-        return true;
+        hr = mft_->ProcessOutput(0, 1, &out_buf, &status);
+
+        if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+            if (out_buf.pSample) out_buf.pSample->Release();
+            if (out_buf.pEvents) out_buf.pEvents->Release();
+            return false; // normal: no encoded sample ready yet
+        }
+
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"ProcessOutput failed: 0x%08X", hr);
+            if (out_buf.pSample) out_buf.pSample->Release();
+            if (out_buf.pEvents) out_buf.pEvents->Release();
+            return false;
+        }
+
+        if (out_buf.pSample) {
+            out_sample.Attach(out_buf.pSample);
+            if (out_buf.pEvents) out_buf.pEvents->Release();
+            return true;
+        }
+
+        if (out_buf.pSample) out_buf.pSample->Release();
+        if (out_buf.pEvents) out_buf.pEvents->Release();
     }
-    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -423,14 +490,33 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
     while (true) {
         MFT_OUTPUT_DATA_BUFFER out_buf{};
         DWORD status = 0;
+
+        if (!mft_provides_output_samples_) {
+            HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
+            if (FAILED(alloc_hr)) {
+                SR_LOG_ERROR(L"Failed to allocate MFT flush output sample: 0x%08X", alloc_hr);
+                break;
+            }
+        }
+
         HRESULT hr = mft_->ProcessOutput(0, 1, &out_buf, &status);
-        if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) break;
-        if (FAILED(hr)) break;
+        if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+            if (out_buf.pSample) out_buf.pSample->Release();
+            if (out_buf.pEvents) out_buf.pEvents->Release();
+            break;
+        }
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"ProcessOutput during flush failed: 0x%08X", hr);
+            if (out_buf.pSample) out_buf.pSample->Release();
+            if (out_buf.pEvents) out_buf.pEvents->Release();
+            break;
+        }
         if (out_buf.pSample) {
             ComPtr<IMFSample> s;
             s.Attach(out_buf.pSample);
             out_samples.push_back(std::move(s));
         }
+        if (out_buf.pEvents) out_buf.pEvents->Release();
     }
     return true;
 }

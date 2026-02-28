@@ -221,12 +221,17 @@ bool SessionController::stop() {
         std::vector<ComPtr<IMFSample>> leftover;
         encoder_->flush(leftover);
         for (auto& s : leftover) {
-            muxer_->write_video(s.Get());
+            if (muxer_->write_video(s.Get())) {
+                frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+                telemetry_.on_frame_encoded();
+            }
         }
     }
 
     // Finalize mux (rename .partial.mp4 -> .mp4)
-    muxer_->finalize();
+    if (!muxer_->finalize()) {
+        notify_error(L"Failed to finalize recording file. Partial file kept.");
+    }
 
     machine_.transition(SessionEvent::Finalized);
     notify_status(L"Idle");

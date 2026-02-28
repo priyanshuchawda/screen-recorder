@@ -7,6 +7,7 @@
 #include <processthreadsapi.h>
 #include <commctrl.h>
 #include <string>
+#include <cstdio>
 #include "utils/logging.h"
 #include "utils/qpc_clock.h"
 #include "storage/storage_manager.h"
@@ -303,6 +304,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+#ifdef _DEBUG
+    // Attach a console in debug builds so SR_LOG_* output (stderr) is visible
+    if (AllocConsole()) {
+        FILE* fp = nullptr;
+        _wfreopen_s(&fp, L"CONOUT$", L"w", stderr);
+        _wfreopen_s(&fp, L"CONOUT$", L"w", stdout);
+    }
+#endif
 
     // T033: Elevate process to ABOVE_NORMAL so OS scheduler favours our
     // capture, encode and audio threads over typical background tasks.
