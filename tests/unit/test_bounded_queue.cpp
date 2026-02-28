@@ -80,6 +80,7 @@ TEST(BoundedQueueTest, MultiThreadedProducerConsumer) {
     BoundedQueue<int, 5> q;
     std::atomic<int> consumed_count{0};
     std::atomic<int> produced_count{0};
+    std::atomic<bool> producers_done{false};
     constexpr int ITEMS_PER_PRODUCER = 100;
 
     // 2 producers
@@ -92,9 +93,10 @@ TEST(BoundedQueueTest, MultiThreadedProducerConsumer) {
         }
     };
 
-    // 1 consumer
+    // 1 consumer — keeps draining until both producers are done AND queue is empty
+    // This avoids the race where producers push items after the consumer exits
     auto consumer = [&]() {
-        while (consumed_count.load(std::memory_order_relaxed) < 2 * ITEMS_PER_PRODUCER) {
+        while (!producers_done.load(std::memory_order_acquire) || !q.empty()) {
             auto val = q.try_pop();
             if (val.has_value()) {
                 consumed_count.fetch_add(1, std::memory_order_relaxed);
@@ -110,12 +112,14 @@ TEST(BoundedQueueTest, MultiThreadedProducerConsumer) {
 
     p1.join();
     p2.join();
+    // Signal consumer that no more items will be produced
+    producers_done.store(true, std::memory_order_release);
     c1.join();
 
     EXPECT_EQ(consumed_count.load(), 2 * ITEMS_PER_PRODUCER);
     EXPECT_EQ(produced_count.load(), 2 * ITEMS_PER_PRODUCER);
 
-    // Queue should never have exceeded capacity
+    // Queue must be empty after all producers are done and consumer has drained it
     EXPECT_TRUE(q.empty());
 }
 
