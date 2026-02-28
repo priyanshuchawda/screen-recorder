@@ -1,50 +1,63 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!-- Sync Impact Report
+Version change: 1.0.0 -> 1.1.0
+Modified principles: 
+- Combined Principle I and II into "Native Windows Performance & Direct GPU Pipeline"
+- Added Principle II: "State Machine & Thread Ownership"
+- Added Principle III: "Bounded Queues & Backpressure"
+- Added Principle IV: "Encoder Fallback & Downgrade Policy"
+- Renamed "Continuous Media Timeline" to Principle V, expanded pause/mute rules
+- Renamed "Resilient Storage Handling" to Principle VI and added Crash Recovery behavior
+Added sections: None
+Removed sections: None
+Templates requiring updates (✅ updated / ⚠ pending):
+- .specify/templates/plan-template.md (✅ Checked, generic gates sufficient)
+- .specify/templates/spec-template.md (✅ Checked, generic)
+- .specify/templates/tasks-template.md (✅ Checked, generic)
+Follow-up TODOs: None
+-->
+
+# Screen Recorder Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. Native Windows Performance & Direct GPU Pipeline
+**MUST** use C++20, Win32, and C++/WinRT. Native wins on RAM/CPU usage and startup time compared to Electron or .NET. **MUST** use Windows Graphics Capture, D3D11, and Media Foundation H.264 HW encoding for a zero-copy GPU path, preventing CPU bottlenecks.
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+### II. State Machine & Thread Ownership
+The `Session Controller` **MUST** act as the central state machine enforcing strict transitions: `Idle -> Recording -> Paused -> Recording -> Stopping -> Idle`. It owns the lifecycle of all engines.
+Threading **MUST** be strictly separated into dedicated worker threads: UI thread, capture thread, audio capture thread, and encode/mux worker.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+### III. Bounded Queues & Backpressure
+**MUST** use bounded lock-free queues (small depth) to cap memory and latency.
+**Frame Drop Policy**: System **MUST** drop the oldest pending video frame if the queue is full. It **MUST NEVER** block the capture callback.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### IV. Encoder Fallback & Downgrade Policy
+The system **MUST** implement a strict encoder fallback chain if initialization or encoding fails:
+- Attempt 1: H.264 hardware MFT.
+- Attempt 2: H.264 software MFT at same resolution/FPS.
+- Attempt 3: Auto-degrade to 720p30 software with a warning to the user.
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+### V. Continuous Media Timeline
+**MUST** maintain a continuous MP4 timeline. Pauses require recording the `pause_start_qpc`, adding pause duration to `paused_accumulator`, rebasing outgoing timestamps (`effective_pts = raw_pts - paused_accumulator`), and forcing the next video frame as a keyframe. Mutes require injecting zeroed PCM silence.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+### VI. Resilient Storage & Crash Recovery
+**MUST** write to `.partial.mp4` during active recordings. On normal stop, rename to `.mp4`. On startup, the system **MUST** detect stale partial files and provide crash-recovery behavior by offering a "keep/delete/recover attempt" flow to the user.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+## Performance & Resource Limits
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+Keep active buffering conservative; expected runtime RAM around 150–300 MB, with a strict maximum of 500 MB. Ensure battery power defaults to 1080p30, while AC allows 1080p60.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+## Phased Development Workflow
+
+Follow a phased approach:
+1. Core capture + encode prototype
+2. Audio + sync
+3. Pause/Resume + mute/unmute
+4. Robustness + storage
+5. Performance tuning + QA
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+All architectural changes **MUST** maintain the native zero-copy constraints. Adding heavy external dependencies (e.g., FFmpeg) **SHOULD NOT** be done unless native Media Foundation pathways absolutely fail.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.1.0 | **Ratified**: 2026-02-24 | **Last Amended**: 2026-02-24
