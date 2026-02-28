@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <processthreadsapi.h>
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <string>
 #include <cstdio>
 #include "utils/logging.h"
@@ -18,6 +19,7 @@
 #include "app/telemetry.h"             // T037: TelemetrySnapshot
 
 #pragma comment(lib, "comctl32.lib")
+#pragma comment(lib, "dwmapi.lib")
 
 // Control IDs
 #define ID_BTN_START     1001
@@ -54,6 +56,25 @@ static HWND g_lbl_fps       = nullptr;
 static HWND g_lbl_path      = nullptr;
 static HWND g_lbl_dropped   = nullptr;
 static HWND g_lbl_profile   = nullptr;
+
+static HBRUSH g_brush_bg    = nullptr;
+static HFONT  g_font_ui     = nullptr;
+static HFONT  g_font_bold   = nullptr;
+
+static constexpr COLORREF kBgColor      = RGB(31, 31, 31);
+static constexpr COLORREF kTextColor    = RGB(230, 230, 230);
+static constexpr COLORREF kMutedText    = RGB(170, 170, 170);
+static constexpr COLORREF kCardColor    = RGB(38, 38, 41);
+static constexpr COLORREF kBorderColor  = RGB(64, 64, 68);
+static constexpr COLORREF kAccent       = RGB(0, 120, 215);
+static constexpr COLORREF kAccentHover  = RGB(0, 132, 235);
+static constexpr COLORREF kBtnDark      = RGB(56, 56, 60);
+static constexpr COLORREF kBtnDarkHover = RGB(66, 66, 72);
+static constexpr COLORREF kBtnDisabled  = RGB(74, 74, 78);
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
 
 static int64_t g_record_start_ms = 0;
 static int64_t g_paused_total_ms = 0;
@@ -129,66 +150,201 @@ void UpdateUI()
         : out_path.c_str());
 }
 
+static void ApplyUIFont(HWND hwnd) {
+    if (!g_font_ui || !g_font_bold) return;
+    SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
+    if (g_btn_start)    SendMessageW(g_btn_start,    WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
+    if (g_btn_stop)     SendMessageW(g_btn_stop,     WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
+    if (g_btn_pause)    SendMessageW(g_btn_pause,    WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
+    if (g_btn_mute)     SendMessageW(g_btn_mute,     WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
+    if (g_btn_settings) SendMessageW(g_btn_settings, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
+}
+
+static void EnableDarkTitleBar(HWND hwnd) {
+    BOOL dark = TRUE;
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+}
+
+static bool IsControlEnabled(HWND hwnd, UINT id) {
+    HWND ctrl = GetDlgItem(hwnd, static_cast<int>(id));
+    return ctrl && IsWindowEnabled(ctrl);
+}
+
+static void DrawButton(HDC hdc, const RECT& rc, const std::wstring& text,
+                       bool enabled, bool pressed, bool primary)
+{
+    COLORREF fill = kBtnDark;
+    COLORREF border = kBorderColor;
+    COLORREF text_color = enabled ? kTextColor : RGB(180, 180, 180);
+
+    if (!enabled) {
+        fill = kBtnDisabled;
+    } else if (primary) {
+        fill = pressed ? RGB(0, 102, 184) : kAccent;
+        border = pressed ? RGB(0, 92, 168) : RGB(20, 140, 230);
+        text_color = RGB(245, 245, 245);
+    } else {
+        fill = pressed ? RGB(48, 48, 54) : kBtnDark;
+    }
+
+    HBRUSH fill_brush = CreateSolidBrush(fill);
+    FillRect(hdc, &rc, fill_brush);
+    DeleteObject(fill_brush);
+
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    HGDIOBJ old_pen = SelectObject(hdc, pen);
+    HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, text_color);
+
+    RECT text_rc = rc;
+    if (pressed) {
+        text_rc.left += 1;
+        text_rc.top  += 1;
+    }
+    DrawTextW(hdc, text.c_str(), -1, &text_rc,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 // ----------------------------------------------------------------------------
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
 
     case WM_CREATE: {
-        int y = 10;
+        int y = 14;
+
+        g_font_ui = CreateFontW(
+            -18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_font_bold = CreateFontW(
+            -18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+
+        CreateWindowW(L"STATIC", L"Screen Recorder",
+                      WS_VISIBLE | WS_CHILD,
+                      12, y, 220, 24, hwnd, nullptr, nullptr, nullptr);
+
+        y += 30;
         CreateWindowW(L"STATIC", L"Status:", WS_VISIBLE | WS_CHILD,
-                      10, y, 60, 20, hwnd, nullptr, nullptr, nullptr);
+                      12, y, 60, 20, hwnd, nullptr, nullptr, nullptr);
         g_lbl_status = CreateWindowW(L"STATIC", L"Idle", WS_VISIBLE | WS_CHILD,
-                       75, y, 210, 20, hwnd, (HMENU)ID_LABEL_STATUS, nullptr, nullptr);
+                       78, y, 230, 20, hwnd, (HMENU)ID_LABEL_STATUS, nullptr, nullptr);
 
-        y += 26;
+        y += 30;
         CreateWindowW(L"STATIC", L"Time:", WS_VISIBLE | WS_CHILD,
-                      10, y, 60, 20, hwnd, nullptr, nullptr, nullptr);
+                      12, y, 60, 20, hwnd, nullptr, nullptr, nullptr);
         g_lbl_time = CreateWindowW(L"STATIC", L"00:00:00", WS_VISIBLE | WS_CHILD,
-                     75, y, 120, 20, hwnd, (HMENU)ID_LABEL_TIME, nullptr, nullptr);
+                     78, y, 120, 20, hwnd, (HMENU)ID_LABEL_TIME, nullptr, nullptr);
 
-        y += 24;
+        y += 28;
         g_lbl_fps = CreateWindowW(L"STATIC", L"Captured:0  Encoded:0",
                     WS_VISIBLE | WS_CHILD,
-                    10, y, 350, 20, hwnd, (HMENU)ID_LABEL_FPS, nullptr, nullptr);
+                    12, y, 390, 20, hwnd, (HMENU)ID_LABEL_FPS, nullptr, nullptr);
 
-        y += 22;
+        y += 24;
         g_lbl_dropped = CreateWindowW(L"STATIC", L"Dropped: 0",
                         WS_VISIBLE | WS_CHILD,
-                        10, y, 200, 20, hwnd, (HMENU)ID_LABEL_DROPPED, nullptr, nullptr);
+                        12, y, 240, 20, hwnd, (HMENU)ID_LABEL_DROPPED, nullptr, nullptr);
 
-        y += 26;
+        y += 30;
         g_lbl_path = CreateWindowW(L"STATIC", g_storage.outputDirectory().c_str(),
                      WS_VISIBLE | WS_CHILD | SS_PATHELLIPSIS,
-                     10, y, 350, 20, hwnd, (HMENU)ID_LABEL_PATH, nullptr, nullptr);
+                     12, y, 390, 20, hwnd, (HMENU)ID_LABEL_PATH, nullptr, nullptr);
 
-        y += 36;
+        y += 38;
         g_btn_start = CreateWindowW(L"BUTTON", L"Start",
-                      WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                      10,  y, 80, 30, hwnd, (HMENU)ID_BTN_START, nullptr, nullptr);
+                      WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+                      12,  y, 92, 32, hwnd, (HMENU)ID_BTN_START, nullptr, nullptr);
         g_btn_stop  = CreateWindowW(L"BUTTON", L"Stop",
-                      WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                      100, y, 80, 30, hwnd, (HMENU)ID_BTN_STOP, nullptr, nullptr);
+                      WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+                      112, y, 92, 32, hwnd, (HMENU)ID_BTN_STOP, nullptr, nullptr);
         g_btn_pause = CreateWindowW(L"BUTTON", L"Pause",
-                      WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                      190, y, 80, 30, hwnd, (HMENU)ID_BTN_PAUSE, nullptr, nullptr);
+                      WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+                      212, y, 92, 32, hwnd, (HMENU)ID_BTN_PAUSE, nullptr, nullptr);
         g_btn_mute  = CreateWindowW(L"BUTTON", L"Mute",
-                      WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                      280, y, 80, 30, hwnd, (HMENU)ID_BTN_MUTE, nullptr, nullptr);
+                      WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+                      312, y, 92, 32, hwnd, (HMENU)ID_BTN_MUTE, nullptr, nullptr);
 
-        y += 36;
+        y += 42;
         g_btn_settings = CreateWindowW(L"BUTTON", L"\u2699 Settings",
-                         WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-                         10, y, 100, 26, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
+                         WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+                         12, y, 116, 28, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
 
         // Profile label: e.g. "30 fps | 8 Mbps"
         g_lbl_profile = CreateWindowW(L"STATIC", L"30 fps | 8 Mbps",
                         WS_VISIBLE | WS_CHILD | SS_LEFT,
-                        120, y + 5, 250, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
+                        138, y + 6, 250, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
+
+        ApplyUIFont(hwnd);
 
         SetTimer(hwnd, ID_TIMER_UPDATE, 250, nullptr);
         UpdateUI();
         break;
+    }
+
+    case WM_DRAWITEM: {
+        auto* dis = reinterpret_cast<LPDRAWITEMSTRUCT>(lParam);
+        if (!dis || dis->CtlType != ODT_BUTTON) break;
+
+        wchar_t text[64]{};
+        GetWindowTextW(dis->hwndItem, text, _countof(text));
+
+        const UINT id = static_cast<UINT>(dis->CtlID);
+        const bool enabled = (dis->itemState & ODS_DISABLED) == 0;
+        const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+        const bool primary = (id == ID_BTN_START);
+
+        DrawButton(dis->hDC, dis->rcItem, text, enabled, pressed, primary);
+        return TRUE;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps{};
+        HDC hdc = BeginPaint(hwnd, &ps);
+
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, g_brush_bg);
+
+        HPEN pen = CreatePen(PS_SOLID, 1, kBorderColor);
+        HGDIOBJ old_pen = SelectObject(hdc, pen);
+        MoveToEx(hdc, 0, 44, nullptr);
+        LineTo(hdc, rc.right, 44);
+        SelectObject(hdc, old_pen);
+        DeleteObject(pen);
+
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = reinterpret_cast<HDC>(wParam);
+        HWND child = reinterpret_cast<HWND>(lParam);
+        SetBkMode(hdc, TRANSPARENT);
+        if (child == g_lbl_profile || child == g_lbl_path) {
+            SetTextColor(hdc, kMutedText);
+        } else {
+            SetTextColor(hdc, kTextColor);
+        }
+        return reinterpret_cast<INT_PTR>(g_brush_bg);
+    }
+
+    case WM_CTLCOLORBTN: {
+        HDC hdc = reinterpret_cast<HDC>(wParam);
+        SetBkColor(hdc, kBgColor);
+        SetTextColor(hdc, kTextColor);
+        return reinterpret_cast<INT_PTR>(g_brush_bg);
     }
 
     case WM_TIMER:
@@ -291,6 +447,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_DESTROY:
         KillTimer(hwnd, ID_TIMER_UPDATE);
         if (!g_controller.state_is_idle()) g_controller.stop();
+        if (g_font_ui) {
+            DeleteObject(g_font_ui);
+            g_font_ui = nullptr;
+        }
+        if (g_font_bold) {
+            DeleteObject(g_font_bold);
+            g_font_bold = nullptr;
+        }
         PostQuitMessage(0);
         break;
 
@@ -304,6 +468,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+    if (!g_brush_bg) {
+        g_brush_bg = CreateSolidBrush(kBgColor);
+    }
 
 #ifdef _DEBUG
     // Attach a console in debug builds so SR_LOG_* output (stderr) is visible
@@ -355,7 +523,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.hbrBackground = g_brush_bg;
     wc.lpszClassName = L"ScreenRecorderClass";
     wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
     RegisterClassExW(&wc);
@@ -363,9 +531,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     g_hwnd = CreateWindowExW(
         0, L"ScreenRecorderClass", L"Screen Recorder v1.0",
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 390, 310,
+        CW_USEDEFAULT, CW_USEDEFAULT, 450, 365,
         nullptr, nullptr, hInstance, nullptr
     );
+
+    EnableDarkTitleBar(g_hwnd);
 
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
@@ -428,6 +598,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     }
 
     CoUninitialize();
+    if (g_brush_bg) {
+        DeleteObject(g_brush_bg);
+        g_brush_bg = nullptr;
+    }
     return static_cast<int>(msg_loop.wParam);
 }
 

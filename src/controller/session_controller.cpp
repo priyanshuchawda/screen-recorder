@@ -220,6 +220,7 @@ bool SessionController::stop() {
     if (was_recording) {
         std::vector<ComPtr<IMFSample>> leftover;
         encoder_->flush(leftover);
+        SR_LOG_INFO(L"Encoder flush produced %zu samples", leftover.size());
         for (auto& s : leftover) {
             if (muxer_->write_video(s.Get())) {
                 frames_encoded_.fetch_add(1, std::memory_order_relaxed);
@@ -318,7 +319,8 @@ void SessionController::encode_loop() {
             }
 
             // T038: pace the incoming PTS and decide what to do
-            bool   queue_full = (frame_queue_->size() == 0); // already popped — never full here
+            // We already popped one frame, so this queue cannot be full here.
+            bool   queue_full = false;
             int64_t paced_pts = frame.pts;
             PaceAction action = pacer_.pace_frame(frame.pts, queue_full, &paced_pts);
 

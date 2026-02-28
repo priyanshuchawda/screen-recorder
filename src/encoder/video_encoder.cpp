@@ -87,6 +87,8 @@ static HRESULT ConfigureInputType(IMFTransform* mft,
     MFSetAttributeRatio(in_type.Get(), MF_MT_FRAME_RATE, fps_num, fps_den);
     MFSetAttributeRatio(in_type.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
     in_type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    in_type->SetUINT32(MF_MT_DEFAULT_STRIDE, w);
+    in_type->SetUINT32(MF_MT_SAMPLE_SIZE, (w * h * 3) / 2);
 
     return mft->SetInputType(0, in_type.Get(), 0);
 }
@@ -395,18 +397,35 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         hr = d3d_context_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
         if (FAILED(hr)) return false;
 
-        // NV12: Y plane + interleaved UV plane
-        uint32_t y_size  = mapped.RowPitch * td.Height;
-        uint32_t uv_size = mapped.RowPitch * (td.Height / 2);
+        // NV12: tightly pack Y + UV planes to match stride=width media type.
+        const uint32_t tight_stride = td.Width;
+        uint32_t y_size  = tight_stride * td.Height;
+        uint32_t uv_size = tight_stride * (td.Height / 2);
         DWORD total = y_size + uv_size;
 
         hr = MFCreateMemoryBuffer(total, &buffer);
         BYTE* buf_data = nullptr;
         buffer->Lock(&buf_data, nullptr, nullptr);
-        std::memcpy(buf_data, mapped.pData, y_size);
-        std::memcpy(buf_data + y_size,
-                    static_cast<uint8_t*>(mapped.pData) + y_size,
-                    uv_size);
+
+        const uint8_t* src = static_cast<uint8_t*>(mapped.pData);
+        uint8_t* dst = buf_data;
+
+        // Copy Y plane row-by-row
+        for (uint32_t row = 0; row < td.Height; ++row) {
+            std::memcpy(dst + row * tight_stride,
+                        src + row * mapped.RowPitch,
+                        tight_stride);
+        }
+
+        // Copy UV plane row-by-row
+        const uint8_t* src_uv = src + (mapped.RowPitch * td.Height);
+        uint8_t* dst_uv = dst + y_size;
+        for (uint32_t row = 0; row < td.Height / 2; ++row) {
+            std::memcpy(dst_uv + row * tight_stride,
+                        src_uv + row * mapped.RowPitch,
+                        tight_stride);
+        }
+
         buffer->Unlock();
         buffer->SetCurrentLength(total);
 
@@ -484,6 +503,12 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
 // ---------------------------------------------------------------------------
 bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
     if (!initialized_ || !mft_) return false;
+
+    // Some MFTs only emit buffered output after explicit end-of-stream signal.
+    HRESULT eos_hr = mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
+    if (FAILED(eos_hr)) {
+        SR_LOG_WARN(L"MFT_MESSAGE_NOTIFY_END_OF_STREAM failed: 0x%08X", eos_hr);
+    }
 
     mft_->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
 
