@@ -191,17 +191,17 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 ### Implementation for User Story 4
 
-- [ ] T025 [P] [US4] — Update `StorageManager` for dynamic directory overrides in `src/storage/`
+- [X] T025 [P] [US4] — Update `StorageManager` for dynamic directory overrides in `src/storage/`
   - INPUT: `StorageManager` from T006
   - OUTPUT: `setOutputDirectory()` method, validates path exists (or creates it), persists preference
   - VERIFY: Unit test: set custom dir, generate filename, verify path is correct
 
-- [ ] T026 [P] [US4] — Abstract encoder profile for dynamic FPS presets in `src/encoder/`
+- [X] T026 [P] [US4] — Abstract encoder profile for dynamic FPS presets in `src/encoder/`
   - INPUT: `VideoEncoder` from T013
   - OUTPUT: `EncoderProfile` struct: {fps: 30|60, bitrate: 8|14 Mbps, resolution: 1080p}. Encoder accepts profile at init
   - VERIFY: Create encoder with 60fps profile, verify MFT attributes match
 
-- [ ] T027 [US4] — Implement Settings Panel UI in `src/app/`
+- [X] T027 [US4] — Implement Settings Panel UI in `src/app/`
   - INPUT: UI from T024
   - OUTPUT: Settings overlay/dialog: FPS dropdown (30/60), output directory selector (folder browser dialog), settings persisted to JSON/INI
   - VERIFY: Manual test: change settings, restart app, settings restored
