@@ -29,7 +29,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 
 ```powershell
 # Configure
-cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake -B build -G "Visual Studio 18 2026" -A x64
 
 # Build (Debug)
 cmake --build build --config Debug
@@ -44,8 +44,28 @@ ctest --test-dir build -C Debug --output-on-failure
 ## Package (ZIP)
 
 ```powershell
+# Configure once (if not already configured)
+cmake -B build -G "Visual Studio 18 2026" -A x64
+
+# Build release binary
 cmake --build build --config Release
+
+# Create distributable zip
 cpack --config build\CPackConfig.cmake -C Release
+```
+
+Generated artifact:
+
+- `build\ScreenRecorder-0.2.1-windows-x64.zip`
+
+## Release
+
+Use GitHub CLI to publish a tagged release with the package:
+
+```powershell
+git tag v0.2.1
+git push origin v0.2.1
+gh release create v0.2.1 build\ScreenRecorder-0.2.1-windows-x64.zip --title "v0.2.1" --notes "Stable Windows package release."
 ```
 
 ## Project Layout

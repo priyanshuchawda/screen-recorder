@@ -21,7 +21,7 @@ exit /b %ERRORLEVEL%
 
 :do_test
 echo === Running Tests ===
-ctest --test-dir build --config Debug --output-on-failure
+ctest --test-dir build -C Debug --output-on-failure
 exit /b %ERRORLEVEL%
 
 :do_release
