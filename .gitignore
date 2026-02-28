@@ -73,3 +73,11 @@ gather-sysinfo.ps1
 # Dependencies (fetched at build time)
 _deps/
 vcpkg_installed/
+
+# Local agent/spec tooling
+.gemini/
+.specify/
+.specify copy/
+.vscode/
+specs/
+specs copy/
