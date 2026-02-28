@@ -273,37 +273,37 @@ description: "Task list for feature implementation: Full Screen Recorder"
 
 **Purpose**: Elevate the app from architecturally sound to operationally robust under sustained, heavy-usage conditions.
 
-- [ ] T037 [P] — Implement runtime telemetry counters and debug overlay in `src/app/`
+- [X] T037 [P] — Implement runtime telemetry counters and debug overlay in `src/app/`
   - INPUT: All engine modules
   - OUTPUT: Counters: frames captured/encoded/dropped/backlogged. Optional debug overlay showing live stats
   - VERIFY: Record 30s, verify counters are non-zero and consistent
 
-- [ ] T038 — Implement frame pacing normalization layer in `src/sync/`
+- [X] T038 — Implement frame pacing normalization layer in `src/sync/`
   - INPUT: `SyncManager` from T014
   - OUTPUT: Absorb WGC timing jitter: smooth PTS intervals, insert duplicates for gaps > 1.5x target, drop newest on backpressure
   - VERIFY: Simulate jittery input (random ±10ms), verify output PTS is smooth
 
-- [ ] T039 [P] — Implement D3D11 device-lost detection and recovery in `src/capture/`
+- [X] T039 [P] — Implement D3D11 device-lost detection and recovery in `src/capture/`
   - INPUT: `CaptureEngine` from T010
   - OUTPUT: Handle `DXGI_ERROR_DEVICE_REMOVED`, recreate D3D11 device + frame pool, resume capture
   - VERIFY: Force device-lost via driver reset (or mock), verify capture resumes
 
-- [ ] T040 — Implement periodic memory sampler and 60-min stress assertion in `tests/integration/`
+- [X] T040 — Implement periodic memory sampler and 60-min stress assertion in `tests/integration/`
   - INPUT: Built application
   - OUTPUT: Test harness: start recording, sample working set every 60s for 60 mins, assert < 5% growth
   - VERIFY: Test passes on target machine (i7-1255U, Iris Xe)
 
-- [ ] T041 — Create 60-minute automated stability harness in `tests/integration/`
+- [X] T041 — Create 60-minute automated stability harness in `tests/integration/`
   - INPUT: Built application, video playback load generator
   - OUTPUT: Script: launch app, start recording, play 4K video in background, track CPU/RAM/drift on battery for 60 min
   - VERIFY: Frame drops < 5%, drift < 100ms, memory < 500 MB
 
-- [ ] T042 [P] — Implement dynamic power-mode encoder adjustment in `src/encoder/`
+- [X] T042 [P] — Implement dynamic power-mode encoder adjustment in `src/encoder/`
   - INPUT: `VideoEncoder` from T013
   - OUTPUT: Detect AC/battery via `GetSystemPowerStatus`. On battery: default 1080p30/8Mbps. On AC: allow 1080p60/14Mbps
   - VERIFY: Unplug AC, verify encoder switches to 30fps preset
 
-- [ ] T043 [P] — Implement WGC consent flow and denial handling in `src/app/`
+- [X] T043 [P] — Implement WGC consent flow and denial handling in `src/app/`
   - INPUT: WGC API
   - OUTPUT: Proper GraphicsCapturePicker or programmatic consent. If denied, show clear error message and disable Start button
   - VERIFY: Deny permission, verify error message shown and app doesn't crash

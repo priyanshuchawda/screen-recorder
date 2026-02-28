@@ -2,6 +2,10 @@
 // session_controller.h — Wires all engines together; driven by SessionMachine events
 // T016: Start initializes all engines, runs capture->preprocess->encode->mux pipeline,
 //       Stop finalizes and renames file, Pause/Resume propagates to sync manager.
+// T037: TelemetryStore integration for live counter snapshot
+// T038: FramePacer for jitter absorption in encode_loop
+// T039: Device-lost callback routing
+// T042: PowerModeDetector applied at session start
 
 #include <windows.h>
 #include <atomic>
@@ -10,7 +14,10 @@
 #include <string>
 #include "controller/session_machine.h"
 #include "encoder/encoder_probe.h"
+#include "encoder/power_mode.h"      // T042
 #include "sync/sync_manager.h"
+#include "sync/frame_pacer.h"        // T038
+#include "app/telemetry.h"           // T037
 #include "utils/render_frame.h"
 #include "utils/bounded_queue.h"
 #include "capture/capture_engine.h"  // for FrameQueue typedef
@@ -70,6 +77,9 @@ public:
     uint32_t frames_encoded()   const;
     uint32_t audio_packets_written() const;
 
+    // T037: Rich telemetry snapshot for debug overlay
+    TelemetrySnapshot telemetry_snapshot() const;
+
     std::wstring output_path() const { return current_output_path_; }
 
 private:
@@ -80,6 +90,9 @@ private:
     SessionMachine  machine_;
     SyncManager     sync_;
     ProbeResult     probe_;
+    FramePacer      pacer_;      // T038: frame pacing
+    TelemetryStore  telemetry_;  // T037: live counters
+    bool            last_power_ac_ = true; // T042: last known power state
 
     // Engines
     std::unique_ptr<CaptureEngine> capture_;
@@ -96,7 +109,7 @@ private:
     std::thread       encode_thread_;
     std::atomic<bool> encode_running_{ false };
 
-    // Counters
+    // Counters (legacy — kept for backwards-compat; TelemetryStore is canonical)
     std::atomic<uint32_t> frames_encoded_{ 0 };
     std::atomic<uint32_t> audio_written_ { 0 };
 

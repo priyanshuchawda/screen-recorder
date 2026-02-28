@@ -106,7 +106,7 @@ bool SessionController::start() {
     }
 
     // ---------------------------------------------------------------
-    // Initialize VideoEncoder
+    // Initialize VideoEncoder  (T042: clamp profile for power mode)
     // ---------------------------------------------------------------
     EncoderProfile enc_prof;
     if (has_pending_profile_) {
@@ -118,6 +118,10 @@ bool SessionController::start() {
     }
     enc_prof.width  = capture_->width()  ? capture_->width()  : 1920;
     enc_prof.height = capture_->height() ? capture_->height() : 1080;
+
+    // T042: Apply power-mode clamping (battery → 30fps/8Mbps)
+    last_power_ac_ = PowerModeDetector::is_on_ac_power();
+    enc_prof = PowerModeDetector::clamp_for_power(enc_prof);
 
     if (!encoder_->initialize(enc_prof,
                                probe_.dxgi_device_manager.Get(),
@@ -154,6 +158,19 @@ bool SessionController::start() {
     // ---------------------------------------------------------------
     frames_encoded_.store(0, std::memory_order_relaxed);
     audio_written_.store(0,  std::memory_order_relaxed);
+    telemetry_.reset(); // T037: clear counters for new session
+
+    // T038: initialise frame pacer for this session's fps
+    pacer_.initialize(enc_prof.fps);
+
+    // T039: register device-lost callback — fires when D3D device is removed
+    capture_->set_device_lost_callback([this]() {
+        SR_LOG_ERROR(L"[T039] Device-lost event received — auto-stopping recording");
+        notify_error(L"\u26A0 Graphics device was reset or removed. Recording stopped.");
+        // stop() is safe to call from the WGC frame-arrived callback thread:
+        // it uses atomic transitions (same pattern as T031 disk-space auto-stop).
+        stop();
+    });
 
     encode_running_.store(true, std::memory_order_release);
     encode_thread_ = std::thread(&SessionController::encode_loop, this);
@@ -221,6 +238,7 @@ bool SessionController::stop() {
 bool SessionController::pause() {
     if (!machine_.transition(SessionEvent::Pause)) return false;
     sync_.pause();
+    pacer_.reset(); // T038: avoid treating the pause gap as a frame skip on resume
     notify_status(L"Paused");
     return true;
 }
@@ -228,6 +246,7 @@ bool SessionController::pause() {
 bool SessionController::resume() {
     if (!machine_.transition(SessionEvent::Resume)) return false;
     sync_.resume();
+    pacer_.reset(); // T038: fresh pacing baseline after resume
     // Force an IDR keyframe on the next encoded frame so the resumed segment
     // is independently decodable and seeks work correctly after pause gaps.
     encoder_->request_keyframe();
@@ -248,14 +267,37 @@ uint32_t SessionController::frames_dropped()        const { return capture_->fra
 uint32_t SessionController::frames_encoded()        const { return frames_encoded_.load(); }
 uint32_t SessionController::audio_packets_written() const { return audio_written_.load(); }
 
+// T037: Build a full telemetry snapshot for the debug overlay
+TelemetrySnapshot SessionController::telemetry_snapshot() const {
+    uint32_t enc_mode = 0;
+    if (encoder_) {
+        switch (encoder_->mode()) {
+            case EncoderMode::HardwareMFT:   enc_mode = 0; break;
+            case EncoderMode::SoftwareMFT:   enc_mode = 1; break;
+            case EncoderMode::SoftwareMFT720p: enc_mode = 2; break;
+        }
+    }
+    // Update backlog counter from the live queue depth
+    uint32_t backlog = frame_queue_ ? static_cast<uint32_t>(frame_queue_->size()) : 0;
+    const_cast<TelemetryStore&>(telemetry_).set_backlog(backlog);
+    return telemetry_.snapshot(enc_mode, last_power_ac_);
+}
+
 // ---------------------------------------------------------------------------
 // Encode loop — runs on encode_thread_
 // Drains both frame_queue_ and audio_queue_, feeds encoder + muxer
+// T038: FramePacer normalises jittery WGC timestamps
 // ---------------------------------------------------------------------------
 void SessionController::encode_loop() {
     // Register this thread with MMCSS for higher priority
     // (same priority class as capture)
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+    // T038: keep a copy of the last encoded frame's texture for duplicate insertion.
+    // RenderFrame is move-only; store the texture ComPtr separately (AddRef on copy).
+    ComPtr<ID3D11Texture2D> last_texture;
+    bool        have_last_frame  = false;
+    int64_t     last_paced_pts   = 0;
 
     // Interleave video and audio: write video first, then any pending audio
     while (encode_running_.load(std::memory_order_acquire) ||
@@ -270,12 +312,43 @@ void SessionController::encode_loop() {
                 continue;
             }
 
-            // Encode
+            // T038: pace the incoming PTS and decide what to do
+            bool   queue_full = (frame_queue_->size() == 0); // already popped — never full here
+            int64_t paced_pts = frame.pts;
+            PaceAction action = pacer_.pace_frame(frame.pts, queue_full, &paced_pts);
+
+            if (action == PaceAction::Drop) {
+                // Backpressure drop — discard this frame
+                telemetry_.on_frame_dropped();
+                continue;
+            }
+
+            // T038: duplicate — encode the last frame again with a synthetic PTS
+            if (action == PaceAction::Duplicate && have_last_frame && last_texture) {
+                // Duplicate PTS = midpoint between last and current frame.
+                int64_t dup_pts = last_paced_pts + (paced_pts - last_paced_pts) / 2;
+                ComPtr<IMFSample> dup_sample;
+                if (encoder_->encode_frame(last_texture.Get(), dup_pts, dup_sample)) {
+                    muxer_->write_video(dup_sample.Get());
+                    frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+                    telemetry_.on_frame_encoded();
+                    telemetry_.on_duplicate_inserted();
+                }
+            }
+
+            // Cache this texture (ComPtr copy AddRefs it) before encoding
+            last_texture = frame.texture;
+
+            // Encode current frame
             ComPtr<IMFSample> encoded;
-            if (encoder_->encode_frame(frame.texture.Get(), frame.pts, encoded)) {
+            if (encoder_->encode_frame(frame.texture.Get(), paced_pts, encoded)) {
                 muxer_->write_video(encoded.Get());
                 frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+                telemetry_.on_frame_encoded();
             }
+
+            have_last_frame = true;
+            last_paced_pts  = paced_pts;
         }
 
         // --- Audio: drain all pending packets ---
@@ -305,6 +378,7 @@ void SessionController::encode_loop() {
 
             muxer_->write_audio(sample.Get());
             audio_written_.fetch_add(1, std::memory_order_relaxed);
+            telemetry_.on_audio_written();
         }
 
         // Brief yield when queue is empty
