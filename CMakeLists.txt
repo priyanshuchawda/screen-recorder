@@ -45,6 +45,10 @@ file(GLOB_RECURSE ENCODER_SRC src/encoder/*.cpp src/encoder/*.h)
 file(GLOB_RECURSE SYNC_SRC    src/sync/*.cpp src/sync/*.h)
 file(GLOB_RECURSE STORAGE_SRC src/storage/*.cpp src/storage/*.h)
 file(GLOB_RECURSE APP_SRC     src/app/*.cpp src/app/*.h)
+list(APPEND APP_SRC
+    src/app/camera_overlay.cpp
+    src/app/camera_overlay.h
+)
 
 add_executable(ScreenRecorder WIN32
     ${APP_SRC}
