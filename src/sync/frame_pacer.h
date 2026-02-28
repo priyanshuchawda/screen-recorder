@@ -78,8 +78,10 @@ public:
 
         if (need_dup) {
             ++dups_;
-            SR_LOG_INFO(L"[FramePacer] Gap %lld > 1.5× target %lld — signalling duplicate",
-                        gap, target_interval_100ns_);
+            if (dups_ <= 3 || (dups_ % 30) == 0) {
+                SR_LOG_INFO(L"[FramePacer] Gap %lld > 1.5× target %lld — signalling duplicate (count=%u)",
+                            gap, target_interval_100ns_, dups_);
+            }
         }
 
         // Clamp PTS advance to avoid compounding drift on multi-frame gaps.
