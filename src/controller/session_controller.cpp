@@ -14,6 +14,7 @@
 #include <chrono>
 #include <algorithm>
 #include <array>
+#include <dxgi1_4.h>
 #include <psapi.h>
 
 namespace sr {
@@ -401,6 +402,17 @@ void SessionController::encode_loop() {
         return true;
     };
 
+    ComPtr<IDXGIAdapter3> perf_adapter3;
+    if (probe_.d3d_device) {
+        ComPtr<IDXGIDevice> dxgi_device;
+        if (SUCCEEDED(probe_.d3d_device.As(&dxgi_device)) && dxgi_device) {
+            ComPtr<IDXGIAdapter> adapter;
+            if (SUCCEEDED(dxgi_device->GetAdapter(&adapter)) && adapter) {
+                adapter.As(&perf_adapter3);
+            }
+        }
+    }
+
     // Interleave video and audio: write video first, then any pending audio
     while (encode_running_.load(std::memory_order_acquire) ||
            !frame_queue_->empty())
@@ -520,6 +532,23 @@ void SessionController::encode_loop() {
                     SR_LOG_WARN(L"[Perf] High process memory: private=%llu MB, working_set=%llu MB", private_mb, ws_mb);
                 } else {
                     SR_LOG_INFO(L"[Perf] Process memory: private=%llu MB, working_set=%llu MB", private_mb, ws_mb);
+                }
+            }
+            if (perf_adapter3) {
+                DXGI_QUERY_VIDEO_MEMORY_INFO local_info{};
+                DXGI_QUERY_VIDEO_MEMORY_INFO nonlocal_info{};
+                const HRESULT hr_local = perf_adapter3->QueryVideoMemoryInfo(
+                    0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local_info);
+                const HRESULT hr_nonlocal = perf_adapter3->QueryVideoMemoryInfo(
+                    0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonlocal_info);
+                if (SUCCEEDED(hr_local) && SUCCEEDED(hr_nonlocal)) {
+                    const uint64_t local_current_mb = local_info.CurrentUsage / (1024ull * 1024ull);
+                    const uint64_t local_budget_mb  = local_info.Budget / (1024ull * 1024ull);
+                    const uint64_t shared_current_mb = nonlocal_info.CurrentUsage / (1024ull * 1024ull);
+                    const uint64_t shared_budget_mb  = nonlocal_info.Budget / (1024ull * 1024ull);
+                    SR_LOG_INFO(
+                        L"[Perf] GPU memory: local=%llu/%llu MB, shared=%llu/%llu MB",
+                        local_current_mb, local_budget_mb, shared_current_mb, shared_budget_mb);
                 }
             }
             last_mem_sample_ms = now_ms;
