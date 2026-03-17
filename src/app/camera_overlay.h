@@ -24,6 +24,7 @@ private:
     void capture_loop();
     void draw_latest_frame(HDC hdc, const RECT& rc);
     void resize_capture_to_client();
+    void stop_capture_thread();
 
     bool detect_on_battery() const;
     void apply_preview_tuning();

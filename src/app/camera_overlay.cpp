@@ -233,7 +233,8 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
     case WM_CLOSE:
         // Stop capture thread when overlay is hidden to save battery/RAM
         if (self) {
-            self->capture_running_.store(false, std::memory_order_release);
+            self->stop_capture_thread();
+            self->running_ = false;
         }
         ShowWindow(hwnd, SW_HIDE);
         return 0;
@@ -475,7 +476,15 @@ void CameraOverlay::capture_loop() {
 }
 
 bool CameraOverlay::start(HWND owner) {
-    if (running_) return true;
+    if (running_) {
+        if (host_hwnd_) {
+            ShowWindow(host_hwnd_, SW_SHOW);
+            SetWindowPos(host_hwnd_, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
+            resize_capture_to_client();
+        }
+        return true;
+    }
 
     constexpr int host_w = 280;
     constexpr int host_h = 210;
@@ -504,20 +513,22 @@ bool CameraOverlay::start(HWND owner) {
     }
 
     owner_ = owner;
-    host_hwnd_ = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
-        L"SRCameraOverlayHost",
-        L"",
-        WS_POPUP | WS_VISIBLE,
-        x, y, host_w, host_h,
-        nullptr,
-        nullptr,
-        GetModuleHandleW(nullptr),
-        this);
-
     if (!host_hwnd_) {
-        SR_LOG_ERROR(L"CameraOverlay: host window create failed: %u", GetLastError());
-        return false;
+        host_hwnd_ = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            L"SRCameraOverlayHost",
+            L"",
+            WS_POPUP | WS_VISIBLE,
+            x, y, host_w, host_h,
+            nullptr,
+            nullptr,
+            GetModuleHandleW(nullptr),
+            this);
+
+        if (!host_hwnd_) {
+            SR_LOG_ERROR(L"CameraOverlay: host window create failed: %u", GetLastError());
+            return false;
+        }
     }
 
     SetWindowPos(host_hwnd_, HWND_TOPMOST, x, y, host_w, host_h,
@@ -539,11 +550,15 @@ void CameraOverlay::refresh_power_profile() {
     apply_preview_tuning();
 }
 
-void CameraOverlay::stop() {
+void CameraOverlay::stop_capture_thread() {
     capture_running_.store(false, std::memory_order_release);
     if (capture_thread_.joinable()) {
         capture_thread_.join();
     }
+}
+
+void CameraOverlay::stop() {
+    stop_capture_thread();
 
     if (host_hwnd_) {
         DestroyWindow(host_hwnd_);
