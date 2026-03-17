@@ -319,6 +319,8 @@ void SessionController::encode_loop() {
     bool        have_last_frame  = false;
     int64_t     last_paced_pts   = 0;
     ULONGLONG   last_mem_sample_ms = 0;
+    ULONGLONG   last_power_check_ms = 0;
+    constexpr ULONGLONG kPowerCheckIntervalMs = 10'000;
 
     struct ReusableAudioSample {
         ComPtr<IMFSample> sample;
@@ -494,9 +496,9 @@ void SessionController::encode_loop() {
 
         const ULONGLONG now_ms = GetTickCount64();
 
-        // Dynamic power monitoring — check every 30 seconds
-        static ULONGLONG last_power_check_ms = 0;
-        if (now_ms - last_power_check_ms >= 30000) {
+        // Dynamic power monitoring — check every 10 seconds.
+        // Keep this timestamp session-local so each recording starts fresh.
+        if (now_ms - last_power_check_ms >= kPowerCheckIntervalMs) {
             bool on_ac = PowerModeDetector::is_on_ac_power();
             if (on_ac != last_power_ac_) {
                 last_power_ac_ = on_ac;
