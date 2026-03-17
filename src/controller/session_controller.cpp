@@ -13,6 +13,7 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <array>
 #include <psapi.h>
 
 namespace sr {
@@ -319,6 +320,85 @@ void SessionController::encode_loop() {
     int64_t     last_paced_pts   = 0;
     ULONGLONG   last_mem_sample_ms = 0;
 
+    struct ReusableAudioSample {
+        ComPtr<IMFSample> sample;
+        ComPtr<IMFMediaBuffer> buffer;
+        DWORD capacity = 0;
+    };
+    std::array<ReusableAudioSample, 8> audio_sample_pool{};
+    size_t audio_pool_cursor = 0;
+
+    auto has_external_refs = [](IUnknown* obj) -> bool {
+        if (!obj) return false;
+        const ULONG refs = obj->AddRef();
+        obj->Release();
+        // refs includes this temporary AddRef and the pool's ComPtr reference.
+        return refs > 2;
+    };
+
+    auto acquire_audio_sample = [&](DWORD required_bytes,
+                                    ComPtr<IMFSample>& out_sample,
+                                    ComPtr<IMFMediaBuffer>& out_buffer) -> bool {
+        const size_t pool_size = audio_sample_pool.size();
+        for (size_t attempt = 0; attempt < pool_size; ++attempt) {
+            const size_t idx = (audio_pool_cursor + attempt) % pool_size;
+            auto& slot = audio_sample_pool[idx];
+            const bool reusable = !slot.sample ||
+                (!has_external_refs(slot.sample.Get()) && !has_external_refs(slot.buffer.Get()));
+            if (!reusable) continue;
+
+            HRESULT hr = S_OK;
+            if (!slot.sample) {
+                hr = MFCreateSample(&slot.sample);
+                if (FAILED(hr)) {
+                    SR_LOG_ERROR(L"MFCreateSample (pooled audio) failed: 0x%08X", hr);
+                    return false;
+                }
+            }
+            if (!slot.buffer || slot.capacity < required_bytes) {
+                slot.buffer.Reset();
+                hr = MFCreateMemoryBuffer(required_bytes, &slot.buffer);
+                if (FAILED(hr)) {
+                    SR_LOG_ERROR(L"MFCreateMemoryBuffer (pooled audio, %u bytes) failed: 0x%08X",
+                                 required_bytes, hr);
+                    return false;
+                }
+                slot.capacity = required_bytes;
+            }
+
+            slot.sample->RemoveAllBuffers();
+            hr = slot.sample->AddBuffer(slot.buffer.Get());
+            if (FAILED(hr)) {
+                SR_LOG_ERROR(L"Audio sample AddBuffer failed: 0x%08X", hr);
+                return false;
+            }
+
+            out_sample = slot.sample;
+            out_buffer = slot.buffer;
+            audio_pool_cursor = (idx + 1) % pool_size;
+            return true;
+        }
+
+        // Fallback: transient allocation when all pooled samples are in flight.
+        HRESULT hr = MFCreateSample(&out_sample);
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"MFCreateSample (transient audio) failed: 0x%08X", hr);
+            return false;
+        }
+        hr = MFCreateMemoryBuffer(required_bytes, &out_buffer);
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"MFCreateMemoryBuffer (transient audio, %u bytes) failed: 0x%08X",
+                         required_bytes, hr);
+            return false;
+        }
+        hr = out_sample->AddBuffer(out_buffer.Get());
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"Audio transient AddBuffer failed: 0x%08X", hr);
+            return false;
+        }
+        return true;
+    };
+
     // Interleave video and audio: write video first, then any pending audio
     while (encode_running_.load(std::memory_order_acquire) ||
            !frame_queue_->empty())
@@ -382,18 +462,24 @@ void SessionController::encode_loop() {
             if (machine_.is_paused()) continue;
 
             // Build IMFSample from PCM buffer
-            ComPtr<IMFSample>      sample;
+            ComPtr<IMFSample> sample;
             ComPtr<IMFMediaBuffer> buf;
-            MFCreateSample(&sample);
-            MFCreateMemoryBuffer(static_cast<DWORD>(audio_pkt.buffer.size()), &buf);
+            const DWORD packet_bytes = static_cast<DWORD>(audio_pkt.buffer.size());
+            if (!acquire_audio_sample(packet_bytes, sample, buf)) {
+                continue;
+            }
 
+            HRESULT hr = S_OK;
             BYTE* data = nullptr;
-            buf->Lock(&data, nullptr, nullptr);
+            hr = buf->Lock(&data, nullptr, nullptr);
+            if (FAILED(hr) || !data) {
+                SR_LOG_ERROR(L"Audio buffer lock failed: 0x%08X", hr);
+                continue;
+            }
             std::memcpy(data, audio_pkt.buffer.data(), audio_pkt.buffer.size());
             buf->Unlock();
-            buf->SetCurrentLength(static_cast<DWORD>(audio_pkt.buffer.size()));
+            buf->SetCurrentLength(packet_bytes);
 
-            sample->AddBuffer(buf.Get());
             sample->SetSampleTime(audio_pkt.pts);
 
             // Duration: frame_count / sample_rate in 100ns
