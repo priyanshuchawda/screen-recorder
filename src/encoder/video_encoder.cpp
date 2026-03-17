@@ -1,5 +1,5 @@
 // video_encoder.cpp — Media Foundation H.264 encoder with 3-step fallback
-// T013: CBR, 2s GOP, low-latency, no B-frames, Baseline/Main profile
+// T013: CBR, ~1s GOP, low-latency, no B-frames, Baseline/Main profile
 // Chain: HW MFT -> SW MFT (1080p) -> SW MFT (720p30)
 
 #include "encoder/video_encoder.h"
@@ -112,7 +112,7 @@ static HRESULT ConfigureInputType(IMFTransform* mft,
     return mft->SetInputType(0, in_type.Get(), 0);
 }
 
-// Apply encoder codec attributes (CBR, low-latency, no B-frames, 2s GOP)
+// Apply encoder codec attributes (CBR, low-latency, no B-frames, ~1s GOP)
 static void ApplyEncoderAttributes(IMFTransform* mft, uint32_t fps,
                                    uint32_t bitrate, bool is_hw)
 {
@@ -140,9 +140,9 @@ static void ApplyEncoderAttributes(IMFTransform* mft, uint32_t fps,
     v.ulVal = 0;
     codec_api->SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &v);
 
-    // GOP size = 2 * fps
+    // GOP size = 1 * fps (about 1 second)
     v.vt   = VT_UI4;
-    v.ulVal = fps * 2;
+    v.ulVal = fps;
     codec_api->SetValue(&CODECAPI_AVEncMPVGOPSize, &v);
 
     (void)is_hw;
@@ -551,12 +551,12 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             if (hw_path_) {
                 ++hw_output_fail_count_;
                 if (hr == static_cast<HRESULT>(0x8000FFFF) &&
-                    hw_output_fail_count_ >= 30 &&
+                    hw_output_fail_count_ >= 10 &&
                     !switched_to_sw_due_to_hw_errors_)
                 {
                     if (switch_to_software_fallback()) {
                         switched_to_sw_due_to_hw_errors_ = true;
-                        SR_LOG_WARN(L"HW encoder became unstable (0x8000FFFF). Switched to SW fallback for this session.");
+                        SR_LOG_WARN(L"HW encoder became unstable (0x8000FFFF, 10 consecutive failures). Switched to SW fallback for this session.");
                     }
                 }
             }
