@@ -451,22 +451,16 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             return false;
         }
     } else {
-        // SW path: read back texture to system memory
+        // SW path: read back texture to system memory using pre-allocated staging
         D3D11_TEXTURE2D_DESC td{};
         nv12_texture->GetDesc(&td);
-        td.Usage          = D3D11_USAGE_STAGING;
-        td.BindFlags      = 0;
-        td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        td.MiscFlags      = 0;
 
-        ComPtr<ID3D11Texture2D> staging;
-        hr = d3d_device_->CreateTexture2D(&td, nullptr, &staging);
-        if (FAILED(hr)) return false;
+        if (!ensure_staging_texture(td.Width, td.Height)) return false;
 
-        d3d_context_->CopyResource(staging.Get(), nv12_texture);
+        d3d_context_->CopyResource(staging_tex_.Get(), nv12_texture);
 
         D3D11_MAPPED_SUBRESOURCE mapped{};
-        hr = d3d_context_->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        hr = d3d_context_->Map(staging_tex_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
         if (FAILED(hr)) return false;
 
         // NV12: tightly pack Y + UV planes to match stride=width media type.
@@ -501,7 +495,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         buffer->Unlock();
         buffer->SetCurrentLength(total);
 
-        d3d_context_->Unmap(staging.Get(), 0);
+        d3d_context_->Unmap(staging_tex_.Get(), 0);
     }
 
     sample->AddBuffer(buffer.Get());
@@ -661,6 +655,38 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
 }
 
 // ---------------------------------------------------------------------------
+// VideoEncoder::ensure_staging_texture — lazy-init or resize staging texture
+// ---------------------------------------------------------------------------
+bool VideoEncoder::ensure_staging_texture(uint32_t width, uint32_t height) {
+    if (staging_tex_ && staging_width_ == width && staging_height_ == height) {
+        return true;  // already correct size
+    }
+    staging_tex_.Reset();
+
+    D3D11_TEXTURE2D_DESC td{};
+    td.Width            = width;
+    td.Height           = height;
+    td.MipLevels        = 1;
+    td.ArraySize        = 1;
+    td.Format           = DXGI_FORMAT_NV12;
+    td.SampleDesc.Count = 1;
+    td.Usage            = D3D11_USAGE_STAGING;
+    td.BindFlags        = 0;
+    td.CPUAccessFlags   = D3D11_CPU_ACCESS_READ;
+    td.MiscFlags        = 0;
+
+    HRESULT hr = d3d_device_->CreateTexture2D(&td, nullptr, &staging_tex_);
+    if (FAILED(hr)) {
+        SR_LOG_ERROR(L"ensure_staging_texture: CreateTexture2D(%ux%u) failed: 0x%08X", width, height, hr);
+        return false;
+    }
+    staging_width_  = width;
+    staging_height_ = height;
+    SR_LOG_INFO(L"Staging texture allocated: %ux%u NV12", width, height);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // VideoEncoder::shutdown
 // ---------------------------------------------------------------------------
 void VideoEncoder::shutdown() {
@@ -668,6 +694,9 @@ void VideoEncoder::shutdown() {
         mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
         mft_.Reset();
     }
+    staging_tex_.Reset();
+    staging_width_  = 0;
+    staging_height_ = 0;
     initialized_ = false;
 }
 

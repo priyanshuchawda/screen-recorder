@@ -139,11 +139,11 @@ public:
     // -----------------------------------------------------------------------
     // T028 — Async disk space polling
     // Fires callback on main thread (or poll thread) when free space < threshold.
-    // interval_ms: polling interval (default 5000 ms)
+    // interval_ms: polling interval (default 10000 ms — disk space changes slowly)
     // threshold_bytes: low-disk threshold (default 500 MB; configurable for tests)
     // -----------------------------------------------------------------------
     void startDiskSpacePolling(DiskSpaceLowCallback callback,
-                               std::chrono::milliseconds interval = std::chrono::milliseconds(5000),
+                               std::chrono::milliseconds interval = std::chrono::milliseconds(10000),
                                uint64_t threshold_bytes = 500ULL * 1024 * 1024)
     {
         stopDiskSpacePolling(); // stop any existing poll thread
@@ -156,11 +156,11 @@ public:
                                 getFreeDiskSpace() / (1024 * 1024));
                     low_disk_cb_();
                 }
-                // Sleep in 250ms increments so stop is responsive
+                // Sleep in 500ms increments so stop is responsive
                 auto deadline = std::chrono::steady_clock::now() + interval;
                 while (poll_running_.load(std::memory_order_acquire) &&
                        std::chrono::steady_clock::now() < deadline) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
             }
         });
