@@ -79,6 +79,12 @@ private:
     uint32_t    hw_output_fail_count_ = 0;
     bool        switched_to_sw_due_to_hw_errors_ = false;
 
+    // Pre-allocated staging texture for SW encoder path (avoids per-frame alloc)
+    ComPtr<ID3D11Texture2D> staging_tex_;
+    uint32_t    staging_width_  = 0;
+    uint32_t    staging_height_ = 0;
+    bool ensure_staging_texture(uint32_t width, uint32_t height);
+
     // Force next frame to be an IDR keyframe (set on resume from pause)
     std::atomic<bool> force_keyframe_next_{ false };
 };

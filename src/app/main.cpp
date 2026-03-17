@@ -496,10 +496,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     }
 #endif
 
-    // T033: Elevate process to ABOVE_NORMAL so OS scheduler favours our
-    // capture, encode and audio threads over typical background tasks.
-    // This is safe for a single-purpose recorder app.
-    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    // T033: Process priority is managed dynamically:
+    // - NORMAL_PRIORITY_CLASS when idle (saves battery)
+    // - ABOVE_NORMAL_PRIORITY_CLASS during recording (set by SessionController::start())
+    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
 
     SR_LOG_INFO(L"ScreenRecorder starting...");
 
