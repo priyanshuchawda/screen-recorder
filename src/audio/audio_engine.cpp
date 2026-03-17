@@ -164,6 +164,7 @@ void AudioEngine::capture_loop() {
         SR_LOG_WARN(L"AvSetMmThreadCharacteristics failed (non-fatal)");
     }
 
+    std::vector<uint8_t> resampled_buf;
     while (running_.load(std::memory_order_acquire)) {
         DWORD wait_result = WaitForSingleObject(event_handle_, 200 /*ms timeout*/);
         if (wait_result != WAIT_OBJECT_0) {
@@ -192,11 +193,11 @@ void AudioEngine::capture_loop() {
                           || (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
 
             // T032: resample if native rate != 48 kHz
-            std::vector<uint8_t> resampled_buf;
             const uint8_t* pkt_data = nullptr;
             uint32_t       pkt_bytes = byte_count;
 
             if (!resampler_.is_passthrough() && !silence) {
+                resampled_buf.clear();
                 resampler_.process(data, byte_count, resampled_buf);
                 pkt_data  = resampled_buf.data();
                 pkt_bytes = static_cast<uint32_t>(resampled_buf.size());

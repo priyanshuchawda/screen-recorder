@@ -231,6 +231,10 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
         return 0;
     }
     case WM_CLOSE:
+        // Stop capture thread when overlay is hidden to save battery/RAM
+        if (self) {
+            self->capture_running_.store(false, std::memory_order_release);
+        }
         ShowWindow(hwnd, SW_HIDE);
         return 0;
     default:
@@ -239,7 +243,9 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 }
 
 void CameraOverlay::apply_preview_tuning() {
-    capture_interval_ms_.store(33, std::memory_order_relaxed);
+    // On battery: 10fps (100ms) to conserve power. On AC: 30fps (33ms).
+    int interval = on_battery_ ? 100 : 33;
+    capture_interval_ms_.store(interval, std::memory_order_relaxed);
 }
 
 void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
@@ -385,6 +391,7 @@ void CameraOverlay::capture_loop() {
 
     capture_running_.store(true, std::memory_order_release);
     ULONGLONG last_present_ms = 0;
+    std::vector<uint8_t> tight_rgba;
     while (capture_running_.load(std::memory_order_acquire)) {
         DWORD stream_index = 0, flags = 0;
         LONGLONG ts = 0;
@@ -414,7 +421,6 @@ void CameraOverlay::capture_loop() {
                         MFGetAttributeSize(current_type.Get(), MF_MT_FRAME_SIZE, &w, &h);
                     }
 
-                    std::vector<uint8_t> tight_rgba;
                     const size_t tight_size = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
                     bool copied = false;
 
@@ -529,6 +535,7 @@ bool CameraOverlay::start(HWND owner) {
 
 void CameraOverlay::refresh_power_profile() {
     if (!running_) return;
+    on_battery_ = detect_on_battery();
     apply_preview_tuning();
 }
 

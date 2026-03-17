@@ -68,6 +68,9 @@ bool SessionController::initialize(StorageManager* storage,
 bool SessionController::start() {
     if (!machine_.transition(SessionEvent::Start)) return false;
 
+    // Elevate process priority during recording for smooth capture
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+
     notify_status(L"Starting...");
 
     // ---------------------------------------------------------------
@@ -242,6 +245,10 @@ bool SessionController::stop() {
 
     machine_.transition(SessionEvent::Finalized);
     notify_status(L"Idle");
+
+    // Revert process priority to normal when not recording
+    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+
     SR_LOG_INFO(L"Recording stopped. Encoded: %u frames, audio pkts: %u",
                 frames_encoded_.load(), audio_written_.load());
     return true;
@@ -316,8 +323,12 @@ void SessionController::encode_loop() {
     while (encode_running_.load(std::memory_order_acquire) ||
            !frame_queue_->empty())
     {
+        uint32_t target_fps = encoder_ ? encoder_->output_fps() : 24;
+        auto wait_interval = std::chrono::milliseconds(
+            500 / (std::max)(1u, target_fps));
+
         // --- Video ---
-        if (auto opt_frame = frame_queue_->try_pop()) {
+        if (auto opt_frame = frame_queue_->wait_pop(wait_interval)) {
             auto& frame = *opt_frame;
 
             // Skip frames while paused
@@ -395,12 +406,22 @@ void SessionController::encode_loop() {
             telemetry_.on_audio_written();
         }
 
-        // Brief yield when queue is empty
-        if (frame_queue_->empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const ULONGLONG now_ms = GetTickCount64();
+
+        // Dynamic power monitoring — check every 30 seconds
+        static ULONGLONG last_power_check_ms = 0;
+        if (now_ms - last_power_check_ms >= 30000) {
+            bool on_ac = PowerModeDetector::is_on_ac_power();
+            if (on_ac != last_power_ac_) {
+                last_power_ac_ = on_ac;
+                SR_LOG_INFO(L"[Power] Switched to %s power", on_ac ? L"AC" : L"Battery");
+                // Adjust pacing: lower FPS on battery for power savings
+                uint32_t new_fps = on_ac ? 24 : 15;
+                pacer_.initialize(new_fps);
+            }
+            last_power_check_ms = now_ms;
         }
 
-        const ULONGLONG now_ms = GetTickCount64();
         if (now_ms - last_mem_sample_ms >= 5000) {
             PROCESS_MEMORY_COUNTERS_EX mem{};
             mem.cb = sizeof(mem);

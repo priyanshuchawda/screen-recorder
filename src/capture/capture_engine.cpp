@@ -16,6 +16,7 @@
 
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
+#include <array>
 
 namespace wgc  = winrt::Windows::Graphics::Capture;
 namespace wdx  = winrt::Windows::Graphics::DirectX;
@@ -46,9 +47,15 @@ struct CaptureEngineImpl {
     winrt::com_ptr<ID3D11VideoContext>             video_context;
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> vp_enum;
     winrt::com_ptr<ID3D11VideoProcessor>           vp;
-    // Single NV12 output texture + output view
-    winrt::com_ptr<ID3D11Texture2D>                nv12_tex;
-    winrt::com_ptr<ID3D11VideoProcessorOutputView> vp_out_view;
+    // Double-buffer NV12 output to reduce capture/encode contention.
+    std::array<winrt::com_ptr<ID3D11Texture2D>, 2>                nv12_tex{};
+    std::array<winrt::com_ptr<ID3D11VideoProcessorOutputView>, 2> vp_out_view{};
+    uint32_t write_idx_ = 0;
+
+    // Cache VP input views for rotating frame-pool textures (usually 2).
+    std::array<winrt::com_ptr<ID3D11Texture2D>, 2>                cached_in_tex{};
+    std::array<winrt::com_ptr<ID3D11VideoProcessorInputView>, 2> cached_in_view{};
+    uint32_t next_in_cache_slot_ = 0;
 
     uint32_t vp_width    = 0;  // current VP input width
     uint32_t vp_height   = 0;  // current VP input height
@@ -68,8 +75,12 @@ struct CaptureEngineImpl {
     bool setup_video_processor(uint32_t in_w, uint32_t in_h,
                                uint32_t out_w, uint32_t out_h) {
         // Release old GPU objects so they can be recreated
-        vp_out_view.put(); vp_out_view = nullptr;
-        nv12_tex.put();    nv12_tex    = nullptr;
+        for (auto& view : vp_out_view) { view = nullptr; }
+        for (auto& tex  : nv12_tex)    { tex  = nullptr; }
+        for (auto& tex  : cached_in_tex)  { tex  = nullptr; }
+        for (auto& view : cached_in_view) { view = nullptr; }
+        write_idx_ = 0;
+        next_in_cache_slot_ = 0;
         vp.put();          vp          = nullptr;
         vp_enum.put();     vp_enum     = nullptr;
 
@@ -106,50 +117,78 @@ struct CaptureEngineImpl {
         td.Usage            = D3D11_USAGE_DEFAULT;
         td.BindFlags        = D3D11_BIND_RENDER_TARGET | D3D11_BIND_VIDEO_ENCODER;
 
-        hr = d3d_device->CreateTexture2D(&td, nullptr, nv12_tex.put());
-        if (FAILED(hr)) { SR_LOG_ERROR(L"CreateTexture2D(NV12) failed: 0x%08X", hr); return false; }
-
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC ovd{};
         ovd.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+        for (size_t i = 0; i < nv12_tex.size(); ++i) {
+            hr = d3d_device->CreateTexture2D(&td, nullptr, nv12_tex[i].put());
+            if (FAILED(hr)) {
+                SR_LOG_ERROR(L"CreateTexture2D(NV12[%zu]) failed: 0x%08X", i, hr);
+                return false;
+            }
 
-        hr = video_device->CreateVideoProcessorOutputView(
-            nv12_tex.get(), vp_enum.get(), &ovd, vp_out_view.put());
-        if (FAILED(hr)) { SR_LOG_ERROR(L"CreateVideoProcessorOutputView failed: 0x%08X", hr); return false; }
+            hr = video_device->CreateVideoProcessorOutputView(
+                nv12_tex[i].get(), vp_enum.get(), &ovd, vp_out_view[i].put());
+            if (FAILED(hr)) {
+                SR_LOG_ERROR(L"CreateVideoProcessorOutputView[%zu] failed: 0x%08X", i, hr);
+                return false;
+            }
+        }
 
         vp_width   = in_w;
         vp_height  = in_h;
         out_width_ = out_w;
         out_height_= out_h;
-        SR_LOG_INFO(L"D3D11 Video Processor ready: %ux%u -> %ux%u BGRA->NV12",
+        SR_LOG_INFO(L"D3D11 Video Processor ready: %ux%u -> %ux%u BGRA->NV12 (double-buffered)",
                     in_w, in_h, out_w, out_h);
         return true;
     }
 
     // -----------------------------------------------------------------------
-    bool convert_bgra_to_nv12(ID3D11Texture2D* bgra_tex) {
+    winrt::com_ptr<ID3D11VideoProcessorInputView> get_or_create_input_view(ID3D11Texture2D* bgra_tex) {
+        if (!bgra_tex) return {};
+
+        for (size_t i = 0; i < cached_in_tex.size(); ++i) {
+            if (cached_in_tex[i].get() == bgra_tex && cached_in_view[i]) {
+                return cached_in_view[i];
+            }
+        }
+
         D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC ivd{};
         ivd.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-
         winrt::com_ptr<ID3D11VideoProcessorInputView> in_view;
-        HRESULT hr = video_device->CreateVideoProcessorInputView(
+        const HRESULT hr = video_device->CreateVideoProcessorInputView(
             bgra_tex, vp_enum.get(), &ivd, in_view.put());
         if (FAILED(hr)) {
-            // T039: check for device-lost conditions
             if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
                 SR_LOG_ERROR(L"[T039] D3D11 device lost (CreateInputView): 0x%08X — signalling recovery", hr);
                 signal_device_lost();
             } else {
                 SR_LOG_ERROR(L"CreateVideoProcessorInputView failed: 0x%08X", hr);
             }
-            return false;
+            return {};
         }
+
+        const size_t slot = next_in_cache_slot_ % cached_in_tex.size();
+        cached_in_tex[slot].copy_from(bgra_tex);
+        cached_in_view[slot] = in_view;
+        ++next_in_cache_slot_;
+        return in_view;
+    }
+
+    bool convert_bgra_to_nv12(ID3D11Texture2D* bgra_tex, uint32_t& out_idx) {
+        auto in_view = get_or_create_input_view(bgra_tex);
+        if (!in_view) return false;
+
+        out_idx = write_idx_;
+        auto out_view = vp_out_view[out_idx];
+        if (!out_view) return false;
 
         D3D11_VIDEO_PROCESSOR_STREAM stream{};
         stream.Enable        = TRUE;
         stream.pInputSurface = in_view.get();
 
-        hr = video_context->VideoProcessorBlt(
-            vp.get(), vp_out_view.get(), 0, 1, &stream);
+        HRESULT hr = video_context->VideoProcessorBlt(
+            vp.get(), out_view.get(), 0, 1, &stream);
         if (FAILED(hr)) {
             // T039: device-lost detection on VideoProcessorBlt
             if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) {
@@ -160,6 +199,7 @@ struct CaptureEngineImpl {
             }
             return false;
         }
+        write_idx_ ^= 1u;
         return true;
     }
 
@@ -203,12 +243,13 @@ struct CaptureEngineImpl {
             return;
         }
 
-        if (!convert_bgra_to_nv12(bgra_tex.get())) return;
+        uint32_t out_idx = 0;
+        if (!convert_bgra_to_nv12(bgra_tex.get(), out_idx)) return;
 
         // Build RenderFrame
         RenderFrame rf;
-        // nv12_tex holds the converted texture; ComPtr Attach/copy with AddRef
-        rf.texture = nv12_tex.get();
+        // ComPtr copy AddRefs the selected ping-pong texture.
+        rf.texture = nv12_tex[out_idx].get();
         rf.width   = out_width_;   // T034: always report fixed output dimensions
         rf.height  = out_height_;
 
@@ -309,9 +350,10 @@ bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* contex
     SR_LOG_INFO(L"WGC item: %ux%u", capture_width_, capture_height_);
 
     // T034: fix output resolution so encoder is never reset on runtime changes.
-    // For stability/load reduction, cap recording output at 1280x720.
-    impl_->out_width_  = (capture_width_  > 1280) ? 1280 : capture_width_;
-    impl_->out_height_ = (capture_height_ >  720) ?  720 : capture_height_;
+    // Performance optimization: cap recording output at 854x480 (480p widescreen).
+    // GPU memory savings: ~66% less per NV12 texture vs 720p.
+    impl_->out_width_  = (capture_width_  > 854) ? 854 : capture_width_;
+    impl_->out_height_ = (capture_height_ > 480) ? 480 : capture_height_;
 
     // Expose actual encoder-feed dimensions (post-cap) to controller/profile setup.
     capture_width_ = impl_->out_width_;

@@ -6,6 +6,7 @@
 #include <thread>
 #include <atomic>
 #include <vector>
+#include <future>
 
 using sr::BoundedQueue;
 
@@ -66,6 +67,26 @@ TEST(BoundedQueueTest, WaitPopSucceeds) {
     auto val = q.wait_pop(std::chrono::milliseconds(100));
     ASSERT_TRUE(val.has_value());
     EXPECT_EQ(*val, 99);
+}
+
+TEST(BoundedQueueTest, WaitPopWakesWhenProducerPushes) {
+    BoundedQueue<int, 5> q;
+    const auto start = std::chrono::steady_clock::now();
+
+    auto waiter = std::async(std::launch::async, [&q]() {
+        return q.wait_pop(std::chrono::milliseconds(500));
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    EXPECT_TRUE(q.try_push(7));
+
+    auto val = waiter.get();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    ASSERT_TRUE(val.has_value());
+    EXPECT_EQ(*val, 7);
+    EXPECT_LT(elapsed.count(), 250);
 }
 
 TEST(BoundedQueueTest, MoveSemantics) {
