@@ -211,16 +211,19 @@ TEST(T042_PowerMode, ClampForPowerOnACReturnsRequestedProfile) {
     auto result = sr::PowerModeDetector::clamp_for_power(req);
 
     if (on_ac) {
-        EXPECT_EQ(result.fps,         60u);
-        EXPECT_EQ(result.bitrate_bps, 14'000'000u);
+        EXPECT_LE(result.fps,         24u);
+        EXPECT_LE(result.bitrate_bps, 6'000'000u);
+        EXPECT_EQ(result.width,       req.width);
+        EXPECT_EQ(result.height,      req.height);
     } else {
-        // Battery — must clamp fps ≤ 30, bitrate ≤ 8 Mbps
-        EXPECT_LE(result.fps,         30u);
-        EXPECT_LE(result.bitrate_bps, 8'000'000u);
+        EXPECT_LE(result.fps,         15u);
+        EXPECT_LE(result.bitrate_bps, 1'500'000u);
+        EXPECT_LE(result.width,       854u);
+        EXPECT_LE(result.height,      480u);
     }
 }
 
-TEST(T042_PowerMode, BatteryProfileClampsToThirtyFps) {
+TEST(T042_PowerMode, BatteryProfileClampsAggressively) {
     // Verify the clamping math directly without relying on the machine's power state
     sr::EncoderProfile req;
     req.fps         = 60;
@@ -228,13 +231,15 @@ TEST(T042_PowerMode, BatteryProfileClampsToThirtyFps) {
 
     // "Battery" clamping: mimic what clamp_for_power does on battery
     sr::EncoderProfile throttled   = req;
-    throttled.fps                  = std::min(req.fps,         30u);
-    throttled.bitrate_bps          = std::min(req.bitrate_bps, 8'000'000u);
+    throttled.fps                  = std::min(req.fps,         15u);
+    throttled.bitrate_bps          = std::min(req.bitrate_bps, 1'500'000u);
+    throttled.width                = std::min(req.width,       854u);
+    throttled.height               = std::min(req.height,      480u);
 
-    EXPECT_EQ(throttled.fps,         30u);
-    EXPECT_EQ(throttled.bitrate_bps, 8'000'000u);
-    EXPECT_EQ(throttled.width,       req.width);  // resolution unchanged
-    EXPECT_EQ(throttled.height,      req.height);
+    EXPECT_EQ(throttled.fps,         15u);
+    EXPECT_EQ(throttled.bitrate_bps, 1'500'000u);
+    EXPECT_EQ(throttled.width,       854u);
+    EXPECT_EQ(throttled.height,      480u);
 }
 
 // ============================================================

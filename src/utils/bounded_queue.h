@@ -24,6 +24,7 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 
 namespace sr {
 
@@ -47,6 +48,7 @@ public:
         }
         buffer_[head] = std::move(item);
         head_.store(next, std::memory_order_release);
+        cv_.notify_one();
         return true;
     }
 
@@ -64,13 +66,16 @@ public:
 
     // Blocking pop with timeout. Returns nullopt on timeout.
     std::optional<T> wait_pop(std::chrono::milliseconds timeout) {
-        auto deadline = std::chrono::steady_clock::now() + timeout;
-        while (std::chrono::steady_clock::now() < deadline) {
-            auto item = try_pop();
-            if (item.has_value()) return item;
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        if (auto item = try_pop(); item.has_value()) {
+            return item;
         }
-        return std::nullopt;
+        std::unique_lock<std::mutex> lock(wait_mutex_);
+        const bool ready = cv_.wait_for(lock, timeout, [this]() {
+            return !empty();
+        });
+        if (!ready) return std::nullopt;
+        lock.unlock();
+        return try_pop();
     }
 
     // Current occupancy (approximate — head/tail may race)
@@ -99,6 +104,8 @@ private:
     alignas(64) std::atomic<size_t> head_;
     alignas(64) std::atomic<size_t> tail_;
     std::mutex push_mutex_; // Serializes concurrent producers
+    std::mutex wait_mutex_;
+    std::condition_variable cv_;
 };
 
 } // namespace sr
