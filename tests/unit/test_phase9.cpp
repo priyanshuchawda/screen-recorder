@@ -211,8 +211,8 @@ TEST(T042_PowerMode, ClampForPowerOnACReturnsRequestedProfile) {
     auto result = sr::PowerModeDetector::clamp_for_power(req);
 
     if (on_ac) {
-        EXPECT_LE(result.fps,         24u);
-        EXPECT_LE(result.bitrate_bps, 6'000'000u);
+        EXPECT_EQ(result.fps,         req.fps);
+        EXPECT_EQ(result.bitrate_bps, req.bitrate_bps);
         EXPECT_EQ(result.width,       req.width);
         EXPECT_EQ(result.height,      req.height);
     } else {

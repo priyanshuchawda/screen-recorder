@@ -126,11 +126,7 @@ bool SessionController::start() {
     enc_prof.width  = capture_->width()  ? capture_->width()  : 1920;
     enc_prof.height = capture_->height() ? capture_->height() : 1080;
 
-    // Stability profile: lower frame rate/bitrate for better HW encoder reliability.
-    enc_prof.fps = std::min(enc_prof.fps, 24u);
-    enc_prof.bitrate_bps = std::min(enc_prof.bitrate_bps, 6'000'000u);
-
-    // T042: Apply power-mode clamping (battery → 30fps/8Mbps)
+    // T042: Apply power-mode clamping (battery throttles; AC keeps requested profile).
     last_power_ac_ = PowerModeDetector::is_on_ac_power();
     enc_prof = PowerModeDetector::clamp_for_power(enc_prof);
 
@@ -515,8 +511,8 @@ void SessionController::encode_loop() {
             if (on_ac != last_power_ac_) {
                 last_power_ac_ = on_ac;
                 SR_LOG_INFO(L"[Power] Switched to %s power", on_ac ? L"AC" : L"Battery");
-                // Adjust pacing: lower FPS on battery for power savings
-                uint32_t new_fps = on_ac ? 24 : 15;
+                // Adjust pacing with power mode changes.
+                uint32_t new_fps = on_ac ? encoder_->output_fps() : 15;
                 pacer_.initialize(new_fps);
             }
             last_power_check_ms = now_ms;

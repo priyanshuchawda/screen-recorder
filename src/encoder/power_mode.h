@@ -1,7 +1,7 @@
 #pragma once
 // power_mode.h — T042: Dynamic power-mode encoder adjustment
 // Reads GetSystemPowerStatus; on battery, aggressively clamps to 15fps/1.5Mbps/480p.
-// On AC, allows up to 24fps/6Mbps for smooth recording with low resource usage.
+// On AC, keeps the requested profile unchanged.
 
 #include <windows.h>
 #include <algorithm>
@@ -23,16 +23,14 @@ public:
     }
 
     // Clamp the requested EncoderProfile for the current power state.
-    //   AC power  → cap at 24fps / 6Mbps for stability
+    //   AC power  → unchanged (use requested profile)
     //   Battery   → aggressive: 15fps / 1.5Mbps / 854x480
     static EncoderProfile clamp_for_power(const EncoderProfile& requested) {
         if (is_on_ac_power()) {
-            EncoderProfile ac = requested;
-            ac.fps         = (std::min)(requested.fps,         24u);
-            ac.bitrate_bps = (std::min)(requested.bitrate_bps, 6'000'000u);
-            SR_LOG_INFO(L"[PowerMode] AC — profile: %u fps / %u bps",
-                        ac.fps, ac.bitrate_bps);
-            return ac;
+            SR_LOG_INFO(L"[PowerMode] AC — profile: %u fps / %u bps / %ux%u",
+                        requested.fps, requested.bitrate_bps,
+                        requested.width, requested.height);
+            return requested;
         }
 
         // Battery throttle: aggressive caps for maximum battery life
