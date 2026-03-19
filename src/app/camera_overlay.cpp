@@ -392,14 +392,45 @@ void CameraOverlay::capture_loop() {
     UINT32 chosen_fps_num = 30;
     UINT32 chosen_fps_den = 1;
     if (!choose_camera_format(reader.Get(), on_battery_, chosen_w, chosen_h, chosen_fps_num, chosen_fps_den)) {
-        SR_LOG_WARN(L"CameraOverlay: failed to set preferred RGB32 camera format, using reader default");
+        SR_LOG_WARN(L"CameraOverlay: choose_camera_format failed, forcing RGB32 output type");
+        // Fallback: manually request RGB32 output without specifying resolution
+        ComPtr<IMFMediaType> fallback_type;
+        if (SUCCEEDED(MFCreateMediaType(&fallback_type)) && fallback_type) {
+            fallback_type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+            fallback_type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+            reader->SetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), nullptr, fallback_type.Get());
+        }
     } else {
         const double chosen_fps = static_cast<double>(chosen_fps_num) / static_cast<double>(chosen_fps_den ? chosen_fps_den : 1);
         SR_LOG_INFO(L"CameraOverlay: preview format %ux%u @ %.2f fps (RGB32)", chosen_w, chosen_h, chosen_fps);
     }
+
+    // Query the actual output type to get correct dimensions and stride
+    LONG default_stride = 0;
+    {
+        ComPtr<IMFMediaType> actual_type;
+        if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &actual_type)) && actual_type) {
+            UINT32 aw = 0, ah = 0;
+            if (SUCCEEDED(MFGetAttributeSize(actual_type.Get(), MF_MT_FRAME_SIZE, &aw, &ah)) && aw > 0 && ah > 0) {
+                chosen_w = aw;
+                chosen_h = ah;
+            }
+            // MF_MT_DEFAULT_STRIDE: positive = top-down, negative = bottom-up
+            actual_type->GetUINT32(MF_MT_DEFAULT_STRIDE, reinterpret_cast<UINT32*>(&default_stride));
+            GUID subtype{};
+            actual_type->GetGUID(MF_MT_SUBTYPE, &subtype);
+            SR_LOG_INFO(L"CameraOverlay: actual output %ux%u stride=%d subtype={%08X-...}",
+                        chosen_w, chosen_h, default_stride, subtype.Data1);
+        }
+    }
+
     if (chosen_w > 0 && chosen_h > 0) {
         frame_width_ = chosen_w;
         frame_height_ = chosen_h;
+    }
+    // If stride unknown, default to width * 4 (RGB32 top-down)
+    if (default_stride == 0 && chosen_w > 0) {
+        default_stride = static_cast<LONG>(chosen_w) * 4;
     }
 
     capture_running_.store(true, std::memory_order_release);
@@ -425,45 +456,67 @@ void CameraOverlay::capture_loop() {
         if (sample) {
             ComPtr<IMFMediaBuffer> buf;
             if (SUCCEEDED(sample->ConvertToContiguousBuffer(&buf)) && buf) {
-                BYTE* data = nullptr;
-                DWORD max_len = 0, cur_len = 0;
-                if (SUCCEEDED(buf->Lock(&data, &max_len, &cur_len)) && data && cur_len > 0) {
-                    UINT32 w = frame_width_;
-                    UINT32 h = frame_height_;
-                    if (w == 0 || h == 0) {
-                        ComPtr<IMFMediaType> current_type;
-                        if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &current_type)) && current_type) {
-                            MFGetAttributeSize(current_type.Get(), MF_MT_FRAME_SIZE, &w, &h);
-                        }
+                UINT32 w = frame_width_;
+                UINT32 h = frame_height_;
+                if (w == 0 || h == 0) {
+                    ComPtr<IMFMediaType> current_type;
+                    if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &current_type)) && current_type) {
+                        MFGetAttributeSize(current_type.Get(), MF_MT_FRAME_SIZE, &w, &h);
                     }
+                }
 
-                    const size_t tight_size = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
-                    bool copied = false;
+                if (w == 0 || h == 0) {
+                    continue;
+                }
 
-                    ComPtr<IMF2DBuffer> buf2d;
-                    if (SUCCEEDED(buf.As(&buf2d)) && buf2d) {
-                        BYTE* scan0 = nullptr;
-                        LONG stride = 0;
-                        if (SUCCEEDED(buf2d->Lock2D(&scan0, &stride)) && scan0 && tight_size > 0) {
-                            tight_rgba.resize(tight_size);
-                            const size_t row_bytes = static_cast<size_t>(w) * 4;
-                            for (UINT32 row = 0; row < h; ++row) {
-                                const BYTE* src_row = scan0 + static_cast<ptrdiff_t>(row) * static_cast<ptrdiff_t>(stride);
-                                std::memcpy(tight_rgba.data() + static_cast<size_t>(row) * row_bytes, src_row, row_bytes);
-                            }
-                            buf2d->Unlock2D();
-                            copied = true;
+                const size_t row_bytes = static_cast<size_t>(w) * 4;
+                const size_t tight_size = row_bytes * static_cast<size_t>(h);
+                bool copied = false;
+
+                // Try IMF2DBuffer first — this gives us the real stride and
+                // avoids conflicting with a 1D Lock().
+                ComPtr<IMF2DBuffer> buf2d;
+                if (SUCCEEDED(buf.As(&buf2d)) && buf2d) {
+                    BYTE* scan0 = nullptr;
+                    LONG stride = 0;
+                    if (SUCCEEDED(buf2d->Lock2D(&scan0, &stride)) && scan0 && tight_size > 0) {
+                        tight_rgba.resize(tight_size);
+                        // Lock2D contract: scan0 = pointer to first scanline (top row).
+                        // stride may be negative for bottom-up DIBs — use it directly,
+                        // as scan0 + row*stride correctly walks through the image.
+                        for (UINT32 row = 0; row < h; ++row) {
+                            const BYTE* src_row = scan0 + static_cast<ptrdiff_t>(row) * static_cast<ptrdiff_t>(stride);
+                            std::memcpy(tight_rgba.data() + static_cast<size_t>(row) * row_bytes, src_row, row_bytes);
                         }
+                        buf2d->Unlock2D();
+                        copied = true;
                     }
+                }
 
-                    if (!copied) {
-                        if (tight_size > 0 && cur_len >= tight_size) {
-                            tight_rgba.assign(data, data + tight_size);
-                        } else {
-                            tight_rgba.assign(data, data + cur_len);
+                // Fallback: 1D Lock — use MF_MT_DEFAULT_STRIDE for row pitch.
+                if (!copied) {
+                    BYTE* data = nullptr;
+                    DWORD max_len = 0, cur_len = 0;
+                    if (SUCCEEDED(buf->Lock(&data, &max_len, &cur_len)) && data && cur_len > 0) {
+                        const LONG stride = (default_stride != 0) ? default_stride : static_cast<LONG>(row_bytes);
+                        const LONG abs_stride = stride < 0 ? -stride : stride;
+                        // For bottom-up (negative stride), the first byte in 'data'
+                        // is the bottom row. We need to read rows in reverse.
+                        const bool bottom_up = stride < 0;
+
+                        tight_rgba.resize(tight_size);
+                        for (UINT32 row = 0; row < h; ++row) {
+                            const UINT32 src_row_idx = bottom_up ? (h - 1 - row) : row;
+                            const BYTE* src_row = data + static_cast<size_t>(src_row_idx) * static_cast<size_t>(abs_stride);
+                            if (static_cast<DWORD>(src_row - data + row_bytes) > cur_len) break;
+                            std::memcpy(tight_rgba.data() + static_cast<size_t>(row) * row_bytes, src_row, row_bytes);
                         }
+                        buf->Unlock();
+                        copied = true;
                     }
+                }
 
+                if (copied) {
                     {
                         std::lock_guard<std::mutex> lock(frame_mutex_);
                         latest_frame_.swap(tight_rgba);
@@ -471,7 +524,6 @@ void CameraOverlay::capture_loop() {
                         frame_height_ = h;
                     }
 
-                    buf->Unlock();
                     if (host_hwnd_) {
                         const int present_interval_ms = capture_interval_ms_.load(std::memory_order_relaxed);
                         const ULONGLONG now_ms = GetTickCount64();
