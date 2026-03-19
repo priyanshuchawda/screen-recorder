@@ -12,6 +12,10 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 
 - Full-screen capture via Windows Graphics Capture (WGC)
 - H.264 video + AAC audio muxed to MP4 using Media Foundation
+- **System Audio Capture**: Record desktop/YouTube audio via WASAPI Loopback
+- **Microphone Noise Gate**: RMS-based gating to eliminate background hiss
+- **Fixed Camera Overlay**: High-quality preview with correct stride handling
+- **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
 - Pause/resume with monotonic timestamp rebasing
 - Mute/unmute with silence injection
 - Recovery flow for orphaned `.partial.mp4` files
@@ -56,16 +60,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `build\ScreenRecorder-0.2.2-windows-x64.zip`
+- `build\ScreenRecorder-0.3.0-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.2.2
-git push origin v0.2.2
-gh release create v0.2.2 build\ScreenRecorder-0.2.2-windows-x64.zip --title "v0.2.2" --notes "Stable Windows package release."
+git tag v0.3.0
+git push origin v0.3.0
+gh release create v0.3.0 build\Release\ScreenRecorder.exe --title "v0.3.0" --notes "System Audio + Quality Fixes."
 ```
 
 ## Project Layout

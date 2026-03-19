@@ -229,12 +229,14 @@
     .text-gradient {
       background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
     }
 
     .text-windows {
       background: linear-gradient(135deg, #38bdf8 0%, #0078D4 100%);
       -webkit-background-clip: text;
+      background-clip: text;
       -webkit-text-fill-color: transparent;
     }
 
@@ -682,7 +684,7 @@
   <header class="hero container">
     <div class="badge-pill">
       <span class="dot"></span>
-      Version 0.2.2 is now available
+      Version 0.3.0 is now available
     </div>
 
     <h1 class="hero-title">
@@ -696,7 +698,7 @@
     </p>
 
     <div class="hero-actions">
-      <a href="https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.2.2/ScreenRecorder-0.2.2-windows-x64.zip"
+      <a href="https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.0/ScreenRecorder.exe"
         class="btn-large btn-primary">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
           stroke-linecap="round" stroke-linejoin="round">
@@ -704,7 +706,7 @@
           <polyline points="7 10 12 15 17 10"></polyline>
           <line x1="12" y1="15" x2="12" y2="3"></line>
         </svg>
-        Download v0.2.2
+        Download v0.3.0
       </a>
       <a href="https://github.com/priyanshuchawda/screen-recorder" target="_blank" class="btn-large btn-secondary">
         View Source Code
@@ -819,14 +821,25 @@
           <div class="card-icon">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
               stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-              <polyline points="2 17 12 22 22 17"></polyline>
-              <polyline points="2 12 12 17 22 12"></polyline>
+              <path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
             </svg>
           </div>
-          <h3>Zero Dependencies</h3>
-          <p>Forget huge installers and runtimes. Just download the single executable file and run it directly. Fully
-            portable.</p>
+          <h3>System Audio</h3>
+          <p>Record your microphone AND system audio (YouTube, games, apps) simultaneously with perfect sync.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-icon">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+              <path d="M2 2l7.5 1.5"></path>
+              <path d="M7 11L2 2"></path>
+            </svg>
+          </div>
+          <h3>Noise Gate</h3>
+          <p>Tuned RMS-based silence detection automatically eliminates background hiss and static from your mic.</p>
         </div>
 
         <div class="card">
