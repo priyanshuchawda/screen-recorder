@@ -1,8 +1,9 @@
 #pragma once
-// audio_engine.h — WASAPI shared-mode event-driven microphone capture
+// audio_engine.h — WASAPI shared-mode event-driven audio capture
 // T012: AudioEngine: captures PCM, pushes AudioPackets, supports silence injection
 // T032: Integrates AudioResampler for native-rate → 48 kHz conversion;
 //       IMMNotificationClient handles device invalidation/removal.
+// Supports both Microphone (eCapture) and System/Loopback (eRender) capture modes.
 
 #include <windows.h>
 #include <mmdeviceapi.h>
@@ -19,6 +20,12 @@ namespace sr {
 
 using Microsoft::WRL::ComPtr;
 
+// Capture mode: microphone input or system/desktop loopback audio
+enum class AudioCaptureMode {
+    Microphone,  // eCapture — default input device (mic)
+    Loopback     // eRender + AUDCLNT_STREAMFLAGS_LOOPBACK — system audio
+};
+
 // 16-slot audio queue (audio runs at ~10ms packets, needs more headroom than video)
 using AudioQueue = BoundedQueue<AudioPacket, 16>;
 
@@ -32,9 +39,10 @@ using AudioDeviceInvalidCallback = std::function<void()>;
 // Ref-counted via atomic to satisfy COM requirements.
 class AudioDeviceNotifier : public IMMNotificationClient {
 public:
-    void setup(std::wstring endpoint_id, AudioDeviceInvalidCallback cb) {
+    void setup(std::wstring endpoint_id, AudioDeviceInvalidCallback cb, EDataFlow flow = eCapture) {
         endpoint_id_ = std::move(endpoint_id);
         callback_    = std::move(cb);
+        flow_        = flow;
         fired_.store(false, std::memory_order_relaxed);
     }
 
@@ -61,7 +69,7 @@ public:
         if (endpoint_id_ == id) fire(); return S_OK;
     }
     HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged(EDataFlow flow, ERole role, LPCWSTR) override {
-        if (flow == eCapture && role == eCommunications) fire(); return S_OK;
+        if ((flow == flow_ || flow_ == eAll) && role == eConsole) fire(); return S_OK;
     }
     HRESULT STDMETHODCALLTYPE OnDeviceAdded(LPCWSTR) override { return S_OK; }
     HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR, const PROPERTYKEY) override { return S_OK; }
@@ -73,6 +81,7 @@ private:
     }
     std::wstring               endpoint_id_;
     AudioDeviceInvalidCallback callback_;
+    EDataFlow                  flow_ = eCapture;
     std::atomic<ULONG>         ref_  { 1 };
     std::atomic<bool>          fired_{ false };
 };
@@ -84,8 +93,9 @@ public:
     ~AudioEngine() { stop(); }
 
     // Attach an output queue and configure the WASAPI capture device.
+    // mode: Microphone (default) or Loopback (system audio capture)
     // Must be called before start().
-    bool initialize(AudioQueue* queue);
+    bool initialize(AudioQueue* queue, AudioCaptureMode mode = AudioCaptureMode::Microphone);
 
     // Start the capture thread
     bool start();
@@ -138,6 +148,7 @@ private:
     AudioDeviceInvalidCallback device_invalid_cb_;
     AudioDeviceNotifier        notifier_;
 
+    AudioCaptureMode           mode_ = AudioCaptureMode::Microphone;
     std::atomic<bool> running_{ false };
     std::atomic<bool> muted_  { false };
     std::thread       thread_;

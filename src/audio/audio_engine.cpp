@@ -1,19 +1,26 @@
-// audio_engine.cpp — WASAPI shared-mode event-driven microphone capture
+// audio_engine.cpp — WASAPI shared-mode event-driven audio capture
 // T012: Event-driven, MMCSS registered, silence injection for mute
 // T032: MF Resampler integration for native-rate → 48 kHz conversion;
 //       IMMNotificationClient for device invalidation/removal detection.
+// Supports Microphone (eCapture) and Loopback (eRender) capture modes.
 
 #include "audio/audio_engine.h"
 #include "utils/logging.h"
 
 #include <avrt.h>
+#include <audiopolicy.h>
 #include <cstring>
+#include <cmath>
 #pragma comment(lib, "avrt.lib")
 
 namespace sr {
 
-bool AudioEngine::initialize(AudioQueue* queue) {
+bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
     queue_ = queue;
+    mode_  = mode;
+
+    const bool is_loopback = (mode == AudioCaptureMode::Loopback);
+    const wchar_t* mode_name = is_loopback ? L"Loopback" : L"Microphone";
 
     // Create device enumerator
     HRESULT hr = CoCreateInstance(
@@ -21,14 +28,18 @@ bool AudioEngine::initialize(AudioQueue* queue) {
         IID_PPV_ARGS(&enumerator_)
     );
     if (FAILED(hr)) {
-        SR_LOG_ERROR(L"MMDeviceEnumerator failed: 0x%08X", hr);
+        SR_LOG_ERROR(L"[%s] MMDeviceEnumerator failed: 0x%08X", mode_name, hr);
         return false;
     }
 
-    // Get default communications capture endpoint (microphone)
-    hr = enumerator_->GetDefaultAudioEndpoint(eCapture, eCommunications, &device_);
+    // Both use eConsole role:
+    //   Microphone: eCapture + eConsole (NOT eCommunications — that triggers Windows ducking)
+    //   Loopback:   eRender  + eConsole (captures what the speakers play)
+    EDataFlow flow = is_loopback ? eRender : eCapture;
+    ERole     role = eConsole;
+    hr = enumerator_->GetDefaultAudioEndpoint(flow, role, &device_);
     if (FAILED(hr)) {
-        SR_LOG_ERROR(L"GetDefaultAudioEndpoint(capture) failed: 0x%08X", hr);
+        SR_LOG_ERROR(L"[%s] GetDefaultAudioEndpoint failed: 0x%08X", mode_name, hr);
         return false;
     }
 
@@ -54,7 +65,8 @@ bool AudioEngine::initialize(AudioQueue* queue) {
     channels_        = mix_fmt->nChannels;
     bits_per_sample_ = mix_fmt->wBitsPerSample;
     block_align_     = mix_fmt->nBlockAlign;
-    SR_LOG_INFO(L"Audio device: %u Hz, %u ch, %u-bit", sample_rate_, channels_, bits_per_sample_);
+    SR_LOG_INFO(L"[%s] Audio device: %u Hz, %u ch, %u-bit", mode_name,
+                sample_rate_, channels_, bits_per_sample_);
 
     // T032: Initialize MF Resampler if device rate differs from 48 kHz
     if (!resampler_.initialize(sample_rate_, static_cast<uint16_t>(channels_),
@@ -65,13 +77,17 @@ bool AudioEngine::initialize(AudioQueue* queue) {
     }
 
     // Initialize shared mode — 100ms buffer, event-driven
-    // AUTOCONVERTPCM + SRC_DEFAULT_QUALITY handles sample rate mismatches
+    // Loopback requires AUDCLNT_STREAMFLAGS_LOOPBACK on the render endpoint
     REFERENCE_TIME buf_duration = 1'000'000; // 100ms in 100ns units
+    DWORD stream_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+                         AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+                         AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    if (is_loopback) {
+        stream_flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
+    }
     hr = audio_client_->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
-        AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+        stream_flags,
         buf_duration, 0, mix_fmt, nullptr
     );
     CoTaskMemFree(mix_fmt);
@@ -79,6 +95,20 @@ bool AudioEngine::initialize(AudioQueue* queue) {
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"IAudioClient::Initialize failed: 0x%08X", hr);
         return false;
+    }
+
+    // Opt-out of Windows communications ducking.
+    // When any app opens an eCommunications stream, Windows can auto-duck
+    // all other audio. We disable this by setting DuckingPreference.
+    {
+        ComPtr<IAudioSessionControl> session_ctrl;
+        if (SUCCEEDED(audio_client_->GetService(IID_PPV_ARGS(&session_ctrl)))) {
+            ComPtr<IAudioSessionControl2> session_ctrl2;
+            if (SUCCEEDED(session_ctrl.As(&session_ctrl2))) {
+                session_ctrl2->SetDuckingPreference(TRUE);
+                SR_LOG_INFO(L"[%s] Ducking opt-out set", mode_name);
+            }
+        }
     }
 
     // Create event handle + register it
@@ -104,13 +134,13 @@ bool AudioEngine::initialize(AudioQueue* queue) {
     {
         LPWSTR dev_id = nullptr;
         if (SUCCEEDED(device_->GetId(&dev_id)) && dev_id) {
-            notifier_.setup(dev_id, device_invalid_cb_);
+            notifier_.setup(dev_id, device_invalid_cb_, flow);
             CoTaskMemFree(dev_id);
         }
-        // RegisterEndpointNotificationCallback keeps a COM ref; notifier_ is
-        // alive for the lifetime of AudioEngine (destroyed in stop()).
         enumerator_->RegisterEndpointNotificationCallback(&notifier_);
     }
+
+    SR_LOG_INFO(L"[%s] AudioEngine initialized", mode_name);
 
     return true;
 }
@@ -164,11 +194,18 @@ void AudioEngine::capture_loop() {
         SR_LOG_WARN(L"AvSetMmThreadCharacteristics failed (non-fatal)");
     }
 
+    // Noise gate: for microphone mode, zero audio blocks whose RMS
+    // is below this threshold. This eliminates constant mic hiss/static.
+    // Threshold is tuned for typical laptop/USB mics.
+    const bool apply_noise_gate = (mode_ == AudioCaptureMode::Microphone);
+    // For 32-bit float: ~0.003 (-50 dBFS). For 16-bit int: ~100/32768.
+    constexpr float kNoiseGateThresholdFloat = 0.003f;
+    constexpr int32_t kNoiseGateThresholdInt16 = 100; // ~-50 dBFS
+
     std::vector<uint8_t> resampled_buf;
     while (running_.load(std::memory_order_acquire)) {
         DWORD wait_result = WaitForSingleObject(event_handle_, 200 /*ms timeout*/);
         if (wait_result != WAIT_OBJECT_0) {
-            // Timeout or error — loop back and check running_
             continue;
         }
         if (!running_.load(std::memory_order_acquire)) break;
@@ -182,7 +219,6 @@ void AudioEngine::capture_loop() {
                 &data, &frames_available, &flags, nullptr, nullptr))
                && frames_available > 0)
         {
-            // PTS from monotonic sample counter (avoids QPC drift vs audio clock)
             int64_t pts = pts_anchor_100ns_ +
                 static_cast<int64_t>(sample_count_) * 10'000'000LL /
                 static_cast<int64_t>(sample_rate_);
@@ -191,6 +227,33 @@ void AudioEngine::capture_loop() {
 
             bool silence = muted_.load(std::memory_order_relaxed)
                           || (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+
+            // Noise gate for microphone: compute RMS and gate if below threshold
+            if (apply_noise_gate && !silence && data && byte_count > 0) {
+                if (bits_per_sample_ == 32) {
+                    const float* samples = reinterpret_cast<const float*>(data);
+                    const size_t count = byte_count / sizeof(float);
+                    double sum_sq = 0.0;
+                    for (size_t i = 0; i < count; ++i) {
+                        sum_sq += static_cast<double>(samples[i]) * static_cast<double>(samples[i]);
+                    }
+                    float rms = count > 0 ? static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count))) : 0.0f;
+                    if (rms < kNoiseGateThresholdFloat) {
+                        silence = true;
+                    }
+                } else if (bits_per_sample_ == 16) {
+                    const int16_t* samples = reinterpret_cast<const int16_t*>(data);
+                    const size_t count = byte_count / sizeof(int16_t);
+                    int64_t sum_sq = 0;
+                    for (size_t i = 0; i < count; ++i) {
+                        sum_sq += static_cast<int64_t>(samples[i]) * static_cast<int64_t>(samples[i]);
+                    }
+                    double rms = count > 0 ? std::sqrt(static_cast<double>(sum_sq) / static_cast<double>(count)) : 0.0;
+                    if (rms < static_cast<double>(kNoiseGateThresholdInt16)) {
+                        silence = true;
+                    }
+                }
+            }
 
             // T032: resample if native rate != 48 kHz
             const uint8_t* pkt_data = nullptr;
@@ -205,7 +268,6 @@ void AudioEngine::capture_loop() {
                 pkt_data = data;
             }
 
-            // Compute resampled frame count from byte count
             uint32_t resampled_frames = (block_align_ > 0)
                 ? (pkt_bytes / block_align_)
                 : frames_available;
@@ -213,7 +275,7 @@ void AudioEngine::capture_loop() {
             AudioPacket pkt;
             pkt.frame_count  = resampled_frames;
             pkt.pts          = pts;
-            pkt.sample_rate  = sample_rate(); // reports 48 kHz after resampling
+            pkt.sample_rate  = sample_rate();
             pkt.channels     = channels_;
 
             pkt.buffer.resize(pkt_bytes);
