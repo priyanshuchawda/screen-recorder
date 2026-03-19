@@ -48,6 +48,7 @@ file(GLOB_RECURSE APP_SRC     src/app/*.cpp src/app/*.h)
 list(APPEND APP_SRC
     src/app/camera_overlay.cpp
     src/app/camera_overlay.h
+    src/app.rc
 )
 
 add_executable(ScreenRecorder WIN32
