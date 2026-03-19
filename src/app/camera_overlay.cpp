@@ -28,11 +28,10 @@ struct CameraFormatChoice {
 };
 
 LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool on_battery) {
-    (void)on_battery;
-    const UINT32 max_w = 960;
-    const UINT32 max_h = 540;
-    const UINT32 pref_w = 960;
-    const UINT32 pref_h = 540;
+    const UINT32 max_w = on_battery ? 960 : 1280;
+    const UINT32 max_h = on_battery ? 540 : 720;
+    const UINT32 pref_w = on_battery ? 960 : 640;
+    const UINT32 pref_h = on_battery ? 540 : 360;
 
     const LONGLONG pixels = static_cast<LONGLONG>(w) * static_cast<LONGLONG>(h);
     const LONGLONG max_pixels = static_cast<LONGLONG>(max_w) * static_cast<LONGLONG>(max_h);
@@ -48,8 +47,16 @@ LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool o
     score -= llabs(pref_pixels - pixels) / 8;
 
     const double fps = fps_den ? static_cast<double>(fps_num) / static_cast<double>(fps_den) : 30.0;
-    const double fps_clamped = fps > 30.0 ? 30.0 : fps;
-    score += static_cast<LONGLONG>(fps_clamped * 50000.0);
+    const double target_fps = on_battery ? 20.0 : 60.0;
+    const double fps_for_score = fps > target_fps ? target_fps : fps;
+    score += static_cast<LONGLONG>(fps_for_score * 200000.0);
+    if (!on_battery) {
+        if (fps >= 50.0) {
+            score += 5'000'000;
+        } else if (fps >= 40.0) {
+            score += 2'500'000;
+        }
+    }
 
     const double aspect = h ? static_cast<double>(w) / static_cast<double>(h) : (16.0 / 9.0);
     const double aspect_diff = std::abs(aspect - (16.0 / 9.0));
@@ -244,8 +251,8 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 }
 
 void CameraOverlay::apply_preview_tuning() {
-    // On battery: 10fps (100ms) to conserve power. On AC: 30fps (33ms).
-    int interval = on_battery_ ? 100 : 33;
+    // On battery: 20fps (50ms) to conserve power. On AC: 60fps (16ms) for smooth self-preview.
+    int interval = on_battery_ ? 50 : 16;
     capture_interval_ms_.store(interval, std::memory_order_relaxed);
 }
 
@@ -294,7 +301,8 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
         src_y = (static_cast<int>(frame_height_) - src_h) / 2;
     }
 
-    SetStretchBltMode(hdc, HALFTONE);
+    // COLORONCOLOR keeps motion edges crisper in the small PiP window than HALFTONE.
+    SetStretchBltMode(hdc, COLORONCOLOR);
     StretchDIBits(
         hdc,
         0, 0, dst_w, dst_h,
@@ -389,6 +397,10 @@ void CameraOverlay::capture_loop() {
         const double chosen_fps = static_cast<double>(chosen_fps_num) / static_cast<double>(chosen_fps_den ? chosen_fps_den : 1);
         SR_LOG_INFO(L"CameraOverlay: preview format %ux%u @ %.2f fps (RGB32)", chosen_w, chosen_h, chosen_fps);
     }
+    if (chosen_w > 0 && chosen_h > 0) {
+        frame_width_ = chosen_w;
+        frame_height_ = chosen_h;
+    }
 
     capture_running_.store(true, std::memory_order_release);
     ULONGLONG last_present_ms = 0;
@@ -416,10 +428,13 @@ void CameraOverlay::capture_loop() {
                 BYTE* data = nullptr;
                 DWORD max_len = 0, cur_len = 0;
                 if (SUCCEEDED(buf->Lock(&data, &max_len, &cur_len)) && data && cur_len > 0) {
-                    ComPtr<IMFMediaType> current_type;
-                    UINT32 w = frame_width_, h = frame_height_;
-                    if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &current_type)) && current_type) {
-                        MFGetAttributeSize(current_type.Get(), MF_MT_FRAME_SIZE, &w, &h);
+                    UINT32 w = frame_width_;
+                    UINT32 h = frame_height_;
+                    if (w == 0 || h == 0) {
+                        ComPtr<IMFMediaType> current_type;
+                        if (SUCCEEDED(reader->GetCurrentMediaType(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), &current_type)) && current_type) {
+                            MFGetAttributeSize(current_type.Get(), MF_MT_FRAME_SIZE, &w, &h);
+                        }
                     }
 
                     const size_t tight_size = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;

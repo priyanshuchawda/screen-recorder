@@ -34,7 +34,7 @@ private:
 
     std::thread capture_thread_;
     std::atomic<bool> capture_running_{ false };
-    std::atomic<int>  capture_interval_ms_{ 33 };
+    std::atomic<int>  capture_interval_ms_{ 16 };
 
     std::mutex frame_mutex_;
     std::vector<uint8_t> latest_frame_;
