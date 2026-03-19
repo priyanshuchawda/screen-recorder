@@ -22,18 +22,20 @@ namespace sr {
 SessionController::SessionController()
     : capture_(std::make_unique<CaptureEngine>())
     , audio_  (std::make_unique<AudioEngine>())
+    , loopback_audio_(std::make_unique<AudioEngine>())
     , encoder_(std::make_unique<VideoEncoder>())
     , muxer_  (std::make_unique<MuxWriter>())
     , frame_queue_(std::make_unique<FrameQueue>())
     , audio_queue_(std::make_unique<AudioQueue>())
+    , loopback_queue_(std::make_unique<AudioQueue>())
 {}
 
 SessionController::~SessionController() {
     if (!machine_.is_idle()) {
-        // Force stop if destroyed while recording
         encode_running_.store(false, std::memory_order_release);
         capture_->stop();
         audio_->stop();
+        loopback_audio_->stop();
         if (encode_thread_.joinable()) encode_thread_.join();
         muxer_->finalize();
     }
@@ -102,14 +104,23 @@ bool SessionController::start() {
     capture_->set_sync_anchor_100ns(0); // anchor is always 0; PTS computed from sync_
 
     // ---------------------------------------------------------------
-    // Initialize AudioEngine
+    // Initialize AudioEngine (microphone)
     // ---------------------------------------------------------------
-    if (!audio_->initialize(audio_queue_.get())) {
-        notify_error(L"Audio engine initialization failed (no microphone?)");
-        // Non-fatal — continue without audio
-        SR_LOG_WARN(L"Continuing without audio");
+    if (!audio_->initialize(audio_queue_.get(), AudioCaptureMode::Microphone)) {
+        notify_error(L"Microphone audio init failed (no microphone?)");
+        SR_LOG_WARN(L"Continuing without microphone audio");
     } else {
         audio_->set_sync_anchor_100ns(0);
+    }
+
+    // ---------------------------------------------------------------
+    // Initialize Loopback AudioEngine (system/desktop audio)
+    // ---------------------------------------------------------------
+    if (!loopback_audio_->initialize(loopback_queue_.get(), AudioCaptureMode::Loopback)) {
+        notify_error(L"System audio loopback init failed");
+        SR_LOG_WARN(L"Continuing without system audio capture");
+    } else {
+        loopback_audio_->set_sync_anchor_100ns(0);
     }
 
     // ---------------------------------------------------------------
@@ -188,6 +199,7 @@ bool SessionController::start() {
         return false;
     }
     audio_->start();
+    loopback_audio_->start();
 
     // T031: Start async disk space polling — auto-stop on < 500 MB free
     if (storage_) {
@@ -218,6 +230,7 @@ bool SessionController::stop() {
     // Stop producers first
     capture_->stop();
     audio_->stop();
+    loopback_audio_->stop();
 
     // Stop encode loop (it drains remaining frames)
     encode_running_.store(false, std::memory_order_release);
@@ -466,40 +479,123 @@ void SessionController::encode_loop() {
             last_paced_pts  = paced_pts;
         }
 
-        // --- Audio: drain all pending packets ---
-        while (auto opt_audio = audio_queue_->try_pop()) {
-            auto& audio_pkt = *opt_audio;
-            if (machine_.is_paused()) continue;
-
-            // Build IMFSample from PCM buffer
-            ComPtr<IMFSample> sample;
-            ComPtr<IMFMediaBuffer> buf;
-            const DWORD packet_bytes = static_cast<DWORD>(audio_pkt.buffer.size());
-            if (!acquire_audio_sample(packet_bytes, sample, buf)) {
-                continue;
+        // --- Audio: drain mic + loopback, mix and write ---
+        // We mix mic and loopback packets into a single output stream.
+        // Both engines produce float32/int16 PCM at the same rate (48 kHz).
+        // Strategy: drain both queues; for each mic packet, mix in any
+        // overlapping loopback data. Also write pure-loopback packets.
+        {
+            // Collect all available loopback packets first
+            std::vector<AudioPacket> loopback_pkts;
+            while (auto opt_lb = loopback_queue_->try_pop()) {
+                if (!machine_.is_paused()) {
+                    loopback_pkts.push_back(std::move(*opt_lb));
+                }
             }
 
-            HRESULT hr = S_OK;
-            BYTE* data = nullptr;
-            hr = buf->Lock(&data, nullptr, nullptr);
-            if (FAILED(hr) || !data) {
-                SR_LOG_ERROR(L"Audio buffer lock failed: 0x%08X", hr);
-                continue;
+            // Drain mic packets
+            bool had_mic = false;
+            while (auto opt_audio = audio_queue_->try_pop()) {
+                auto& audio_pkt = *opt_audio;
+                if (machine_.is_paused()) continue;
+                had_mic = true;
+
+                // Mix loopback data into mic packet (additive mix with clamp)
+                if (!loopback_pkts.empty()) {
+                    // Use the first available loopback packet of matching size
+                    // In practice, both engines run at the same rate/block size
+                    for (auto it = loopback_pkts.begin(); it != loopback_pkts.end(); ++it) {
+                        if (it->buffer.size() == audio_pkt.buffer.size() && !it->is_silence) {
+                            // Mix: interpret as float32 or int16 based on bits_per_sample
+                            const uint32_t bps = audio_->bits_per_sample();
+                            if (bps == 32) {
+                                // IEEE float mix
+                                float* dst = reinterpret_cast<float*>(audio_pkt.buffer.data());
+                                const float* src = reinterpret_cast<const float*>(it->buffer.data());
+                                const size_t count = audio_pkt.buffer.size() / sizeof(float);
+                                for (size_t s = 0; s < count; ++s) {
+                                    float mixed = dst[s] + src[s];
+                                    if (mixed > 1.0f) mixed = 1.0f;
+                                    if (mixed < -1.0f) mixed = -1.0f;
+                                    dst[s] = mixed;
+                                }
+                            } else {
+                                // 16-bit PCM mix
+                                int16_t* dst = reinterpret_cast<int16_t*>(audio_pkt.buffer.data());
+                                const int16_t* src = reinterpret_cast<const int16_t*>(it->buffer.data());
+                                const size_t count = audio_pkt.buffer.size() / sizeof(int16_t);
+                                for (size_t s = 0; s < count; ++s) {
+                                    int32_t mixed = static_cast<int32_t>(dst[s]) + static_cast<int32_t>(src[s]);
+                                    if (mixed > 32767) mixed = 32767;
+                                    if (mixed < -32768) mixed = -32768;
+                                    dst[s] = static_cast<int16_t>(mixed);
+                                }
+                            }
+                            audio_pkt.is_silence = false;
+                            loopback_pkts.erase(it);
+                            break;
+                        }
+                    }
+                }
+
+                // Write the (possibly mixed) mic packet
+                ComPtr<IMFSample> sample;
+                ComPtr<IMFMediaBuffer> buf;
+                const DWORD packet_bytes = static_cast<DWORD>(audio_pkt.buffer.size());
+                if (!acquire_audio_sample(packet_bytes, sample, buf)) {
+                    continue;
+                }
+
+                HRESULT hr = S_OK;
+                BYTE* data = nullptr;
+                hr = buf->Lock(&data, nullptr, nullptr);
+                if (FAILED(hr) || !data) {
+                    SR_LOG_ERROR(L"Audio buffer lock failed: 0x%08X", hr);
+                    continue;
+                }
+                std::memcpy(data, audio_pkt.buffer.data(), audio_pkt.buffer.size());
+                buf->Unlock();
+                buf->SetCurrentLength(packet_bytes);
+
+                sample->SetSampleTime(audio_pkt.pts);
+                int64_t dur = static_cast<int64_t>(audio_pkt.frame_count) *
+                              10'000'000LL / static_cast<int64_t>(audio_pkt.sample_rate);
+                sample->SetSampleDuration(dur);
+
+                muxer_->write_audio(sample.Get());
+                audio_written_.fetch_add(1, std::memory_order_relaxed);
+                telemetry_.on_audio_written();
             }
-            std::memcpy(data, audio_pkt.buffer.data(), audio_pkt.buffer.size());
-            buf->Unlock();
-            buf->SetCurrentLength(packet_bytes);
 
-            sample->SetSampleTime(audio_pkt.pts);
+            // Any remaining loopback packets (no mic data to mix with)
+            // Write them directly as system-only audio
+            for (auto& lb_pkt : loopback_pkts) {
+                if (lb_pkt.is_silence) continue;
 
-            // Duration: frame_count / sample_rate in 100ns
-            int64_t dur = static_cast<int64_t>(audio_pkt.frame_count) *
-                          10'000'000LL / static_cast<int64_t>(audio_pkt.sample_rate);
-            sample->SetSampleDuration(dur);
+                ComPtr<IMFSample> sample;
+                ComPtr<IMFMediaBuffer> buf;
+                const DWORD packet_bytes = static_cast<DWORD>(lb_pkt.buffer.size());
+                if (!acquire_audio_sample(packet_bytes, sample, buf)) {
+                    continue;
+                }
 
-            muxer_->write_audio(sample.Get());
-            audio_written_.fetch_add(1, std::memory_order_relaxed);
-            telemetry_.on_audio_written();
+                HRESULT hr = S_OK;
+                BYTE* data = nullptr;
+                hr = buf->Lock(&data, nullptr, nullptr);
+                if (FAILED(hr) || !data) continue;
+                std::memcpy(data, lb_pkt.buffer.data(), lb_pkt.buffer.size());
+                buf->Unlock();
+                buf->SetCurrentLength(packet_bytes);
+
+                sample->SetSampleTime(lb_pkt.pts);
+                int64_t dur = static_cast<int64_t>(lb_pkt.frame_count) *
+                              10'000'000LL / static_cast<int64_t>(lb_pkt.sample_rate);
+                sample->SetSampleDuration(dur);
+
+                muxer_->write_audio(sample.Get());
+                audio_written_.fetch_add(1, std::memory_order_relaxed);
+                telemetry_.on_audio_written();
+            }
         }
 
         const ULONGLONG now_ms = GetTickCount64();

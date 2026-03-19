@@ -96,14 +96,16 @@ private:
 
     // Engines
     std::unique_ptr<CaptureEngine> capture_;
-    std::unique_ptr<AudioEngine>   audio_;
+    std::unique_ptr<AudioEngine>   audio_;           // microphone
+    std::unique_ptr<AudioEngine>   loopback_audio_;  // system/desktop audio
     std::unique_ptr<VideoEncoder>  encoder_;
     std::unique_ptr<MuxWriter>     muxer_;
     StorageManager*                storage_ = nullptr;
 
     // Queues shared between capture/audio producers and encode consumer
     std::unique_ptr<FrameQueue> frame_queue_;
-    std::unique_ptr<AudioQueue> audio_queue_;
+    std::unique_ptr<AudioQueue> audio_queue_;      // microphone
+    std::unique_ptr<AudioQueue> loopback_queue_;   // system audio
 
     // Encode thread
     std::thread       encode_thread_;
