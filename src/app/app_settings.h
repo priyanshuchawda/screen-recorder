@@ -14,7 +14,8 @@ namespace sr {
 struct AppSettings {
     // Video settings (T026)
     uint32_t     fps         = 30;           // 30 or 60
-    uint32_t     bitrate_bps = 8'000'000;    // auto-selected based on fps
+    uint32_t     bitrate_bps = 8'000'000;    // auto-selected based on fps + high_quality
+    bool         high_quality = false;       // when true, uses higher bitrate for better quality
 
     // Storage settings (T025)
     std::wstring output_dir;                 // empty = use Videos\Recordings default
@@ -34,8 +35,12 @@ struct AppSettings {
             GetPrivateProfileIntW(L"Video", L"fps", 30, ini.c_str()));
         if (fps != 30 && fps != 60) fps = 30;  // enforce valid values
 
-        // Auto-assign bitrate based on fps
-        bitrate_bps = (fps == 60) ? 14'000'000 : 8'000'000;
+        // High quality mode
+        high_quality =
+            GetPrivateProfileIntW(L"Video", L"high_quality", 0, ini.c_str()) != 0;
+
+        // Auto-assign bitrate based on fps + high_quality
+        bitrate_bps = compute_bitrate(fps, high_quality);
 
         // Output directory
         wchar_t buf[MAX_PATH]{};
@@ -46,8 +51,9 @@ struct AppSettings {
         camera_overlay_enabled =
             GetPrivateProfileIntW(L"Camera", L"overlay_enabled", 0, ini.c_str()) != 0;
 
-        SR_LOG_INFO(L"Settings loaded: fps=%u, output_dir=%s, camera_overlay=%s",
+        SR_LOG_INFO(L"Settings loaded: fps=%u, high_quality=%s, output_dir=%s, camera_overlay=%s",
                     fps,
+                    high_quality ? L"on" : L"off",
                     output_dir.empty() ? L"(default)" : output_dir.c_str(),
                     camera_overlay_enabled ? L"on" : L"off");
         return true;
@@ -71,12 +77,15 @@ struct AppSettings {
         wchar_t buf[16];
         _snwprintf_s(buf, _countof(buf), _TRUNCATE, L"%u", fps);
         WritePrivateProfileStringW(L"Video",   L"fps",        buf,             ini.c_str());
+        WritePrivateProfileStringW(L"Video",   L"high_quality",
+                                   high_quality ? L"1" : L"0", ini.c_str());
         WritePrivateProfileStringW(L"Storage", L"output_dir", output_dir.c_str(), ini.c_str());
         WritePrivateProfileStringW(L"Camera",  L"overlay_enabled",
                                    camera_overlay_enabled ? L"1" : L"0", ini.c_str());
 
-        SR_LOG_INFO(L"Settings saved: fps=%u, output_dir=%s, camera_overlay=%s",
+        SR_LOG_INFO(L"Settings saved: fps=%u, high_quality=%s, output_dir=%s, camera_overlay=%s",
                     fps,
+                    high_quality ? L"on" : L"off",
                     output_dir.empty() ? L"(default)" : output_dir.c_str(),
                     camera_overlay_enabled ? L"on" : L"off");
         return true;
@@ -93,6 +102,14 @@ struct AppSettings {
         if (appdata[0] == L'\0') return {};
         std::wstring path = std::wstring(appdata) + L"\\ScreenRecorder\\settings.ini";
         return path;
+    }
+
+    // Compute bitrate based on fps and high-quality flag
+    static uint32_t compute_bitrate(uint32_t fps, bool hq) {
+        if (hq) {
+            return (fps == 60) ? 28'000'000 : 20'000'000;
+        }
+        return (fps == 60) ? 14'000'000 : 8'000'000;
     }
 };
 
