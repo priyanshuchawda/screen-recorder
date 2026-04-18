@@ -6,7 +6,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-green)
-![Tests](https://img.shields.io/badge/Tests-111%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-117%20passing-brightgreen)
 
 ## Features
 
@@ -16,6 +16,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 - **Microphone Noise Gate**: RMS-based gating to eliminate background hiss
 - **Fixed Camera Overlay**: High-quality preview with correct stride handling
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
+- **High Quality Mode**: Optional higher bitrate recording (20/28 Mbps) for sharper video
 - Pause/resume with monotonic timestamp rebasing
 - Mute/unmute with silence injection
 - Recovery flow for orphaned `.partial.mp4` files
@@ -67,9 +68,9 @@ Generated artifact:
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.0
-git push origin v0.3.0
-gh release create v0.3.0 build\Release\ScreenRecorder.exe --title "v0.3.0" --notes "System Audio + Quality Fixes."
+git tag v0.3.1
+git push origin v0.3.1
+gh release create v0.3.1 build\Release\ScreenRecorder.exe --title "v0.3.1" --notes "System Audio + Quality Fixes."
 ```
 
 ## Project Layout
