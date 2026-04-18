@@ -444,13 +444,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 // Update profile label
                 wchar_t prof_buf[64];
                 _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
-                    L"%u fps  |  %u Mbps",
-                    g_settings.fps, g_settings.bitrate_bps / 1'000'000);
+                    L"%u fps  |  %u Mbps%s",
+                    g_settings.fps, g_settings.bitrate_bps / 1'000'000,
+                    g_settings.high_quality ? L"  |  HQ" : L"");
                 SetWindowTextW(g_lbl_profile, prof_buf);
                 // Refresh path display
                 SetWindowTextW(g_lbl_path, g_storage.outputDirectory().c_str());
-                SR_LOG_INFO(L"Settings applied: %u fps, dir=%s",
+                SR_LOG_INFO(L"Settings applied: %u fps, high_quality=%s, dir=%s",
                             g_settings.fps,
+                            g_settings.high_quality ? L"on" : L"off",
                             g_settings.output_dir.empty() ? L"(default)" : g_settings.output_dir.c_str());
             }
             break;
@@ -600,8 +602,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     if (g_lbl_profile) {
         wchar_t prof_buf[64];
         _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
-            L"%u fps  |  %u Mbps",
-            g_settings.fps, g_settings.bitrate_bps / 1'000'000);
+            L"%u fps  |  %u Mbps%s",
+            g_settings.fps, g_settings.bitrate_bps / 1'000'000,
+            g_settings.high_quality ? L"  |  HQ" : L"");
         SetWindowTextW(g_lbl_profile, prof_buf);
     }
 

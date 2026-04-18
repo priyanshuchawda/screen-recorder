@@ -25,6 +25,7 @@ constexpr int IDC_BTN_CANCEL = 2006;
 constexpr int IDC_LBL_FPS    = 2007;
 constexpr int IDC_LBL_DIR    = 2008;
 constexpr int IDC_CHK_CAMERA = 2009;
+constexpr int IDC_CHK_HQ     = 2010;
 
 // ============================================================================
 // Dialog internal state (per-instance, allocated on the stack of the caller)
@@ -101,8 +102,16 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             CheckRadioButton(hwnd, IDC_RADIO_30, IDC_RADIO_60, IDC_RADIO_30);
         }
 
+        // ---------- High Quality checkbox ----------
+        y += 88;
+        CreateWindowW(L"BUTTON", L"High Quality (higher bitrate \u2014 larger files, sharper video)",
+            WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+            14, y, 330, 20, hwnd, (HMENU)IDC_CHK_HQ, nullptr, nullptr);
+        CheckDlgButton(hwnd, IDC_CHK_HQ,
+            state->settings->high_quality ? BST_CHECKED : BST_UNCHECKED);
+
         // ---------- Output directory group ----------
-        y += 82;
+        y += 28;
         CreateWindowW(L"BUTTON", L"Output Directory",
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             10, y, 330, 62, hwnd, (HMENU)IDC_LBL_DIR, nullptr, nullptr);
@@ -158,8 +167,14 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 // Read fps
                 state->settings->fps = IsDlgButtonChecked(hwnd, IDC_RADIO_60)
                     ? 60u : 30u;
-                state->settings->bitrate_bps = (state->settings->fps == 60)
-                    ? 14'000'000u : 8'000'000u;
+
+                // Read high quality
+                state->settings->high_quality =
+                    (IsDlgButtonChecked(hwnd, IDC_CHK_HQ) == BST_CHECKED);
+
+                // Compute bitrate from fps + high_quality
+                state->settings->bitrate_bps = sr::AppSettings::compute_bitrate(
+                    state->settings->fps, state->settings->high_quality);
 
                 // Read output dir
                 wchar_t dir[MAX_PATH]{};
@@ -222,7 +237,7 @@ bool ShowSettingsDialog(HWND parent, AppSettings& settings) {
     // Compute centered position relative to parent
     RECT parent_rect{};
     if (parent) GetWindowRect(parent, &parent_rect);
-    int dlg_w = 358, dlg_h = 312;
+    int dlg_w = 358, dlg_h = 348;
     int x = parent_rect.left + (parent_rect.right  - parent_rect.left - dlg_w) / 2;
     int y = parent_rect.top  + (parent_rect.bottom - parent_rect.top  - dlg_h) / 2;
 
