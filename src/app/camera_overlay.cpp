@@ -305,7 +305,7 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
     SetStretchBltMode(hdc, COLORONCOLOR);
     StretchDIBits(
         hdc,
-        0, 0, dst_w, dst_h,
+        dst_w, 0, -dst_w, dst_h,
         src_x, src_y, src_w, src_h,
         latest_frame_.data(),
         &bmi,
