@@ -59,8 +59,10 @@ private:
     bool configure_encoder(IMFTransform* mft, uint32_t width, uint32_t height,
                            uint32_t fps, uint32_t bitrate_bps, bool use_hw);
     bool switch_to_software_fallback();
+    bool pump_hw_events(uint32_t wait_ms);
 
     ComPtr<IMFTransform>       mft_;
+    ComPtr<IMFMediaEventGenerator> hw_events_;
     ComPtr<IMFDXGIDeviceManager> dxgi_mgr_;
     ComPtr<ID3D11Device>       d3d_device_;
     ComPtr<ID3D11DeviceContext> d3d_context_;
@@ -78,6 +80,10 @@ private:
     bool        hw_path_     = false;
     uint32_t    hw_output_fail_count_ = 0;
     bool        switched_to_sw_due_to_hw_errors_ = false;
+    bool        hw_async_mft_ = false;
+    uint32_t    hw_need_input_events_ = 0;
+    uint32_t    hw_have_output_events_ = 0;
+    bool        hw_drain_complete_ = false;
 
     // Pre-allocated staging texture for SW encoder path (avoids per-frame alloc)
     ComPtr<ID3D11Texture2D> staging_tex_;

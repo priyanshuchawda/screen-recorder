@@ -18,6 +18,7 @@
 
 // ─── T035: VideoEncoder (fallback chain identifiers) ─────────────────────────
 #include "encoder/video_encoder.h"
+#include "encoder/encoder_probe.h"
 
 namespace sr {
 
@@ -217,6 +218,15 @@ TEST(T035_EncoderFallback, EncoderModeNamesAreCoveredByEnum) {
               static_cast<int>(EncoderMode::SoftwareMFT720p));
     EXPECT_NE(static_cast<int>(EncoderMode::HardwareMFT),
               static_cast<int>(EncoderMode::SoftwareMFT720p));
+}
+
+TEST(T035_EncoderFallback, IntelHardwareAdapterPreferredForHardwareEncoding) {
+    const int intel_hw_score = EncoderProbe::adapter_preference_score(0x8086, false);
+    const int other_hw_score = EncoderProbe::adapter_preference_score(0x10DE, false);
+    const int intel_sw_score = EncoderProbe::adapter_preference_score(0x8086, true);
+
+    EXPECT_GT(intel_hw_score, other_hw_score);
+    EXPECT_GT(other_hw_score, intel_sw_score);
 }
 
 TEST(T035_EncoderFallback, VideoEncoderDefaultIsUninitialised) {

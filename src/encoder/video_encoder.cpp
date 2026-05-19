@@ -68,6 +68,58 @@ static void LogProcessOutputFailureRateLimited(HRESULT hr) {
     }
 }
 
+bool VideoEncoder::pump_hw_events(uint32_t wait_ms) {
+    if (!hw_async_mft_ || !hw_events_) {
+        return true;
+    }
+
+    const ULONGLONG deadline = GetTickCount64() + wait_ms;
+    bool saw_event = false;
+
+    while (true) {
+        ComPtr<IMFMediaEvent> event;
+        const HRESULT hr = hw_events_->GetEvent(MF_EVENT_FLAG_NO_WAIT, &event);
+        if (hr == MF_E_NO_EVENTS_AVAILABLE) {
+            if (wait_ms == 0 || saw_event || GetTickCount64() >= deadline) {
+                return true;
+            }
+            Sleep(1);
+            continue;
+        }
+        if (FAILED(hr)) {
+            SR_LOG_WARN(L"HW MFT GetEvent failed: 0x%08X", hr);
+            return false;
+        }
+
+        saw_event = true;
+
+        HRESULT status = S_OK;
+        event->GetStatus(&status);
+        if (FAILED(status)) {
+            SR_LOG_WARN(L"HW MFT event status failed: 0x%08X", status);
+        }
+
+        MediaEventType type = MEUnknown;
+        if (FAILED(event->GetType(&type))) {
+            continue;
+        }
+
+        switch (type) {
+            case METransformNeedInput:
+                ++hw_need_input_events_;
+                break;
+            case METransformHaveOutput:
+                ++hw_have_output_events_;
+                break;
+            case METransformDrainComplete:
+                hw_drain_complete_ = true;
+                break;
+            default:
+                break;
+        }
+    }
+}
+
 // Configure output H.264 media type on the MFT
 static HRESULT ConfigureOutputType(IMFTransform* mft,
                                    uint32_t w, uint32_t h,
@@ -155,6 +207,11 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
                                 IMFDXGIDeviceManager* dxgi_mgr)
 {
     if (!dxgi_mgr) return false;
+    hw_events_.Reset();
+    hw_async_mft_ = false;
+    hw_need_input_events_ = 0;
+    hw_have_output_events_ = 0;
+    hw_drain_complete_ = false;
 
     MFT_REGISTER_TYPE_INFO out_info{ MFMediaType_Video, MFVideoFormat_H264 };
     IMFActivate** activates = nullptr;
@@ -181,7 +238,11 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
         ComPtr<IMFAttributes> attrs;
         mft->GetAttributes(&attrs);
         if (attrs) {
-            attrs->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK, TRUE);
+            UINT32 is_async = FALSE;
+            attrs->GetUINT32(MF_TRANSFORM_ASYNC, &is_async);
+            if (is_async) {
+                attrs->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK, TRUE);
+            }
         }
 
         // Set DXGI device manager
@@ -224,6 +285,7 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
         out_height_ = profile.height;
         out_fps_    = profile.fps;
         hw_path_    = true;
+        hw_async_mft_ = SUCCEEDED(mft.As(&hw_events_)) && hw_events_;
 
         MFT_OUTPUT_STREAM_INFO output_stream_info{};
         hr = mft_->GetOutputStreamInfo(0, &output_stream_info);
@@ -235,8 +297,13 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
             mft_output_sample_size_ = 1 << 20;
         }
 
-        SR_LOG_INFO(L"HW H.264 encoder active: %s (%ux%u @ %u fps, %u bps)",
-            name, profile.width, profile.height, profile.fps, profile.bitrate_bps);
+        if (hw_async_mft_) {
+            pump_hw_events(50);
+        }
+
+        SR_LOG_INFO(L"HW H.264 encoder active: %s (%ux%u @ %u fps, %u bps, async=%s)",
+            name, profile.width, profile.height, profile.fps, profile.bitrate_bps,
+            hw_async_mft_ ? L"yes" : L"no");
 
         for (UINT32 j = 0; j < count; ++j) activates[j]->Release();
         CoTaskMemFree(activates);
@@ -254,6 +321,12 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
 bool VideoEncoder::try_init_sw(const EncoderProfile& profile,
                                 uint32_t width, uint32_t height, uint32_t fps)
 {
+    hw_events_.Reset();
+    hw_async_mft_ = false;
+    hw_need_input_events_ = 0;
+    hw_have_output_events_ = 0;
+    hw_drain_complete_ = false;
+
     MFT_REGISTER_TYPE_INFO out_info{ MFMediaType_Video, MFVideoFormat_H264 };
     IMFActivate** activates = nullptr;
     UINT32 count = 0;
@@ -450,6 +523,15 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             SR_LOG_ERROR(L"MFCreateDXGISurfaceBuffer failed: 0x%08X", hr);
             return false;
         }
+
+        D3D11_TEXTURE2D_DESC td{};
+        nv12_texture->GetDesc(&td);
+        const DWORD total = static_cast<DWORD>((td.Width * td.Height * 3) / 2);
+        hr = buffer->SetCurrentLength(total);
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"DXGI input buffer SetCurrentLength failed: 0x%08X", hr);
+            return false;
+        }
     } else {
         // SW path: read back texture to system memory using pre-allocated staging
         D3D11_TEXTURE2D_DESC td{};
@@ -517,16 +599,38 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
     }
 
-    // Feed to MFT
-    hr = mft_->ProcessInput(0, sample.Get(), 0);
-    if (FAILED(hr) && hr != MF_E_NOTACCEPTING) {
-        SR_LOG_ERROR(L"ProcessInput failed: 0x%08X", hr);
+    if (hw_async_mft_) {
+        pump_hw_events(0);
+        if (hw_need_input_events_ == 0 && hw_have_output_events_ == 0) {
+            pump_hw_events(5);
+        }
+    }
+
+    // Feed to MFT. Async hardware MFTs must request input first.
+    if (!hw_async_mft_ || hw_need_input_events_ > 0) {
+        hr = mft_->ProcessInput(0, sample.Get(), 0);
+        if (SUCCEEDED(hr) && hw_async_mft_ && hw_need_input_events_ > 0) {
+            --hw_need_input_events_;
+        }
+        if (FAILED(hr) && hr != MF_E_NOTACCEPTING) {
+            SR_LOG_ERROR(L"ProcessInput failed: 0x%08X", hr);
+            return false;
+        }
+    } else if (hw_have_output_events_ == 0) {
         return false;
+    }
+
+    if (hw_async_mft_) {
+        pump_hw_events(2);
     }
 
     // Drain available output. Some encoders buffer internally and may not
     // return a sample for every input frame.
     while (true) {
+        if (hw_async_mft_ && hw_have_output_events_ == 0) {
+            return false;
+        }
+
         MFT_OUTPUT_DATA_BUFFER out_buf{};
         DWORD status = 0;
 
@@ -539,6 +643,9 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
 
         hr = mft_->ProcessOutput(0, 1, &out_buf, &status);
+        if (hw_async_mft_ && hw_have_output_events_ > 0) {
+            --hw_have_output_events_;
+        }
 
         if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
             if (out_buf.pSample) out_buf.pSample->Release();
@@ -620,6 +727,49 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
 
     mft_->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
 
+    if (hw_async_mft_) {
+        hw_drain_complete_ = false;
+        const ULONGLONG deadline = GetTickCount64() + 3000;
+
+        while (!hw_drain_complete_ && GetTickCount64() < deadline) {
+            pump_hw_events(10);
+
+            while (hw_have_output_events_ > 0) {
+                MFT_OUTPUT_DATA_BUFFER out_buf{};
+                DWORD status = 0;
+
+                if (!mft_provides_output_samples_) {
+                    HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
+                    if (FAILED(alloc_hr)) {
+                        SR_LOG_ERROR(L"Failed to allocate async MFT flush output sample: 0x%08X", alloc_hr);
+                        return false;
+                    }
+                }
+
+                HRESULT hr = mft_->ProcessOutput(0, 1, &out_buf, &status);
+                if (hw_have_output_events_ > 0) {
+                    --hw_have_output_events_;
+                }
+
+                if (FAILED(hr)) {
+                    SR_LOG_ERROR(L"Async ProcessOutput during flush failed: 0x%08X", hr);
+                    if (out_buf.pSample) out_buf.pSample->Release();
+                    if (out_buf.pEvents) out_buf.pEvents->Release();
+                    return false;
+                }
+
+                if (out_buf.pSample) {
+                    ComPtr<IMFSample> s;
+                    s.Attach(out_buf.pSample);
+                    out_samples.push_back(std::move(s));
+                }
+                if (out_buf.pEvents) out_buf.pEvents->Release();
+            }
+        }
+
+        return true;
+    }
+
     while (true) {
         MFT_OUTPUT_DATA_BUFFER out_buf{};
         DWORD status = 0;
@@ -694,10 +844,15 @@ void VideoEncoder::shutdown() {
         mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
         mft_.Reset();
     }
+    hw_events_.Reset();
     staging_tex_.Reset();
     staging_width_  = 0;
     staging_height_ = 0;
     initialized_ = false;
+    hw_async_mft_ = false;
+    hw_need_input_events_ = 0;
+    hw_have_output_events_ = 0;
+    hw_drain_complete_ = false;
 }
 
 } // namespace sr

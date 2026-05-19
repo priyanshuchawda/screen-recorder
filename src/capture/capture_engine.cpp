@@ -12,10 +12,12 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 
 #include "capture/capture_engine.h"
+#include "encoder/power_mode.h"
 #include "utils/logging.h"
 
 #include <d3d11_1.h>
 #include <dxgi1_2.h>
+#include <algorithm>
 #include <array>
 
 namespace wgc  = winrt::Windows::Graphics::Capture;
@@ -350,10 +352,10 @@ bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* contex
     SR_LOG_INFO(L"WGC item: %ux%u", capture_width_, capture_height_);
 
     // T034: fix output resolution so encoder is never reset on runtime changes.
-    // Performance optimization: cap recording output at 854x480 (480p widescreen).
-    // GPU memory savings: ~66% less per NV12 texture vs 720p.
-    impl_->out_width_  = (capture_width_  > 854) ? 854 : capture_width_;
-    impl_->out_height_ = (capture_height_ > 480) ? 480 : capture_height_;
+    // Cap recording output at hardware-encoder-friendly 480p dimensions.
+    // 848x480 keeps the NV12 frame size aligned for Intel H.264 MFTs.
+    impl_->out_width_ = (std::min)(capture_width_, PowerModeDetector::kBatteryMaxWidth);
+    impl_->out_height_ = (std::min)(capture_height_, PowerModeDetector::kBatteryMaxHeight);
 
     // Expose actual encoder-feed dimensions (post-cap) to controller/profile setup.
     capture_width_ = impl_->out_width_;
