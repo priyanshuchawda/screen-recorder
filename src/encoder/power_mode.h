@@ -12,6 +12,12 @@ namespace sr {
 
 class PowerModeDetector {
 public:
+    static constexpr uint32_t kBatteryMaxFps = 15;
+    static constexpr uint32_t kBatteryMaxBitrate = 1'500'000;
+    // Keep battery 480p dimensions aligned for hardware H.264 encoders.
+    static constexpr uint32_t kBatteryMaxWidth = 848;
+    static constexpr uint32_t kBatteryMaxHeight = 480;
+
     // Returns true when the system is on AC power (charger connected).
     // Returns true on failure (assumes AC to avoid unexpected quality reduction).
     static bool is_on_ac_power() {
@@ -22,9 +28,18 @@ public:
         return sps.ACLineStatus != 0;
     }
 
+    static EncoderProfile clamp_for_battery(const EncoderProfile& requested) {
+        EncoderProfile throttled = requested;
+        throttled.fps         = (std::min)(requested.fps,         kBatteryMaxFps);
+        throttled.bitrate_bps = (std::min)(requested.bitrate_bps, kBatteryMaxBitrate);
+        throttled.width       = (std::min)(requested.width,       kBatteryMaxWidth);
+        throttled.height      = (std::min)(requested.height,      kBatteryMaxHeight);
+        return throttled;
+    }
+
     // Clamp the requested EncoderProfile for the current power state.
     //   AC power  → unchanged (use requested profile)
-    //   Battery   → aggressive: 15fps / 1.5Mbps / 854x480
+    //   Battery   → aggressive: 15fps / 1.5Mbps / 848x480
     static EncoderProfile clamp_for_power(const EncoderProfile& requested) {
         if (is_on_ac_power()) {
             SR_LOG_INFO(L"[PowerMode] AC — profile: %u fps / %u bps / %ux%u",
@@ -34,11 +49,7 @@ public:
         }
 
         // Battery throttle: aggressive caps for maximum battery life
-        EncoderProfile throttled = requested;
-        throttled.fps         = (std::min)(requested.fps,         15u);
-        throttled.bitrate_bps = (std::min)(requested.bitrate_bps, 1'500'000u);
-        throttled.width       = (std::min)(requested.width,       854u);
-        throttled.height      = (std::min)(requested.height,      480u);
+        EncoderProfile throttled = clamp_for_battery(requested);
         SR_LOG_INFO(L"[PowerMode] Battery — throttling to %u fps / %u bps / %ux%u "
                     L"(requested: %u fps / %u bps / %ux%u)",
                     throttled.fps, throttled.bitrate_bps,

@@ -223,23 +223,21 @@ TEST(T042_PowerMode, ClampForPowerOnACReturnsRequestedProfile) {
     }
 }
 
-TEST(T042_PowerMode, BatteryProfileClampsAggressively) {
-    // Verify the clamping math directly without relying on the machine's power state
+TEST(T042_PowerMode, BatteryProfileClampsToHardwareEncoderCompatibleDimensions) {
     sr::EncoderProfile req;
     req.fps         = 60;
     req.bitrate_bps = 14'000'000;
+    req.width       = 1920;
+    req.height      = 1080;
 
-    // "Battery" clamping: mimic what clamp_for_power does on battery
-    sr::EncoderProfile throttled   = req;
-    throttled.fps                  = std::min(req.fps,         15u);
-    throttled.bitrate_bps          = std::min(req.bitrate_bps, 1'500'000u);
-    throttled.width                = std::min(req.width,       854u);
-    throttled.height               = std::min(req.height,      480u);
+    sr::EncoderProfile throttled = sr::PowerModeDetector::clamp_for_battery(req);
 
     EXPECT_EQ(throttled.fps,         15u);
     EXPECT_EQ(throttled.bitrate_bps, 1'500'000u);
-    EXPECT_EQ(throttled.width,       854u);
+    EXPECT_EQ(throttled.width,       848u);
     EXPECT_EQ(throttled.height,      480u);
+    EXPECT_EQ(throttled.width % 16u, 0u);
+    EXPECT_EQ(throttled.height % 16u, 0u);
 }
 
 // ============================================================

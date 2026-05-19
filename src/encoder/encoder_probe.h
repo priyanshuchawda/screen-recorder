@@ -30,6 +30,10 @@ public:
     // Create D3D11 device + enumerate hardware H.264 encoders
     // Returns false if D3D11 device creation fails
     static bool run(ProbeResult& result);
+
+    // Adapter selection policy used before D3D11 device creation.
+    // Higher score wins; software adapters are always below hardware adapters.
+    static int adapter_preference_score(UINT vendor_id, bool is_software) noexcept;
 };
 
 } // namespace sr
