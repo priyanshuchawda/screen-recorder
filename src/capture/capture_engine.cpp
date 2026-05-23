@@ -12,7 +12,6 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 
 #include "capture/capture_engine.h"
-#include "encoder/power_mode.h"
 #include "utils/logging.h"
 
 #include <d3d11_1.h>
@@ -292,8 +291,10 @@ bool CaptureEngine::is_wgc_supported() {
 CaptureEngine::CaptureEngine()  = default;
 CaptureEngine::~CaptureEngine() { stop(); }
 
-bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* context,
-                                FrameQueue* queue)
+bool CaptureEngine::initialize(ID3D11Device* device,
+                                ID3D11DeviceContext* context,
+                                FrameQueue* queue,
+                                RecordingResolution max_resolution)
 {
     // WinRT apartment: multi-threaded (matches COM init in wWinMain)
     try { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
@@ -352,10 +353,16 @@ bool CaptureEngine::initialize(ID3D11Device* device, ID3D11DeviceContext* contex
     SR_LOG_INFO(L"WGC item: %ux%u", capture_width_, capture_height_);
 
     // T034: fix output resolution so encoder is never reset on runtime changes.
-    // Cap recording output at hardware-encoder-friendly 480p dimensions.
-    // 848x480 keeps the NV12 frame size aligned for Intel H.264 MFTs.
-    impl_->out_width_ = (std::min)(capture_width_, PowerModeDetector::kBatteryMaxWidth);
-    impl_->out_height_ = (std::min)(capture_height_, PowerModeDetector::kBatteryMaxHeight);
+    // The controller passes the requested profile after power-mode clamping:
+    // efficiency/default stays 848x480; HQ can request up to 1920x1080.
+    const auto output_resolution =
+        clamp_recording_resolution(source_width, source_height, max_resolution);
+    impl_->out_width_ = output_resolution.width;
+    impl_->out_height_ = output_resolution.height;
+    SR_LOG_INFO(L"Recording output profile: source=%ux%u cap=%ux%u selected=%ux%u",
+                source_width, source_height,
+                max_resolution.width, max_resolution.height,
+                impl_->out_width_, impl_->out_height_);
 
     // Expose actual encoder-feed dimensions (post-cap) to controller/profile setup.
     capture_width_ = impl_->out_width_;

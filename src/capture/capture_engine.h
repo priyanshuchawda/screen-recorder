@@ -41,7 +41,10 @@ public:
     // Initialize:
     //   device/context — the D3D11 device to borrow for WGC interop and NV12 conversion
     //   queue          — output queue (owned by caller)
-    bool initialize(ID3D11Device* device, ID3D11DeviceContext* context, FrameQueue* queue);
+    bool initialize(ID3D11Device* device,
+                    ID3D11DeviceContext* context,
+                    FrameQueue* queue,
+                    RecordingResolution max_resolution = kEfficiencyRecordingResolution);
 
     bool start();
     void stop();

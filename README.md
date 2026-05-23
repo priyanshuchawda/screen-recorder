@@ -16,7 +16,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 - **Microphone Noise Gate**: RMS-based gating to eliminate background hiss
 - **Efficient Camera Overlay**: Low-FPS preview with correct stride handling
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
-- **High Quality Mode**: Optional higher bitrate recording (8/10 Mbps) for sharper 480p laptop captures
+- **High Quality Mode**: Optional 1080p-capable hardware profile with higher bitrate recording (8/10 Mbps)
 - Pause/resume with monotonic timestamp rebasing
 - Mute/unmute with silence injection
 - Recovery flow for orphaned `.partial.mp4` files

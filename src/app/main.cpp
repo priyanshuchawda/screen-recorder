@@ -90,17 +90,23 @@ static void ApplyEncoderProfileFromSettings()
     sr::EncoderProfile profile;
     profile.fps         = g_settings.fps;
     profile.bitrate_bps = g_settings.bitrate_bps;
+    const auto resolution = sr::recording_resolution_for_quality(g_settings.high_quality);
+    profile.width       = resolution.width;
+    profile.height      = resolution.height;
     g_controller.set_encoder_profile(profile);
 }
 
 static void UpdateProfileLabel()
 {
     if (!g_lbl_profile) return;
-    wchar_t prof_buf[64];
+    const auto resolution = sr::recording_resolution_for_quality(g_settings.high_quality);
+    wchar_t prof_buf[96];
     _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
-        L"%u fps  |  %u Mbps%s",
-        g_settings.fps, g_settings.bitrate_bps / 1'000'000,
-        g_settings.high_quality ? L"  |  HQ" : L"");
+        L"%ufps | %ux%u | %uMbps%s",
+        g_settings.fps,
+        resolution.width, resolution.height,
+        g_settings.bitrate_bps / 1'000'000,
+        g_settings.high_quality ? L" | HQ" : L"");
     SetWindowTextW(g_lbl_profile, prof_buf);
 }
 
@@ -307,10 +313,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                    WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                    138, y, 78, 28, hwnd, (HMENU)ID_BTN_HQ, nullptr, nullptr);
 
-        // Profile label: e.g. "30 fps | 4 Mbps"
-        g_lbl_profile = CreateWindowW(L"STATIC", L"30 fps | 4 Mbps",
+        // Profile label: e.g. "30fps | 848x480 | 4Mbps"
+        g_lbl_profile = CreateWindowW(L"STATIC", L"30fps | 848x480 | 4Mbps",
                         WS_VISIBLE | WS_CHILD | SS_LEFT,
-                        226, y + 6, 170, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
+                        226, y + 6, 206, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
 
         ApplyUIFont(hwnd);
 
