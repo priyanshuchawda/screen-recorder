@@ -229,3 +229,16 @@ TEST(AppSettingsStaticTest, ComputeBitrateAllCombinations) {
     EXPECT_EQ(sr::AppSettings::compute_bitrate(30, true),  8'000'000u);
     EXPECT_EQ(sr::AppSettings::compute_bitrate(60, true),  10'000'000u);
 }
+
+TEST(AppSettingsStaticTest, SetHighQualityRecomputesBitrate) {
+    sr::AppSettings s;
+    s.fps = 30;
+    s.set_high_quality(true);
+    EXPECT_TRUE(s.high_quality);
+    EXPECT_EQ(s.bitrate_bps, 8'000'000u);
+
+    s.fps = 60;
+    s.set_high_quality(false);
+    EXPECT_FALSE(s.high_quality);
+    EXPECT_EQ(s.bitrate_bps, 6'000'000u);
+}
