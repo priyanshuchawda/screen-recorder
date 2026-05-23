@@ -27,11 +27,16 @@ struct CameraFormatChoice {
     LONGLONG score = LLONG_MIN;
 };
 
-LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool on_battery) {
-    const UINT32 max_w = CameraOverlay::kEfficiencyPreviewMaxWidth;
-    const UINT32 max_h = CameraOverlay::kEfficiencyPreviewMaxHeight;
-    const UINT32 pref_w = CameraOverlay::kEfficiencyPreviewPreferredWidth;
-    const UINT32 pref_h = CameraOverlay::kEfficiencyPreviewPreferredHeight;
+LONGLONG score_format(UINT32 w,
+                      UINT32 h,
+                      UINT32 fps_num,
+                      UINT32 fps_den,
+                      bool on_battery,
+                      bool high_quality) {
+    const UINT32 max_w = CameraOverlay::preview_max_width_for_profile(on_battery, high_quality);
+    const UINT32 max_h = CameraOverlay::preview_max_height_for_profile(on_battery, high_quality);
+    const UINT32 pref_w = CameraOverlay::preview_preferred_width_for_profile(on_battery, high_quality);
+    const UINT32 pref_h = CameraOverlay::preview_preferred_height_for_profile(on_battery, high_quality);
 
     const LONGLONG pixels = static_cast<LONGLONG>(w) * static_cast<LONGLONG>(h);
     const LONGLONG max_pixels = static_cast<LONGLONG>(max_w) * static_cast<LONGLONG>(max_h);
@@ -47,7 +52,8 @@ LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool o
     score -= llabs(pref_pixels - pixels) / 8;
 
     const double fps = fps_den ? static_cast<double>(fps_num) / static_cast<double>(fps_den) : 30.0;
-    const double target_fps = on_battery ? 10.0 : 15.0;
+    const int interval_ms = CameraOverlay::preview_interval_ms_for_profile(on_battery, high_quality);
+    const double target_fps = interval_ms > 0 ? (1000.0 / static_cast<double>(interval_ms)) : 30.0;
     const double fps_for_score = fps > target_fps ? target_fps : fps;
     score += static_cast<LONGLONG>(fps_for_score * 200000.0);
     const double aspect = h ? static_cast<double>(w) / static_cast<double>(h) : (16.0 / 9.0);
@@ -58,6 +64,7 @@ LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool o
 
 bool choose_camera_format(IMFSourceReader* reader,
                           bool on_battery,
+                          bool high_quality,
                           UINT32& chosen_w,
                           UINT32& chosen_h,
                           UINT32& chosen_fps_num,
@@ -87,7 +94,7 @@ bool choose_camera_format(IMFSourceReader* reader,
             fps_den = 1;
         }
 
-        LONGLONG score = score_format(w, h, fps_num, fps_den, on_battery);
+        LONGLONG score = score_format(w, h, fps_num, fps_den, on_battery, high_quality);
         if (score > best.score) {
             best.native_type = native_type;
             best.width = w;
@@ -243,9 +250,11 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 }
 
 void CameraOverlay::apply_preview_tuning() {
-    const int interval = preview_interval_ms_for_power(on_battery_);
+    const bool high_quality = high_quality_.load(std::memory_order_relaxed);
+    const int interval = preview_interval_ms_for_profile(on_battery_, high_quality);
     capture_interval_ms_.store(interval, std::memory_order_relaxed);
-    SR_LOG_INFO(L"CameraOverlay: efficiency preview target ~%u fps",
+    SR_LOG_INFO(L"CameraOverlay: %s preview target ~%u fps",
+                use_high_quality_preview(on_battery_, high_quality) ? L"HQ" : L"efficiency",
                 interval > 0 ? static_cast<unsigned>(1000 / interval) : 0u);
 }
 
@@ -384,7 +393,9 @@ void CameraOverlay::capture_loop() {
     UINT32 chosen_h = 0;
     UINT32 chosen_fps_num = 30;
     UINT32 chosen_fps_den = 1;
-    if (!choose_camera_format(reader.Get(), on_battery_, chosen_w, chosen_h, chosen_fps_num, chosen_fps_den)) {
+    const bool high_quality = high_quality_.load(std::memory_order_relaxed);
+    if (!choose_camera_format(reader.Get(), on_battery_, high_quality,
+                              chosen_w, chosen_h, chosen_fps_num, chosen_fps_den)) {
         SR_LOG_WARN(L"CameraOverlay: choose_camera_format failed, forcing RGB32 output type");
         // Fallback: manually request RGB32 output without specifying resolution
         ComPtr<IMFMediaType> fallback_type;
@@ -395,7 +406,9 @@ void CameraOverlay::capture_loop() {
         }
     } else {
         const double chosen_fps = static_cast<double>(chosen_fps_num) / static_cast<double>(chosen_fps_den ? chosen_fps_den : 1);
-        SR_LOG_INFO(L"CameraOverlay: preview format %ux%u @ %.2f fps (RGB32)", chosen_w, chosen_h, chosen_fps);
+        SR_LOG_INFO(L"CameraOverlay: %s preview format %ux%u @ %.2f fps (RGB32)",
+                    use_high_quality_preview(on_battery_, high_quality) ? L"HQ" : L"efficiency",
+                    chosen_w, chosen_h, chosen_fps);
     }
 
     // Query the actual output type to get correct dimensions and stride
@@ -604,6 +617,13 @@ bool CameraOverlay::start(HWND owner) {
     running_ = true;
     SR_LOG_INFO(L"CameraOverlay: started (stable mode)");
     return true;
+}
+
+void CameraOverlay::set_high_quality(bool enabled) {
+    high_quality_.store(enabled, std::memory_order_relaxed);
+    if (running_) {
+        apply_preview_tuning();
+    }
 }
 
 void CameraOverlay::refresh_power_profile() {

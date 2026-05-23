@@ -279,6 +279,19 @@ TEST(T042_PowerMode, CameraPreviewUsesEfficiencyIntervals) {
     EXPECT_LE(sr::CameraOverlay::kEfficiencyPreviewMaxHeight, 480u);
 }
 
+TEST(T042_PowerMode, CameraPreviewUsesHighQualityProfileOnlyOnAC) {
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(false, false), 66);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(false, true), 33);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(true, true), 100);
+
+    EXPECT_EQ(sr::CameraOverlay::preview_max_width_for_profile(false, false), 640u);
+    EXPECT_EQ(sr::CameraOverlay::preview_max_height_for_profile(false, false), 480u);
+    EXPECT_EQ(sr::CameraOverlay::preview_max_width_for_profile(false, true), 1280u);
+    EXPECT_EQ(sr::CameraOverlay::preview_max_height_for_profile(false, true), 720u);
+    EXPECT_EQ(sr::CameraOverlay::preview_max_width_for_profile(true, true), 640u);
+    EXPECT_EQ(sr::CameraOverlay::preview_max_height_for_profile(true, true), 480u);
+}
+
 TEST(T042_PowerMode, CameraPreviewProcessingSkipsFramesBeforeInterval) {
     EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 0, 66));
     EXPECT_FALSE(sr::CameraOverlay::should_process_preview_frame(1050, 1000, 66));
