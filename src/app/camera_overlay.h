@@ -19,6 +19,14 @@ public:
 
     bool is_running() const { return running_; }
 
+    static constexpr UINT32 kEfficiencyPreviewMaxWidth = 640;
+    static constexpr UINT32 kEfficiencyPreviewMaxHeight = 480;
+    static constexpr UINT32 kEfficiencyPreviewPreferredWidth = 640;
+    static constexpr UINT32 kEfficiencyPreviewPreferredHeight = 360;
+    static int preview_interval_ms_for_power(bool on_battery) {
+        return on_battery ? 100 : 66; // 10 fps on battery, ~15 fps on AC
+    }
+
 private:
     static LRESULT CALLBACK HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     void capture_loop();

@@ -73,25 +73,25 @@ TEST_F(AppSettingsTest, DefaultsAre30FpsAndEmptyDir) {
 TEST_F(AppSettingsTest, SaveAndLoadFps60) {
     sr::AppSettings s;
     s.fps         = 60;
-    s.bitrate_bps = 14'000'000;
+    s.bitrate_bps = 6'000'000;
     s.output_dir  = L"";
     SaveToIni(s);
 
     auto loaded = LoadFromIni();
     EXPECT_EQ(loaded.fps, 60u);
-    EXPECT_EQ(loaded.bitrate_bps, 14'000'000u);
+    EXPECT_EQ(loaded.bitrate_bps, 6'000'000u);
 }
 
 // Round-trip: save 30fps
 TEST_F(AppSettingsTest, SaveAndLoadFps30) {
     sr::AppSettings s;
     s.fps         = 30;
-    s.bitrate_bps = 8'000'000;
+    s.bitrate_bps = 4'000'000;
     SaveToIni(s);
 
     auto loaded = LoadFromIni();
     EXPECT_EQ(loaded.fps, 30u);
-    EXPECT_EQ(loaded.bitrate_bps, 8'000'000u);
+    EXPECT_EQ(loaded.bitrate_bps, 4'000'000u);
 }
 
 // Round-trip: custom output directory
@@ -117,15 +117,15 @@ TEST_F(AppSettingsTest, InvalidFpsDefaultsTo30) {
 TEST_F(AppSettingsTest, BitrateAutoSelectsFor60fps) {
     sr::AppSettings s;
     s.fps = 60;
-    s.bitrate_bps = (s.fps == 60) ? 14'000'000 : 8'000'000;
-    EXPECT_EQ(s.bitrate_bps, 14'000'000u);
+    s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, false);
+    EXPECT_EQ(s.bitrate_bps, 6'000'000u);
 }
 
 TEST_F(AppSettingsTest, BitrateAutoSelectsFor30fps) {
     sr::AppSettings s;
     s.fps = 30;
-    s.bitrate_bps = (s.fps == 60) ? 14'000'000 : 8'000'000;
-    EXPECT_EQ(s.bitrate_bps, 8'000'000u);
+    s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, false);
+    EXPECT_EQ(s.bitrate_bps, 4'000'000u);
 }
 
 // ini_path() returns a non-empty string
@@ -142,7 +142,7 @@ TEST(AppSettingsStaticTest, IniPathNonEmpty) {
 TEST(EncoderProfileTest, Fps60ProfileValues) {
     sr::EncoderProfile p;
     p.fps         = 60;
-    p.bitrate_bps = 14'000'000;
+    p.bitrate_bps = 6'000'000;
     p.width       = 1920;
     p.height      = 1080;
     p.gop_seconds = 2;
@@ -150,7 +150,7 @@ TEST(EncoderProfileTest, Fps60ProfileValues) {
     p.b_frames    = 0;
 
     EXPECT_EQ(p.fps, 60u);
-    EXPECT_EQ(p.bitrate_bps, 14'000'000u);
+    EXPECT_EQ(p.bitrate_bps, 6'000'000u);
     EXPECT_EQ(p.width,  1920u);
     EXPECT_EQ(p.height, 1080u);
     EXPECT_EQ(p.b_frames, 0u);
@@ -161,12 +161,12 @@ TEST(EncoderProfileTest, Fps60ProfileValues) {
 TEST(EncoderProfileTest, Fps30ProfileValues) {
     sr::EncoderProfile p;
     p.fps         = 30;
-    p.bitrate_bps = 8'000'000;
+    p.bitrate_bps = 4'000'000;
     p.width       = 1920;
     p.height      = 1080;
 
     EXPECT_EQ(p.fps, 30u);
-    EXPECT_EQ(p.bitrate_bps, 8'000'000u);
+    EXPECT_EQ(p.bitrate_bps, 4'000'000u);
 }
 
 // ============================================================================
@@ -177,8 +177,7 @@ TEST(EncoderProfileTest, Fps30ProfileValues) {
 TEST_F(AppSettingsTest, HighQualityDefaultIsOff) {
     auto s = LoadFromIni();
     EXPECT_FALSE(s.high_quality);
-    // Default bitrate for 30fps without HQ
-    EXPECT_EQ(s.bitrate_bps, 8'000'000u);
+    EXPECT_EQ(s.bitrate_bps, 4'000'000u);
 }
 
 // Round-trip: save high_quality=true, reload
@@ -191,7 +190,7 @@ TEST_F(AppSettingsTest, SaveAndLoadHighQualityOn) {
 
     auto loaded = LoadFromIni();
     EXPECT_TRUE(loaded.high_quality);
-    EXPECT_EQ(loaded.bitrate_bps, 20'000'000u);
+    EXPECT_EQ(loaded.bitrate_bps, 8'000'000u);
 }
 
 // Round-trip: save high_quality=false, reload — should keep normal bitrate
@@ -204,10 +203,10 @@ TEST_F(AppSettingsTest, SaveAndLoadHighQualityOff) {
 
     auto loaded = LoadFromIni();
     EXPECT_FALSE(loaded.high_quality);
-    EXPECT_EQ(loaded.bitrate_bps, 8'000'000u);
+    EXPECT_EQ(loaded.bitrate_bps, 4'000'000u);
 }
 
-// 60fps + high_quality = 28 Mbps
+// 60fps + high_quality = 10 Mbps
 TEST_F(AppSettingsTest, HighQuality60FpsBitrate) {
     sr::AppSettings s;
     s.fps          = 60;
@@ -218,15 +217,15 @@ TEST_F(AppSettingsTest, HighQuality60FpsBitrate) {
     auto loaded = LoadFromIni();
     EXPECT_TRUE(loaded.high_quality);
     EXPECT_EQ(loaded.fps, 60u);
-    EXPECT_EQ(loaded.bitrate_bps, 28'000'000u);
+    EXPECT_EQ(loaded.bitrate_bps, 10'000'000u);
 }
 
 // compute_bitrate static function covers all 4 cases
 TEST(AppSettingsStaticTest, ComputeBitrateAllCombinations) {
     // Normal quality
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, false), 8'000'000u);
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(60, false), 14'000'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, false), 4'000'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(60, false), 6'000'000u);
     // High quality
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, true),  20'000'000u);
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(60, true),  28'000'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, true),  8'000'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(60, true),  10'000'000u);
 }

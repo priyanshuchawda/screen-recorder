@@ -18,8 +18,8 @@ namespace sr {
 
 using Microsoft::WRL::ComPtr;
 
-// Video frame queue — spec mandates max 5 frames
-using FrameQueue = BoundedQueue<RenderFrame, 5>;
+// Video frame queue — intentionally small for laptop RAM and latency
+using FrameQueue = BoundedQueue<RenderFrame, 3>;
 
 // Forward declare the PIMPL impl class (defined in capture_engine.cpp)
 struct CaptureEngineImpl;

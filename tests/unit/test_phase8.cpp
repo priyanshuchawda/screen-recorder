@@ -12,6 +12,7 @@
 // ─── Utility headers ──────────────────────────────────────────────────────────
 #include "utils/bounded_queue.h"
 #include "utils/render_frame.h"
+#include "capture/capture_engine.h"
 
 // ─── T032: AudioResampler ─────────────────────────────────────────────────────
 #include "audio/audio_resampler.h"
@@ -25,10 +26,8 @@ namespace sr {
 // =============================================================================
 // T036 — Queue Stability Tests
 // =============================================================================
-TEST(T036_QueueStability, VideoQueueCapacityIsFive) {
-    // The spec mandates max 5 frames for the video queue.
-    using VQ = BoundedQueue<int, 5>;
-    EXPECT_EQ(VQ::capacity(), 5u);
+TEST(T036_QueueStability, VideoQueueCapacityIsThree) {
+    EXPECT_EQ(FrameQueue::capacity(), 3u);
 }
 
 TEST(T036_QueueStability, AudioQueueCapacityIs16) {
@@ -202,10 +201,7 @@ TEST(T033_ThreadPriority, SetThreadPriorityAboveNormalWorks) {
 // T034 — Resolution Change Detection (structural test)
 // =============================================================================
 TEST(T034_ResolutionChange, BoundedQueueCapacityMatchesSpec) {
-    // FrameQueue = BoundedQueue<RenderFrame, 5>; spec mandates max 5 frames.
-    // We test the queue template with a simple int to avoid COM/D3D11 init.
-    using TestQueue = BoundedQueue<int, 5>;
-    EXPECT_EQ(TestQueue::capacity(), static_cast<size_t>(5));
+    EXPECT_EQ(FrameQueue::capacity(), static_cast<size_t>(3));
 }
 
 // =============================================================================

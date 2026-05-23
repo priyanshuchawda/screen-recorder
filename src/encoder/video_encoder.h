@@ -74,7 +74,7 @@ private:
     bool        initialized_ = false;
     bool        mft_provides_output_samples_ = true;
     uint32_t    mft_output_sample_size_      = 1 << 20;
-    uint32_t    active_bitrate_bps_          = 8'000'000;
+    uint32_t    active_bitrate_bps_          = 4'000'000;
 
     // For HW path: need staging texture to share with MFT
     bool        hw_path_     = false;

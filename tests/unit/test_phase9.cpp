@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "app/telemetry.h"
+#include "app/camera_overlay.h"
 #include "sync/frame_pacer.h"
 #include "encoder/power_mode.h"
 #include "utils/bounded_queue.h"
@@ -218,7 +219,7 @@ TEST(T042_PowerMode, ClampForPowerOnACReturnsRequestedProfile) {
     } else {
         EXPECT_LE(result.fps,         15u);
         EXPECT_LE(result.bitrate_bps, 1'500'000u);
-        EXPECT_LE(result.width,       854u);
+        EXPECT_LE(result.width,       848u);
         EXPECT_LE(result.height,      480u);
     }
 }
@@ -238,6 +239,13 @@ TEST(T042_PowerMode, BatteryProfileClampsToHardwareEncoderCompatibleDimensions) 
     EXPECT_EQ(throttled.height,      480u);
     EXPECT_EQ(throttled.width % 16u, 0u);
     EXPECT_EQ(throttled.height % 16u, 0u);
+}
+
+TEST(T042_PowerMode, CameraPreviewUsesEfficiencyIntervals) {
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(false), 66);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(true), 100);
+    EXPECT_LE(sr::CameraOverlay::kEfficiencyPreviewMaxWidth, 640u);
+    EXPECT_LE(sr::CameraOverlay::kEfficiencyPreviewMaxHeight, 480u);
 }
 
 // ============================================================

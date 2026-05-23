@@ -5,7 +5,7 @@
 // Max depth is statically bounded by Capacity — queues NEVER grow unboundedly.
 //
 // T036 Memory Stability Review:
-//   - Video queue:  Capacity=5  → max 5 frames * ~6 MB (D3D11 texture ref) = bounded
+//   - Video queue:  Capacity=3  → max 3 queued D3D11 texture refs = bounded
 //   - Audio queue:  Capacity=16 → max 16 packets * ~10ms PCM ≈ bounded
 //   - All queues use std::array<T, Capacity+1> — FIXED stack/BSS allocation at startup
 //   - try_push returns false (caller drops) when full — NO dynamic growth
@@ -14,8 +14,8 @@
 //   - AudioPacket.buffer is std::vector<uint8_t> — bounded by PCM packet size (~1KB)
 //   - No global statics with COM objects (COM uninit-safe)
 //
-// Architectural constraint check (spec mandates max 5 video frames):
-//   BoundedQueue<RenderFrame, 5>  ← MUST stay at 5 (see FrameQueue alias)
+// Architectural constraint check:
+//   BoundedQueue<RenderFrame, 3>  ← keep intentionally small for laptop RAM/latency
 
 #include <atomic>
 #include <optional>

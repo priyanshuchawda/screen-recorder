@@ -87,11 +87,11 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             10, y, 330, 70, hwnd, (HMENU)IDC_LBL_FPS, nullptr, nullptr);
 
-        CreateWindowW(L"BUTTON", L"30 fps  (8 Mbps \u2014 recommended for battery)",
+        CreateWindowW(L"BUTTON", L"30 fps  (4 Mbps \u2014 recommended for battery)",
             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
             20, y + 22, 300, 20, hwnd, (HMENU)IDC_RADIO_30, nullptr, nullptr);
 
-        CreateWindowW(L"BUTTON", L"60 fps  (14 Mbps \u2014 smoother, more CPU/disk)",
+        CreateWindowW(L"BUTTON", L"60 fps  (6 Mbps \u2014 smoother, more CPU/disk)",
             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON,
             20, y + 44, 300, 20, hwnd, (HMENU)IDC_RADIO_60, nullptr, nullptr);
 
@@ -104,7 +104,7 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
         // ---------- High Quality checkbox ----------
         y += 88;
-        CreateWindowW(L"BUTTON", L"High Quality (higher bitrate \u2014 larger files, sharper video)",
+        CreateWindowW(L"BUTTON", L"High Quality (8/10 Mbps \u2014 larger files, sharper video)",
             WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
             14, y, 330, 20, hwnd, (HMENU)IDC_CHK_HQ, nullptr, nullptr);
         CheckDlgButton(hwnd, IDC_CHK_HQ,

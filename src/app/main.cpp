@@ -280,8 +280,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                          WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                          12, y, 116, 28, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
 
-        // Profile label: e.g. "30 fps | 8 Mbps"
-        g_lbl_profile = CreateWindowW(L"STATIC", L"30 fps | 8 Mbps",
+        // Profile label: e.g. "30 fps | 4 Mbps"
+        g_lbl_profile = CreateWindowW(L"STATIC", L"30 fps | 4 Mbps",
                         WS_VISIBLE | WS_CHILD | SS_LEFT,
                         138, y + 6, 250, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
 
