@@ -112,6 +112,11 @@ struct AppSettings {
         }
         return (fps == 60) ? 6'000'000 : 4'000'000;
     }
+
+    void set_high_quality(bool enabled) {
+        high_quality = enabled;
+        bitrate_bps = compute_bitrate(fps, high_quality);
+    }
 };
 
 } // namespace sr

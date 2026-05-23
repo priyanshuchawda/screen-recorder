@@ -34,6 +34,7 @@
 #define ID_LABEL_DROPPED 1009
 #define ID_BTN_SETTINGS  1010
 #define ID_LABEL_PROFILE 1011
+#define ID_BTN_HQ        1012
 #define ID_TIMER_UPDATE  1
 
 // Custom messages for marshalling background thread callbacks to UI thread
@@ -52,6 +53,7 @@ static HWND g_btn_stop      = nullptr;
 static HWND g_btn_pause     = nullptr;
 static HWND g_btn_mute      = nullptr;
 static HWND g_btn_settings  = nullptr;
+static HWND g_btn_hq        = nullptr;
 static HWND g_lbl_status    = nullptr;
 static HWND g_lbl_time      = nullptr;
 static HWND g_lbl_fps       = nullptr;
@@ -83,6 +85,25 @@ static int64_t g_paused_total_ms = 0;
 static int64_t g_pause_start_ms  = 0;
 
 // ----------------------------------------------------------------------------
+static void ApplyEncoderProfileFromSettings()
+{
+    sr::EncoderProfile profile;
+    profile.fps         = g_settings.fps;
+    profile.bitrate_bps = g_settings.bitrate_bps;
+    g_controller.set_encoder_profile(profile);
+}
+
+static void UpdateProfileLabel()
+{
+    if (!g_lbl_profile) return;
+    wchar_t prof_buf[64];
+    _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
+        L"%u fps  |  %u Mbps%s",
+        g_settings.fps, g_settings.bitrate_bps / 1'000'000,
+        g_settings.high_quality ? L"  |  HQ" : L"");
+    SetWindowTextW(g_lbl_profile, prof_buf);
+}
+
 void UpdateUI()
 {
     auto state = g_controller.state();
@@ -101,9 +122,11 @@ void UpdateUI()
     EnableWindow(g_btn_stop,  can_stop  ? TRUE : FALSE);
     EnableWindow(g_btn_pause, can_stop  ? TRUE : FALSE);
     EnableWindow(g_btn_mute,  can_stop  ? TRUE : FALSE);
+    EnableWindow(g_btn_hq,    can_start ? TRUE : FALSE);
 
     SetWindowTextW(g_btn_pause, (state == sr::SessionState::Paused) ? L"Resume" : L"Pause");
     SetWindowTextW(g_btn_mute,  g_controller.is_muted() ? L"Unmute" : L"Mute");
+    SetWindowTextW(g_btn_hq,    g_settings.high_quality ? L"HQ On" : L"HQ Off");
 
     // Elapsed time
     if (state == sr::SessionState::Recording || state == sr::SessionState::Paused) {
@@ -160,6 +183,7 @@ static void ApplyUIFont(HWND hwnd) {
     if (g_btn_pause)    SendMessageW(g_btn_pause,    WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
     if (g_btn_mute)     SendMessageW(g_btn_mute,     WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
     if (g_btn_settings) SendMessageW(g_btn_settings, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
+    if (g_btn_hq)       SendMessageW(g_btn_hq,       WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
 }
 
 static void EnableDarkTitleBar(HWND hwnd) {
@@ -279,11 +303,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_btn_settings = CreateWindowW(L"BUTTON", L"\u2699 Settings",
                          WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                          12, y, 116, 28, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
+        g_btn_hq = CreateWindowW(L"BUTTON", L"HQ Off",
+                   WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+                   138, y, 78, 28, hwnd, (HMENU)ID_BTN_HQ, nullptr, nullptr);
 
         // Profile label: e.g. "30 fps | 4 Mbps"
         g_lbl_profile = CreateWindowW(L"STATIC", L"30 fps | 4 Mbps",
                         WS_VISIBLE | WS_CHILD | SS_LEFT,
-                        138, y + 6, 250, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
+                        226, y + 6, 170, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
 
         ApplyUIFont(hwnd);
 
@@ -426,11 +453,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 } else {
                     g_storage.resolveDefaultDirectory();
                 }
-                // Apply encoder profile for next recording
-                sr::EncoderProfile profile;
-                profile.fps         = g_settings.fps;
-                profile.bitrate_bps = g_settings.bitrate_bps;
-                g_controller.set_encoder_profile(profile);
+                ApplyEncoderProfileFromSettings();
                 // Persist
                 g_settings.save();
 
@@ -441,13 +464,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     g_camera_overlay.stop();
                 }
 
-                // Update profile label
-                wchar_t prof_buf[64];
-                _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
-                    L"%u fps  |  %u Mbps%s",
-                    g_settings.fps, g_settings.bitrate_bps / 1'000'000,
-                    g_settings.high_quality ? L"  |  HQ" : L"");
-                SetWindowTextW(g_lbl_profile, prof_buf);
+                UpdateProfileLabel();
                 // Refresh path display
                 SetWindowTextW(g_lbl_path, g_storage.outputDirectory().c_str());
                 SR_LOG_INFO(L"Settings applied: %u fps, high_quality=%s, dir=%s",
@@ -455,6 +472,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                             g_settings.high_quality ? L"on" : L"off",
                             g_settings.output_dir.empty() ? L"(default)" : g_settings.output_dir.c_str());
             }
+            break;
+
+        case ID_BTN_HQ:
+            if (!g_controller.state_is_idle()) {
+                MessageBoxW(hwnd,
+                    L"Please stop the recording before changing High Quality mode.",
+                    L"High Quality", MB_ICONINFORMATION | MB_OK);
+                break;
+            }
+            g_settings.set_high_quality(!g_settings.high_quality);
+            ApplyEncoderProfileFromSettings();
+            g_settings.save();
+            UpdateProfileLabel();
+            SR_LOG_INFO(L"High Quality toggled: %s (%u bps)",
+                        g_settings.high_quality ? L"on" : L"off",
+                        g_settings.bitrate_bps);
+            UpdateUI();
             break;
         }
         break;
@@ -511,10 +545,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
         g_storage.setOutputDirectory(g_settings.output_dir);
     }
     {
-        sr::EncoderProfile profile;
-        profile.fps         = g_settings.fps;
-        profile.bitrate_bps = g_settings.bitrate_bps;
-        g_controller.set_encoder_profile(profile);
+        ApplyEncoderProfileFromSettings();
     }
 
     g_controller.initialize(
@@ -598,15 +629,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
         }
     }
 
-    // Reflect loaded settings in the profile label
-    if (g_lbl_profile) {
-        wchar_t prof_buf[64];
-        _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
-            L"%u fps  |  %u Mbps%s",
-            g_settings.fps, g_settings.bitrate_bps / 1'000'000,
-            g_settings.high_quality ? L"  |  HQ" : L"");
-        SetWindowTextW(g_lbl_profile, prof_buf);
-    }
+    UpdateProfileLabel();
 
     if (g_settings.camera_overlay_enabled) {
         g_camera_overlay.start(g_hwnd);

@@ -168,13 +168,8 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 state->settings->fps = IsDlgButtonChecked(hwnd, IDC_RADIO_60)
                     ? 60u : 30u;
 
-                // Read high quality
-                state->settings->high_quality =
-                    (IsDlgButtonChecked(hwnd, IDC_CHK_HQ) == BST_CHECKED);
-
-                // Compute bitrate from fps + high_quality
-                state->settings->bitrate_bps = sr::AppSettings::compute_bitrate(
-                    state->settings->fps, state->settings->high_quality);
+                state->settings->set_high_quality(
+                    IsDlgButtonChecked(hwnd, IDC_CHK_HQ) == BST_CHECKED);
 
                 // Read output dir
                 wchar_t dir[MAX_PATH]{};
