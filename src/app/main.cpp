@@ -93,7 +93,7 @@ static void ApplyEncoderProfileFromSettings()
     const auto resolution = sr::recording_resolution_for_quality(g_settings.high_quality);
     profile.width       = resolution.width;
     profile.height      = resolution.height;
-    g_controller.set_encoder_profile(profile);
+    g_controller.set_encoder_profile(profile, g_settings.high_quality);
 }
 
 static void ApplyCameraProfileFromSettings()

@@ -1,7 +1,7 @@
 #pragma once
 // power_mode.h — T042: Dynamic power-mode encoder adjustment
-// Reads GetSystemPowerStatus; on battery, aggressively clamps to 15fps/1.5Mbps/480p.
-// On AC, keeps the requested profile unchanged.
+// Reads GetSystemPowerStatus; base mode on battery clamps to 15fps/1.5Mbps/480p.
+// High Quality mode keeps the requested profile unchanged on AC and battery.
 
 #include <windows.h>
 #include <algorithm>
@@ -53,6 +53,21 @@ public:
                     requested.fps, requested.bitrate_bps,
                     requested.width, requested.height);
         return throttled;
+    }
+
+    static EncoderProfile clamp_for_quality_and_power_state(const EncoderProfile& requested,
+                                                            bool on_ac,
+                                                            bool high_quality) {
+        if (high_quality) {
+            SR_LOG_INFO(L"[PowerMode] HQ — profile: %u fps / %u bps / %ux%u "
+                        L"(%s power)",
+                        requested.fps, requested.bitrate_bps,
+                        requested.width, requested.height,
+                        on_ac ? L"AC" : L"Battery");
+            return requested;
+        }
+
+        return clamp_for_power_state(requested, on_ac);
     }
 
     // Clamp the requested EncoderProfile for the current power state.

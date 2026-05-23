@@ -6,7 +6,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-green)
-![Tests](https://img.shields.io/badge/Tests-117%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-129%20passing-brightgreen)
 
 ## Features
 
@@ -14,9 +14,9 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 - H.264 video + AAC audio muxed to MP4 using Media Foundation
 - **System Audio Capture**: Record desktop/YouTube audio via WASAPI Loopback
 - **Microphone Noise Gate**: RMS-based gating to eliminate background hiss
-- **Camera Overlay**: Efficient default preview with an HQ 720p-capable AC profile
+- **Camera Overlay**: Efficient default preview with an HQ 720p-capable profile
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
-- **High Quality Mode**: Optional 1080p-capable hardware profile with higher bitrate recording (8/10 Mbps)
+- **High Quality Mode**: Optional 1080p-capable hardware profile with higher bitrate recording (8/10 Mbps) on AC or battery
 - Pause/resume with monotonic timestamp rebasing
 - Mute/unmute with silence injection
 - Recovery flow for orphaned `.partial.mp4` files

@@ -272,6 +272,38 @@ TEST(T042_PowerMode, ExplicitBatteryPowerStateClampsBeforeCaptureAllocation) {
     EXPECT_EQ(result.height, sr::PowerModeDetector::kBatteryMaxHeight);
 }
 
+TEST(T042_PowerMode, HighQualityProfileBypassesBatteryClamp) {
+    sr::EncoderProfile req;
+    req.fps         = 30;
+    req.bitrate_bps = 8'000'000;
+    req.width       = 1920;
+    req.height      = 1080;
+
+    auto result = sr::PowerModeDetector::clamp_for_quality_and_power_state(
+        req, false, true);
+
+    EXPECT_EQ(result.fps, req.fps);
+    EXPECT_EQ(result.bitrate_bps, req.bitrate_bps);
+    EXPECT_EQ(result.width, req.width);
+    EXPECT_EQ(result.height, req.height);
+}
+
+TEST(T042_PowerMode, BaseQualityStillClampsOnBattery) {
+    sr::EncoderProfile req;
+    req.fps         = 30;
+    req.bitrate_bps = 8'000'000;
+    req.width       = 1920;
+    req.height      = 1080;
+
+    auto result = sr::PowerModeDetector::clamp_for_quality_and_power_state(
+        req, false, false);
+
+    EXPECT_EQ(result.fps, sr::PowerModeDetector::kBatteryMaxFps);
+    EXPECT_EQ(result.bitrate_bps, sr::PowerModeDetector::kBatteryMaxBitrate);
+    EXPECT_EQ(result.width, sr::PowerModeDetector::kBatteryMaxWidth);
+    EXPECT_EQ(result.height, sr::PowerModeDetector::kBatteryMaxHeight);
+}
+
 TEST(T042_PowerMode, CameraPreviewUsesEfficiencyIntervals) {
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(false), 66);
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(true), 100);
@@ -279,17 +311,17 @@ TEST(T042_PowerMode, CameraPreviewUsesEfficiencyIntervals) {
     EXPECT_LE(sr::CameraOverlay::kEfficiencyPreviewMaxHeight, 480u);
 }
 
-TEST(T042_PowerMode, CameraPreviewUsesHighQualityProfileOnlyOnAC) {
+TEST(T042_PowerMode, CameraPreviewUsesHighQualityProfileOnAnyPowerState) {
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(false, false), 66);
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(false, true), 33);
-    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(true, true), 100);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(true, true), 33);
 
     EXPECT_EQ(sr::CameraOverlay::preview_max_width_for_profile(false, false), 640u);
     EXPECT_EQ(sr::CameraOverlay::preview_max_height_for_profile(false, false), 480u);
     EXPECT_EQ(sr::CameraOverlay::preview_max_width_for_profile(false, true), 1280u);
     EXPECT_EQ(sr::CameraOverlay::preview_max_height_for_profile(false, true), 720u);
-    EXPECT_EQ(sr::CameraOverlay::preview_max_width_for_profile(true, true), 640u);
-    EXPECT_EQ(sr::CameraOverlay::preview_max_height_for_profile(true, true), 480u);
+    EXPECT_EQ(sr::CameraOverlay::preview_max_width_for_profile(true, true), 1280u);
+    EXPECT_EQ(sr::CameraOverlay::preview_max_height_for_profile(true, true), 720u);
 }
 
 TEST(T042_PowerMode, CameraPreviewProcessingSkipsFramesBeforeInterval) {
