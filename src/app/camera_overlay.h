@@ -32,11 +32,12 @@ public:
         return preview_interval_ms_for_profile(on_battery, false);
     }
     static bool use_high_quality_preview(bool on_battery, bool high_quality) {
-        return high_quality && !on_battery;
+        (void)on_battery;
+        return high_quality;
     }
     static int preview_interval_ms_for_profile(bool on_battery, bool high_quality) {
-        if (on_battery) return 100; // 10 fps on battery
-        return high_quality ? 33 : 66; // ~30 fps HQ on AC, ~15 fps default on AC
+        if (high_quality) return 33; // ~30 fps HQ on AC or battery
+        return on_battery ? 100 : 66; // default: 10 fps on battery, ~15 fps on AC
     }
     static UINT32 preview_max_width_for_profile(bool on_battery, bool high_quality) {
         return use_high_quality_preview(on_battery, high_quality)

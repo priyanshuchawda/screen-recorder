@@ -59,7 +59,11 @@ public:
     bool resume();
 
     // Override encoder profile (fps/bitrate/resolution) — must be called before start()
-    void set_encoder_profile(const EncoderProfile& profile) { pending_profile_ = profile; has_pending_profile_ = true; }
+    void set_encoder_profile(const EncoderProfile& profile, bool high_quality = false) {
+        pending_profile_ = profile;
+        pending_profile_high_quality_ = high_quality;
+        has_pending_profile_ = true;
+    }
 
     // Mute/Unmute audio
     void set_muted(bool muted);
@@ -121,6 +125,7 @@ private:
 
     // Optional encoder profile override (set via set_encoder_profile before start)
     EncoderProfile pending_profile_;
+    bool           pending_profile_high_quality_ = false;
     bool           has_pending_profile_ = false;
 
     // Callbacks

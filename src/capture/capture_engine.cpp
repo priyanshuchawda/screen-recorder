@@ -353,7 +353,7 @@ bool CaptureEngine::initialize(ID3D11Device* device,
     SR_LOG_INFO(L"WGC item: %ux%u", capture_width_, capture_height_);
 
     // T034: fix output resolution so encoder is never reset on runtime changes.
-    // The controller passes the requested profile after power-mode clamping:
+    // The controller passes the effective profile:
     // efficiency/default stays 848x480; HQ can request up to 1920x1080.
     const auto output_resolution =
         clamp_recording_resolution(source_width, source_height, max_resolution);
