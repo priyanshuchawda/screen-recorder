@@ -69,4 +69,27 @@ struct EncoderProfile {
     // CBR by default, Baseline/Main profile
 };
 
+struct RecordingResolution {
+    uint32_t width = 848;
+    uint32_t height = 480;
+};
+
+inline constexpr RecordingResolution kEfficiencyRecordingResolution{848, 480};
+inline constexpr RecordingResolution kHighQualityRecordingResolution{1920, 1080};
+
+constexpr RecordingResolution recording_resolution_for_quality(bool high_quality) noexcept {
+    return high_quality ? kHighQualityRecordingResolution : kEfficiencyRecordingResolution;
+}
+
+constexpr RecordingResolution clamp_recording_resolution(
+    uint32_t source_width,
+    uint32_t source_height,
+    RecordingResolution requested) noexcept
+{
+    return {
+        source_width < requested.width ? source_width : requested.width,
+        source_height < requested.height ? source_height : requested.height
+    };
+}
+
 } // namespace sr

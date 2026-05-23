@@ -242,3 +242,21 @@ TEST(AppSettingsStaticTest, SetHighQualityRecomputesBitrate) {
     EXPECT_FALSE(s.high_quality);
     EXPECT_EQ(s.bitrate_bps, 6'000'000u);
 }
+
+TEST(AppSettingsStaticTest, RecordingResolutionMatchesQualityMode) {
+    const auto normal = sr::recording_resolution_for_quality(false);
+    EXPECT_EQ(normal.width, 848u);
+    EXPECT_EQ(normal.height, 480u);
+
+    const auto hq = sr::recording_resolution_for_quality(true);
+    EXPECT_EQ(hq.width, 1920u);
+    EXPECT_EQ(hq.height, 1080u);
+}
+
+TEST(AppSettingsStaticTest, RecordingResolutionClampsToSourceDimensions) {
+    const auto hq = sr::recording_resolution_for_quality(true);
+    const auto clamped = sr::clamp_recording_resolution(1366, 768, hq);
+
+    EXPECT_EQ(clamped.width, 1366u);
+    EXPECT_EQ(clamped.height, 768u);
+}

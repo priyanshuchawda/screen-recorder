@@ -91,11 +91,33 @@ bool SessionController::start() {
     sync_.start();
 
     // ---------------------------------------------------------------
+    // Resolve requested recording profile before capture initialization.
+    // This lets capture allocate only the texture size the active profile needs.
+    // ---------------------------------------------------------------
+    EncoderProfile enc_prof;
+    if (has_pending_profile_) {
+        enc_prof = pending_profile_;
+        SR_LOG_INFO(L"Using custom encoder profile: %ufps, %u bps, %ux%u",
+                    enc_prof.fps, enc_prof.bitrate_bps,
+                    enc_prof.width, enc_prof.height);
+    } else {
+        enc_prof.fps         = 30;
+        enc_prof.bitrate_bps = 4'000'000;
+        enc_prof.width       = kEfficiencyRecordingResolution.width;
+        enc_prof.height      = kEfficiencyRecordingResolution.height;
+    }
+
+    // T042: Apply power-mode clamping before capture allocates output textures.
+    last_power_ac_ = PowerModeDetector::is_on_ac_power();
+    enc_prof = PowerModeDetector::clamp_for_power_state(enc_prof, last_power_ac_);
+
+    // ---------------------------------------------------------------
     // Initialize CaptureEngine
     // ---------------------------------------------------------------
     if (!capture_->initialize(probe_.d3d_device.Get(),
                                probe_.d3d_context.Get(),
-                               frame_queue_.get()))
+                               frame_queue_.get(),
+                               {enc_prof.width, enc_prof.height}))
     {
         notify_error(L"Capture engine initialization failed");
         machine_.transition(SessionEvent::Stop);
@@ -125,22 +147,10 @@ bool SessionController::start() {
     }
 
     // ---------------------------------------------------------------
-    // Initialize VideoEncoder  (T042: clamp profile for power mode)
+    // Initialize VideoEncoder with the actual capture output dimensions.
     // ---------------------------------------------------------------
-    EncoderProfile enc_prof;
-    if (has_pending_profile_) {
-        enc_prof = pending_profile_;
-        SR_LOG_INFO(L"Using custom encoder profile: %ufps, %u bps", enc_prof.fps, enc_prof.bitrate_bps);
-    } else {
-        enc_prof.fps         = 30;
-        enc_prof.bitrate_bps = 4'000'000;
-    }
     enc_prof.width  = capture_->width()  ? capture_->width()  : 1920;
     enc_prof.height = capture_->height() ? capture_->height() : 1080;
-
-    // T042: Apply power-mode clamping (battery throttles; AC keeps requested profile).
-    last_power_ac_ = PowerModeDetector::is_on_ac_power();
-    enc_prof = PowerModeDetector::clamp_for_power(enc_prof);
 
     if (!encoder_->initialize(enc_prof,
                                probe_.dxgi_device_manager.Get(),

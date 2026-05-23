@@ -37,18 +37,14 @@ public:
         return throttled;
     }
 
-    // Clamp the requested EncoderProfile for the current power state.
-    //   AC power  → unchanged (use requested profile)
-    //   Battery   → aggressive: 15fps / 1.5Mbps / 848x480
-    static EncoderProfile clamp_for_power(const EncoderProfile& requested) {
-        if (is_on_ac_power()) {
+    static EncoderProfile clamp_for_power_state(const EncoderProfile& requested, bool on_ac) {
+        if (on_ac) {
             SR_LOG_INFO(L"[PowerMode] AC — profile: %u fps / %u bps / %ux%u",
                         requested.fps, requested.bitrate_bps,
                         requested.width, requested.height);
             return requested;
         }
 
-        // Battery throttle: aggressive caps for maximum battery life
         EncoderProfile throttled = clamp_for_battery(requested);
         SR_LOG_INFO(L"[PowerMode] Battery — throttling to %u fps / %u bps / %ux%u "
                     L"(requested: %u fps / %u bps / %ux%u)",
@@ -57,6 +53,13 @@ public:
                     requested.fps, requested.bitrate_bps,
                     requested.width, requested.height);
         return throttled;
+    }
+
+    // Clamp the requested EncoderProfile for the current power state.
+    //   AC power  → unchanged (use requested profile)
+    //   Battery   → aggressive: 15fps / 1.5Mbps / 848x480
+    static EncoderProfile clamp_for_power(const EncoderProfile& requested) {
+        return clamp_for_power_state(requested, is_on_ac_power());
     }
 };
 

@@ -242,6 +242,36 @@ TEST(T042_PowerMode, BatteryProfileClampsToHardwareEncoderCompatibleDimensions) 
     EXPECT_EQ(throttled.height % 16u, 0u);
 }
 
+TEST(T042_PowerMode, ExplicitACPowerStateKeepsHighQualityProfile) {
+    sr::EncoderProfile req;
+    req.fps         = 30;
+    req.bitrate_bps = 8'000'000;
+    req.width       = 1920;
+    req.height      = 1080;
+
+    auto result = sr::PowerModeDetector::clamp_for_power_state(req, true);
+
+    EXPECT_EQ(result.fps, req.fps);
+    EXPECT_EQ(result.bitrate_bps, req.bitrate_bps);
+    EXPECT_EQ(result.width, req.width);
+    EXPECT_EQ(result.height, req.height);
+}
+
+TEST(T042_PowerMode, ExplicitBatteryPowerStateClampsBeforeCaptureAllocation) {
+    sr::EncoderProfile req;
+    req.fps         = 30;
+    req.bitrate_bps = 8'000'000;
+    req.width       = 1920;
+    req.height      = 1080;
+
+    auto result = sr::PowerModeDetector::clamp_for_power_state(req, false);
+
+    EXPECT_EQ(result.fps, sr::PowerModeDetector::kBatteryMaxFps);
+    EXPECT_EQ(result.bitrate_bps, sr::PowerModeDetector::kBatteryMaxBitrate);
+    EXPECT_EQ(result.width, sr::PowerModeDetector::kBatteryMaxWidth);
+    EXPECT_EQ(result.height, sr::PowerModeDetector::kBatteryMaxHeight);
+}
+
 TEST(T042_PowerMode, CameraPreviewUsesEfficiencyIntervals) {
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(false), 66);
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(true), 100);
