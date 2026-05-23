@@ -96,6 +96,11 @@ static void ApplyEncoderProfileFromSettings()
     g_controller.set_encoder_profile(profile);
 }
 
+static void ApplyCameraProfileFromSettings()
+{
+    g_camera_overlay.set_high_quality(g_settings.high_quality);
+}
+
 static void UpdateProfileLabel()
 {
     if (!g_lbl_profile) return;
@@ -453,6 +458,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 break;
             }
             if (sr::ShowSettingsDialog(hwnd, g_settings)) {
+                const bool camera_was_running = g_camera_overlay.is_running();
+                if (camera_was_running) {
+                    g_camera_overlay.stop();
+                }
+
                 // Apply output directory
                 if (!g_settings.output_dir.empty()) {
                     g_storage.setOutputDirectory(g_settings.output_dir);
@@ -460,14 +470,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     g_storage.resolveDefaultDirectory();
                 }
                 ApplyEncoderProfileFromSettings();
+                ApplyCameraProfileFromSettings();
                 // Persist
                 g_settings.save();
 
                 // Camera overlay
                 if (g_settings.camera_overlay_enabled) {
                     g_camera_overlay.start(g_hwnd);
-                } else {
-                    g_camera_overlay.stop();
                 }
 
                 UpdateProfileLabel();
@@ -489,6 +498,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             g_settings.set_high_quality(!g_settings.high_quality);
             ApplyEncoderProfileFromSettings();
+            if (g_settings.camera_overlay_enabled && g_camera_overlay.is_running()) {
+                g_camera_overlay.stop();
+                ApplyCameraProfileFromSettings();
+                g_camera_overlay.start(g_hwnd);
+            } else {
+                ApplyCameraProfileFromSettings();
+            }
             g_settings.save();
             UpdateProfileLabel();
             SR_LOG_INFO(L"High Quality toggled: %s (%u bps)",
@@ -552,6 +568,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     }
     {
         ApplyEncoderProfileFromSettings();
+        ApplyCameraProfileFromSettings();
     }
 
     g_controller.initialize(

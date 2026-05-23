@@ -14,7 +14,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 - H.264 video + AAC audio muxed to MP4 using Media Foundation
 - **System Audio Capture**: Record desktop/YouTube audio via WASAPI Loopback
 - **Microphone Noise Gate**: RMS-based gating to eliminate background hiss
-- **Efficient Camera Overlay**: Low-FPS preview with correct stride handling
+- **Camera Overlay**: Efficient default preview with an HQ 720p-capable AC profile
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
 - **High Quality Mode**: Optional 1080p-capable hardware profile with higher bitrate recording (8/10 Mbps)
 - Pause/resume with monotonic timestamp rebasing
