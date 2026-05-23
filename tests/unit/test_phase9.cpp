@@ -15,6 +15,7 @@
 
 #include "app/telemetry.h"
 #include "app/camera_overlay.h"
+#include "audio/audio_mixer.h"
 #include "sync/frame_pacer.h"
 #include "encoder/power_mode.h"
 #include "utils/bounded_queue.h"
@@ -265,4 +266,32 @@ TEST(T043_WGCConsent, IsWGCSupportedDoesNotCrash) {
     bool supported = sr::CaptureEngine::is_wgc_supported();
     // On any Win10 1903+ build (which the CI machine is), this must be true.
     EXPECT_TRUE(supported) << "WGC is expected to be available on Win10 1903+ machines";
+}
+
+TEST(T044_AudioMixing, FindsClosestTimestampCompatibleLoopbackPacket) {
+    sr::AudioPacket mic;
+    mic.pts = 1'000'000;
+    mic.sample_rate = 48000;
+    mic.channels = 2;
+    mic.buffer.assign(1920, 0);
+
+    std::vector<sr::AudioPacket> loopback(3);
+    loopback[0].pts = 900'000;
+    loopback[0].sample_rate = 48000;
+    loopback[0].channels = 2;
+    loopback[0].buffer.assign(1920, 0);
+
+    loopback[1].pts = 1'012'000;
+    loopback[1].sample_rate = 48000;
+    loopback[1].channels = 2;
+    loopback[1].buffer.assign(1920, 0);
+
+    loopback[2].pts = 1'004'000;
+    loopback[2].sample_rate = 48000;
+    loopback[2].channels = 2;
+    loopback[2].buffer.assign(960, 0);
+
+    const auto match = sr::find_loopback_mix_candidate(mic, loopback, 20'000);
+    ASSERT_TRUE(match.has_value());
+    EXPECT_EQ(*match, 1u);
 }

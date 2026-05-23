@@ -4,6 +4,7 @@
 #include "controller/session_controller.h"
 #include "capture/capture_engine.h"
 #include "audio/audio_engine.h"
+#include "audio/audio_mixer.h"
 #include "encoder/video_encoder.h"
 #include "storage/mux_writer.h"
 #include "storage/storage_manager.h"
@@ -336,6 +337,7 @@ void SessionController::encode_loop() {
     ULONGLONG   last_mem_sample_ms = 0;
     ULONGLONG   last_power_check_ms = 0;
     constexpr ULONGLONG kPowerCheckIntervalMs = 10'000;
+    constexpr int64_t kAudioMixTolerance100ns = 20'000; // 2 ms
 
     struct ReusableAudioSample {
         ComPtr<IMFSample> sample;
@@ -507,10 +509,9 @@ void SessionController::encode_loop() {
 
                 // Mix loopback data into mic packet (additive mix with clamp)
                 if (!loopback_pkts.empty()) {
-                    // Use the first available loopback packet of matching size
-                    // In practice, both engines run at the same rate/block size
-                    for (auto it = loopback_pkts.begin(); it != loopback_pkts.end(); ++it) {
-                        if (it->buffer.size() == audio_pkt.buffer.size() && !it->is_silence) {
+                    if (auto match = find_loopback_mix_candidate(
+                            audio_pkt, loopback_pkts, kAudioMixTolerance100ns)) {
+                        auto it = loopback_pkts.begin() + static_cast<std::ptrdiff_t>(*match);
                             // Mix: interpret as float32 or int16 based on bits_per_sample
                             const uint32_t bps = audio_->bits_per_sample();
                             if (bps == 32) {
@@ -538,8 +539,6 @@ void SessionController::encode_loop() {
                             }
                             audio_pkt.is_silence = false;
                             loopback_pkts.erase(it);
-                            break;
-                        }
                     }
                 }
 
