@@ -427,7 +427,7 @@ void CameraOverlay::capture_loop() {
     }
 
     capture_running_.store(true, std::memory_order_release);
-    ULONGLONG last_present_ms = 0;
+    ULONGLONG last_processed_ms = 0;
     std::vector<uint8_t> tight_rgba;
     while (capture_running_.load(std::memory_order_acquire)) {
         DWORD stream_index = 0, flags = 0;
@@ -447,6 +447,12 @@ void CameraOverlay::capture_loop() {
         }
 
         if (sample) {
+            const int present_interval_ms = capture_interval_ms_.load(std::memory_order_relaxed);
+            const ULONGLONG now_ms = GetTickCount64();
+            if (!should_process_preview_frame(now_ms, last_processed_ms, present_interval_ms)) {
+                continue;
+            }
+
             ComPtr<IMFMediaBuffer> buf;
             if (SUCCEEDED(sample->ConvertToContiguousBuffer(&buf)) && buf) {
                 UINT32 w = frame_width_;
@@ -518,13 +524,9 @@ void CameraOverlay::capture_loop() {
                     }
 
                     if (host_hwnd_) {
-                        const int present_interval_ms = capture_interval_ms_.load(std::memory_order_relaxed);
-                        const ULONGLONG now_ms = GetTickCount64();
-                        if (present_interval_ms <= 0 || (now_ms - last_present_ms) >= static_cast<ULONGLONG>(present_interval_ms)) {
-                            InvalidateRect(host_hwnd_, nullptr, FALSE);
-                            last_present_ms = now_ms;
-                        }
+                        InvalidateRect(host_hwnd_, nullptr, FALSE);
                     }
+                    last_processed_ms = now_ms;
                 }
             }
         }

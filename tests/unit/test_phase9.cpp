@@ -248,6 +248,13 @@ TEST(T042_PowerMode, CameraPreviewUsesEfficiencyIntervals) {
     EXPECT_LE(sr::CameraOverlay::kEfficiencyPreviewMaxHeight, 480u);
 }
 
+TEST(T042_PowerMode, CameraPreviewProcessingSkipsFramesBeforeInterval) {
+    EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 0, 66));
+    EXPECT_FALSE(sr::CameraOverlay::should_process_preview_frame(1050, 1000, 66));
+    EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1066, 1000, 66));
+    EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 1000, 0));
+}
+
 // ============================================================
 // T043: WGC availability check
 // ============================================================
