@@ -20,7 +20,7 @@ struct MuxConfig {
     uint32_t video_height     = 1080;
     uint32_t video_fps_num    = 30;
     uint32_t video_fps_den    = 1;
-    uint32_t video_bitrate    = 8'000'000;
+    uint32_t video_bitrate    = 4'000'000;
 
     // Audio stream
     uint32_t audio_sample_rate    = 48000;

@@ -28,10 +28,10 @@ struct CameraFormatChoice {
 };
 
 LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool on_battery) {
-    const UINT32 max_w = on_battery ? 960 : 1280;
-    const UINT32 max_h = on_battery ? 540 : 720;
-    const UINT32 pref_w = on_battery ? 960 : 640;
-    const UINT32 pref_h = on_battery ? 540 : 360;
+    const UINT32 max_w = CameraOverlay::kEfficiencyPreviewMaxWidth;
+    const UINT32 max_h = CameraOverlay::kEfficiencyPreviewMaxHeight;
+    const UINT32 pref_w = CameraOverlay::kEfficiencyPreviewPreferredWidth;
+    const UINT32 pref_h = CameraOverlay::kEfficiencyPreviewPreferredHeight;
 
     const LONGLONG pixels = static_cast<LONGLONG>(w) * static_cast<LONGLONG>(h);
     const LONGLONG max_pixels = static_cast<LONGLONG>(max_w) * static_cast<LONGLONG>(max_h);
@@ -47,17 +47,9 @@ LONGLONG score_format(UINT32 w, UINT32 h, UINT32 fps_num, UINT32 fps_den, bool o
     score -= llabs(pref_pixels - pixels) / 8;
 
     const double fps = fps_den ? static_cast<double>(fps_num) / static_cast<double>(fps_den) : 30.0;
-    const double target_fps = on_battery ? 20.0 : 60.0;
+    const double target_fps = on_battery ? 10.0 : 15.0;
     const double fps_for_score = fps > target_fps ? target_fps : fps;
     score += static_cast<LONGLONG>(fps_for_score * 200000.0);
-    if (!on_battery) {
-        if (fps >= 50.0) {
-            score += 5'000'000;
-        } else if (fps >= 40.0) {
-            score += 2'500'000;
-        }
-    }
-
     const double aspect = h ? static_cast<double>(w) / static_cast<double>(h) : (16.0 / 9.0);
     const double aspect_diff = std::abs(aspect - (16.0 / 9.0));
     score -= static_cast<LONGLONG>(aspect_diff * 150000.0);
@@ -251,9 +243,10 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 }
 
 void CameraOverlay::apply_preview_tuning() {
-    // On battery: 20fps (50ms) to conserve power. On AC: 60fps (16ms) for smooth self-preview.
-    int interval = on_battery_ ? 50 : 16;
+    const int interval = preview_interval_ms_for_power(on_battery_);
     capture_interval_ms_.store(interval, std::memory_order_relaxed);
+    SR_LOG_INFO(L"CameraOverlay: efficiency preview target ~%u fps",
+                interval > 0 ? static_cast<unsigned>(1000 / interval) : 0u);
 }
 
 void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {

@@ -132,7 +132,7 @@ bool SessionController::start() {
         SR_LOG_INFO(L"Using custom encoder profile: %ufps, %u bps", enc_prof.fps, enc_prof.bitrate_bps);
     } else {
         enc_prof.fps         = 30;
-        enc_prof.bitrate_bps = 8'000'000;
+        enc_prof.bitrate_bps = 4'000'000;
     }
     enc_prof.width  = capture_->width()  ? capture_->width()  : 1920;
     enc_prof.height = capture_->height() ? capture_->height() : 1080;
@@ -310,7 +310,12 @@ TelemetrySnapshot SessionController::telemetry_snapshot() const {
     // Update backlog counter from the live queue depth
     uint32_t backlog = frame_queue_ ? static_cast<uint32_t>(frame_queue_->size()) : 0;
     const_cast<TelemetryStore&>(telemetry_).set_backlog(backlog);
-    return telemetry_.snapshot(enc_mode, last_power_ac_);
+    auto snapshot = telemetry_.snapshot(enc_mode, last_power_ac_);
+    if (capture_) {
+        snapshot.frames_captured = capture_->frames_captured();
+        snapshot.frames_dropped += capture_->frames_dropped();
+    }
+    return snapshot;
 }
 
 // ---------------------------------------------------------------------------

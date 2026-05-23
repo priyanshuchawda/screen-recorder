@@ -22,6 +22,7 @@
 
 #include "utils/bounded_queue.h"
 #include "utils/render_frame.h"
+#include "capture/capture_engine.h"
 
 #pragma comment(lib, "psapi.lib")
 
@@ -40,10 +41,10 @@ static SIZE_T get_working_set_bytes() {
 // T040: BoundedQueue produces no heap growth after warmup
 TEST(T040_MemorySampler, BoundedQueueNoHeapGrowth) {
     // Warmup: fill and drain queue several times to settle allocator
-    sr::BoundedQueue<int, 5> q;
+    sr::BoundedQueue<int, sr::FrameQueue::capacity()> q;
     for (int w = 0; w < 10; ++w) {
-        for (int i = 0; i < 5; ++i) { int v = i * w; q.try_push(std::move(v)); }
-        for (int i = 0; i < 5; ++i) q.try_pop();
+        for (size_t i = 0; i < sr::FrameQueue::capacity(); ++i) { int v = static_cast<int>(i * w); q.try_push(std::move(v)); }
+        for (size_t i = 0; i < sr::FrameQueue::capacity(); ++i) q.try_pop();
     }
 
     // Baseline memory after warmup
@@ -68,7 +69,7 @@ TEST(T040_MemorySampler, BoundedQueueNoHeapGrowth) {
 
 // T040: Multiple producers cannot grow the queue beyond capacity
 TEST(T040_MemorySampler, ConcurrentPushNeverGrowsBeyondCapacity) {
-    constexpr size_t kCap = 5;
+    constexpr size_t kCap = sr::FrameQueue::capacity();
     sr::BoundedQueue<int, kCap> q;
 
     // Launch 4 rapid-fire producers

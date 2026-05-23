@@ -14,7 +14,7 @@ namespace sr {
 struct AppSettings {
     // Video settings (T026)
     uint32_t     fps         = 30;           // 30 or 60
-    uint32_t     bitrate_bps = 8'000'000;    // auto-selected based on fps + high_quality
+    uint32_t     bitrate_bps = 4'000'000;    // auto-selected based on fps + high_quality
     bool         high_quality = false;       // when true, uses higher bitrate for better quality
 
     // Storage settings (T025)
@@ -104,12 +104,13 @@ struct AppSettings {
         return path;
     }
 
-    // Compute bitrate based on fps and high-quality flag
+    // Compute bitrate based on fps and high-quality flag.
+    // Defaults target the fixed 848x480 laptop profile; HQ remains opt-in.
     static uint32_t compute_bitrate(uint32_t fps, bool hq) {
         if (hq) {
-            return (fps == 60) ? 28'000'000 : 20'000'000;
+            return (fps == 60) ? 10'000'000 : 8'000'000;
         }
-        return (fps == 60) ? 14'000'000 : 8'000'000;
+        return (fps == 60) ? 6'000'000 : 4'000'000;
     }
 };
 

@@ -60,7 +60,7 @@ struct FileContext {
 // Encoder configuration profile
 struct EncoderProfile {
     uint32_t fps = 30;
-    uint32_t bitrate_bps = 8'000'000;
+    uint32_t bitrate_bps = 4'000'000;
     uint32_t width = 1920;
     uint32_t height = 1080;
     uint32_t gop_seconds = 2;
