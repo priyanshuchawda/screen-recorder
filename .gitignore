@@ -76,10 +76,20 @@ vcpkg_installed/
 
 # Local agent/spec tooling
 .agent/
+.agents/
 .egent/
 .gemini/
+.antigravitycli/
 .specify/
 .specify copy/
 .vscode/
 specs/
 specs copy/
+
+# CPack build staging & release ZIPs
+_CPack_Packages/
+*.zip
+
+# Miscellaneous generated files
+report.md
+skills-lock.json
