@@ -441,6 +441,7 @@ void CameraOverlay::capture_loop() {
 
     capture_running_.store(true, std::memory_order_release);
     ULONGLONG last_processed_ms = 0;
+    UINT32 consecutive_read_failures = 0;
     std::vector<uint8_t> tight_rgba;
     while (capture_running_.load(std::memory_order_acquire)) {
         DWORD stream_index = 0, flags = 0;
@@ -449,10 +450,25 @@ void CameraOverlay::capture_loop() {
         hr = reader->ReadSample(static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), 0,
                                 &stream_index, &flags, &ts, &sample);
         if (FAILED(hr)) {
-            SR_LOG_WARN(L"CameraOverlay: ReadSample failed: 0x%08X", hr);
-            Sleep(5);
+            ++consecutive_read_failures;
+            if (consecutive_read_failures == 1 ||
+                should_stop_after_read_failures(consecutive_read_failures) ||
+                consecutive_read_failures % 10u == 0u) {
+                SR_LOG_WARN(L"CameraOverlay: ReadSample failed: 0x%08X (consecutive=%u)",
+                            hr, consecutive_read_failures);
+            }
+            if (should_stop_after_read_failures(consecutive_read_failures)) {
+                SR_LOG_ERROR(L"CameraOverlay: stopping camera capture after repeated ReadSample failures");
+                capture_running_.store(false, std::memory_order_release);
+                if (host_hwnd_) {
+                    PostMessageW(host_hwnd_, WM_CLOSE, 0, 0);
+                }
+                break;
+            }
+            Sleep(read_failure_backoff_ms(consecutive_read_failures));
             continue;
         }
+        consecutive_read_failures = 0;
 
         if (flags & MF_SOURCE_READERF_STREAMTICK) {
             Sleep(1);
