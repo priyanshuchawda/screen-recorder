@@ -66,6 +66,15 @@ public:
                last_processed_ms == 0 ||
                now_ms - last_processed_ms >= static_cast<unsigned long long>(interval_ms);
     }
+    static constexpr UINT32 kMaxReadFailuresBeforeStop = 50;
+    static UINT32 read_failure_backoff_ms(UINT32 consecutive_failures) {
+        if (consecutive_failures == 0) return 0;
+        const UINT32 backoff = consecutive_failures * 25u;
+        return backoff > 250u ? 250u : backoff;
+    }
+    static bool should_stop_after_read_failures(UINT32 consecutive_failures) {
+        return consecutive_failures >= kMaxReadFailuresBeforeStop;
+    }
 
 private:
     static LRESULT CALLBACK HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);

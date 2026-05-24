@@ -331,6 +331,18 @@ TEST(T042_PowerMode, CameraPreviewProcessingSkipsFramesBeforeInterval) {
     EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 1000, 0));
 }
 
+TEST(T042_PowerMode, CameraReadFailureBackoffIncreasesAndCaps) {
+    EXPECT_EQ(sr::CameraOverlay::read_failure_backoff_ms(1), 25u);
+    EXPECT_EQ(sr::CameraOverlay::read_failure_backoff_ms(4), 100u);
+    EXPECT_EQ(sr::CameraOverlay::read_failure_backoff_ms(20), 250u);
+}
+
+TEST(T042_PowerMode, CameraReadFailureStopsAfterPersistentFailures) {
+    EXPECT_FALSE(sr::CameraOverlay::should_stop_after_read_failures(1));
+    EXPECT_FALSE(sr::CameraOverlay::should_stop_after_read_failures(49));
+    EXPECT_TRUE(sr::CameraOverlay::should_stop_after_read_failures(50));
+}
+
 // ============================================================
 // T043: WGC availability check
 // ============================================================
