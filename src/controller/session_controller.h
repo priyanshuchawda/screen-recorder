@@ -20,6 +20,7 @@
 #include "app/telemetry.h"           // T037
 #include "utils/render_frame.h"
 #include "utils/bounded_queue.h"
+#include "utils/session_diagnostics.h"
 #include "capture/capture_engine.h"  // for FrameQueue typedef
 #include "audio/audio_engine.h"     // for AudioQueue typedef
 
@@ -122,6 +123,7 @@ private:
     // Output path for current recording
     std::wstring current_output_path_;
     std::wstring current_partial_path_;
+    SessionDiagnostics diagnostics_;
 
     // Optional encoder profile override (set via set_encoder_profile before start)
     EncoderProfile pending_profile_;

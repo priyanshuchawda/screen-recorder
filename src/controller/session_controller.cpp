@@ -20,6 +20,19 @@
 
 namespace sr {
 
+namespace {
+
+const wchar_t* encoder_mode_label(EncoderMode mode) {
+    switch (mode) {
+        case EncoderMode::HardwareMFT: return L"HW";
+        case EncoderMode::SoftwareMFT: return L"SW";
+        case EncoderMode::SoftwareMFT720p: return L"SW 720p";
+        default: return L"?";
+    }
+}
+
+} // namespace
+
 SessionController::SessionController()
     : capture_(std::make_unique<CaptureEngine>())
     , audio_  (std::make_unique<AudioEngine>())
@@ -84,6 +97,11 @@ bool SessionController::start() {
     // ---------------------------------------------------------------
     current_partial_path_ = storage_ ? storage_->generateFilename() : L"ScreenRec.partial.mp4";
     current_output_path_  = StorageManager::partialToFinal(current_partial_path_);
+    if (diagnostics_.open_for_output(current_output_path_)) {
+        SR_LOG_INFO(L"Diagnostics log -> %s", diagnostics_.path().c_str());
+    } else {
+        SR_LOG_WARN(L"Diagnostics log could not be opened for: %s", current_output_path_.c_str());
+    }
 
     // ---------------------------------------------------------------
     // Anchor sync clock
@@ -123,6 +141,7 @@ bool SessionController::start() {
                                frame_queue_.get(),
                                {enc_prof.width, enc_prof.height}))
     {
+        diagnostics_.write_failure(L"capture_engine_initialization_failed");
         notify_error(L"Capture engine initialization failed");
         machine_.transition(SessionEvent::Stop);
         machine_.transition(SessionEvent::Finalized);
@@ -161,6 +180,7 @@ bool SessionController::start() {
                                probe_.d3d_device.Get(),
                                probe_.d3d_context.Get()))
     {
+        diagnostics_.write_failure(L"video_encoder_initialization_failed");
         notify_error(L"Video encoder initialization failed");
         machine_.transition(SessionEvent::Stop);
         machine_.transition(SessionEvent::Finalized);
@@ -180,11 +200,26 @@ bool SessionController::start() {
     mux_cfg.audio_is_float         = (audio_->bits_per_sample() == 32);
 
     if (!muxer_->initialize(current_partial_path_, current_output_path_, mux_cfg)) {
+        diagnostics_.write_failure(L"mux_writer_initialization_failed");
         notify_error(L"Mux writer initialization failed");
         machine_.transition(SessionEvent::Stop);
         machine_.transition(SessionEvent::Finalized);
         return false;
     }
+
+    SessionDiagnostics::StartInfo diagnostics_start;
+    diagnostics_start.output_path = current_output_path_;
+    diagnostics_start.adapter_name = probe_.adapter_name;
+    diagnostics_start.probed_encoder_name =
+        probe_.hw_encoder_available ? probe_.encoder_name : L"not available";
+    diagnostics_start.encoder_mode = encoder_mode_label(encoder_->mode());
+    diagnostics_start.power_state = last_power_ac_ ? L"AC" : L"Battery";
+    diagnostics_start.high_quality = high_quality_profile;
+    diagnostics_start.width = encoder_->output_width();
+    diagnostics_start.height = encoder_->output_height();
+    diagnostics_start.fps = encoder_->output_fps();
+    diagnostics_start.bitrate_bps = encoder_->output_bitrate();
+    diagnostics_.write_start(diagnostics_start);
 
     // ---------------------------------------------------------------
     // Start engines
@@ -265,7 +300,8 @@ bool SessionController::stop() {
     }
 
     // Finalize mux (rename .partial.mp4 -> .mp4)
-    if (!muxer_->finalize()) {
+    const bool finalized = muxer_->finalize();
+    if (!finalized) {
         notify_error(L"Failed to finalize recording file. Partial file kept.");
     }
 
@@ -274,6 +310,14 @@ bool SessionController::stop() {
 
     // Revert process priority to normal when not recording
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+
+    SessionDiagnostics::StopInfo diagnostics_stop;
+    diagnostics_stop.status = finalized ? L"complete" : L"finalize_failed_partial_kept";
+    diagnostics_stop.frames_captured = capture_->frames_captured();
+    diagnostics_stop.frames_encoded = frames_encoded_.load();
+    diagnostics_stop.frames_dropped = capture_->frames_dropped();
+    diagnostics_stop.audio_packets = audio_written_.load();
+    diagnostics_.write_stop(diagnostics_stop);
 
     SR_LOG_INFO(L"Recording stopped. Encoded: %u frames, audio pkts: %u",
                 frames_encoded_.load(), audio_written_.load());

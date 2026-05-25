@@ -52,6 +52,7 @@ public:
     uint32_t     output_width() const { return out_width_; }
     uint32_t     output_height()const { return out_height_; }
     uint32_t     output_fps()   const { return out_fps_; }
+    uint32_t     output_bitrate() const { return active_bitrate_bps_; }
 
 private:
     bool try_init_hw(const EncoderProfile& profile, IMFDXGIDeviceManager* dxgi_mgr);
