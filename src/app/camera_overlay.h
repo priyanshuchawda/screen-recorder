@@ -36,8 +36,9 @@ public:
         return high_quality;
     }
     static int preview_interval_ms_for_profile(bool on_battery, bool high_quality) {
+        (void)on_battery;
         if (high_quality) return 33; // ~30 fps HQ on AC or battery
-        return on_battery ? 100 : 66; // default: 10 fps on battery, ~15 fps on AC
+        return 50; // default: ~20 fps, still capped at efficient preview resolution
     }
     static UINT32 preview_max_width_for_profile(bool on_battery, bool high_quality) {
         return use_high_quality_preview(on_battery, high_quality)

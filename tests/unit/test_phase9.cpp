@@ -305,14 +305,15 @@ TEST(T042_PowerMode, BaseQualityStillClampsOnBattery) {
 }
 
 TEST(T042_PowerMode, CameraPreviewUsesEfficiencyIntervals) {
-    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(false), 66);
-    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(true), 100);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(false), 50);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_power(true), 50);
     EXPECT_LE(sr::CameraOverlay::kEfficiencyPreviewMaxWidth, 640u);
     EXPECT_LE(sr::CameraOverlay::kEfficiencyPreviewMaxHeight, 480u);
 }
 
 TEST(T042_PowerMode, CameraPreviewUsesHighQualityProfileOnAnyPowerState) {
-    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(false, false), 66);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(false, false), 50);
+    EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(true, false), 50);
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(false, true), 33);
     EXPECT_EQ(sr::CameraOverlay::preview_interval_ms_for_profile(true, true), 33);
 
@@ -325,9 +326,9 @@ TEST(T042_PowerMode, CameraPreviewUsesHighQualityProfileOnAnyPowerState) {
 }
 
 TEST(T042_PowerMode, CameraPreviewProcessingSkipsFramesBeforeInterval) {
-    EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 0, 66));
-    EXPECT_FALSE(sr::CameraOverlay::should_process_preview_frame(1050, 1000, 66));
-    EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1066, 1000, 66));
+    EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 0, 50));
+    EXPECT_FALSE(sr::CameraOverlay::should_process_preview_frame(1049, 1000, 50));
+    EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1050, 1000, 50));
     EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 1000, 0));
 }
 
@@ -336,7 +337,7 @@ TEST(T042_PowerMode, CameraPreviewTuningOnlyReappliesWhenProfileChanges) {
         false, false, false, false, false));
     EXPECT_FALSE(sr::CameraOverlay::should_reapply_preview_tuning(
         true, false, false, false, false));
-    EXPECT_TRUE(sr::CameraOverlay::should_reapply_preview_tuning(
+    EXPECT_FALSE(sr::CameraOverlay::should_reapply_preview_tuning(
         true, false, false, true, false));
     EXPECT_TRUE(sr::CameraOverlay::should_reapply_preview_tuning(
         true, false, false, false, true));
