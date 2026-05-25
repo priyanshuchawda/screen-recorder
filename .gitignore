@@ -93,3 +93,6 @@ _CPack_Packages/
 # Miscellaneous generated files
 report.md
 skills-lock.json
+
+# Local Netlify folder
+.netlify
