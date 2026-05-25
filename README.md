@@ -1,27 +1,36 @@
 # ScreenRecorder
 
-Lightweight native Windows screen recorder built with C++20, Win32, Windows Graphics Capture, Media Foundation, and WASAPI.
+Lightweight native Windows screen recorder built with C++20, Win32, Windows Graphics Capture, Media Foundation, D3D11, Intel Quick Sync capable hardware encoding, and WASAPI.
 
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Status](https://img.shields.io/badge/Status-Active%20Development-green)
-![Tests](https://img.shields.io/badge/Tests-131%20passing-brightgreen)
+![Status](https://img.shields.io/badge/Status-Stable-green)
+![Tests](https://img.shields.io/badge/Tests-136%20passing-brightgreen)
 
 ## Features
 
 - Full-screen capture via Windows Graphics Capture (WGC)
-- H.264 video + AAC audio muxed to MP4 using Media Foundation
+- Hardware-first H.264 video + AAC audio muxed to MP4 using Media Foundation
+- Intel GPU / Quick Sync preference when available, with graceful software fallback
 - **System Audio Capture**: Record desktop/YouTube audio via WASAPI Loopback
 - **Microphone Noise Gate**: RMS-based gating to eliminate background hiss
-- **Camera Overlay**: Efficient default preview with an HQ 720p-capable profile
+- **Camera Overlay**: Throttled efficient default preview with an HQ 720p-capable profile
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
 - **High Quality Mode**: Optional 1080p-capable hardware profile with higher bitrate recording (8/10 Mbps) on AC or battery
+- **Recording Diagnostics**: Per-session local `.diagnostics.txt` files show adapter, encoder mode, power state, profile, and completion counters
+- Embedded app icon for the main and settings windows
 - Pause/resume with monotonic timestamp rebasing
 - Mute/unmute with silence injection
 - Recovery flow for orphaned `.partial.mp4` files
 - Low-disk auto-stop and output directory management
-- Hardware-first H.264 encoder selection with graceful software fallback
+
+## Performance Profiles
+
+- **Default mode** targets low RAM and battery use: fixed 848x480 recording target, bounded frame queues, hardware-first encoding, and battery-aware throttling.
+- **High Quality mode** is opt-in: 1080p-capable recording with higher bitrate and HQ camera preview on AC or battery.
+- **Camera preview** intentionally uses a throttled RGB32/GDI overlay path today. It avoids adding a second GPU composition pipeline, keeps fallback simple across webcams, and is rate-limited to reduce CPU/battery cost. Screen capture and video encoding still use the D3D11/Media Foundation hardware path when available.
+- Every recording writes a small diagnostics file beside the MP4 so the selected adapter, encoder mode (`HW`, `SW`, or fallback), power state, profile, and completion status can be verified after the run.
 
 ## Build Requirements
 
@@ -61,16 +70,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.5-windows-x64.zip`
+- `ScreenRecorder-0.3.6-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.5
-git push origin v0.3.5
-gh release create v0.3.5 ScreenRecorder-0.3.5-windows-x64.zip --title "v0.3.5" --notes "Release v0.3.5: version bump, high-quality mode battery overrides, camera mirroring fixes, and hardware profile tuning."
+git tag v0.3.6
+git push origin v0.3.6
+gh release create v0.3.6 ScreenRecorder-0.3.6-windows-x64.zip --title "v0.3.6" --notes "Release v0.3.6: stable hardware-first recording, efficiency/HQ profiles, camera overlay tuning, recording diagnostics, and app icon polish."
 ```
 
 ## Project Layout
@@ -89,6 +98,7 @@ GitHub Actions workflow: `.github/workflows/windows-ci.yml`
 ## Notes
 
 - Use Visual Studio generator for reliable Windows builds.
+- Each completed recording has a matching `.diagnostics.txt` file beside the MP4.
 - If finalize fails, output remains `.partial.mp4` and is not renamed to `.mp4`.
 
 ## License

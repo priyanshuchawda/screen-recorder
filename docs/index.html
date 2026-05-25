@@ -4,9 +4,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ScreenRecorder — The Ultimate Native Capture Tool for Windows</title>
+  <title>ScreenRecorder — Stable Native Capture Tool for Windows</title>
   <meta name="description"
-    content="Download ScreenRecorder for Windows. A lightweight, native Win32 + Media Foundation screen recording application built for performance." />
+    content="Download ScreenRecorder for Windows. A stable native Win32, Windows Graphics Capture, Media Foundation, and Intel Quick Sync capable screen recorder built for efficient recording." />
   <link rel="icon" type="image/png" href="favicon.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -685,7 +685,7 @@
   <header class="hero container">
     <div class="badge-pill">
       <span class="dot"></span>
-      Version 0.3.5 is now available
+      Version 0.3.6 is now available
     </div>
 
     <h1 class="hero-title">
@@ -694,12 +694,12 @@
     </h1>
 
     <p class="hero-desc">
-      A lightning-fast, native screen recorder built directly on Win32 and Media Foundation. Zero bloat, zero
-      dependencies, maximum efficiency.
+      A stable native screen recorder built directly on Win32, Windows Graphics Capture, Media Foundation, and WASAPI.
+      Hardware-first recording, low-overhead defaults, and opt-in high quality when you need it.
     </p>
 
     <div class="hero-actions">
-      <a href="https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.5/ScreenRecorder-0.3.5-windows-x64.zip"
+      <a href="https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.6/ScreenRecorder-0.3.6-windows-x64.zip"
         class="btn-large btn-primary">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
           stroke-linecap="round" stroke-linejoin="round">
@@ -707,7 +707,7 @@
           <polyline points="7 10 12 15 17 10"></polyline>
           <line x1="12" y1="15" x2="12" y2="3"></line>
         </svg>
-        Download v0.3.5 (.zip)
+        Download v0.3.6 (.zip)
       </a>
       <a href="https://github.com/priyanshuchawda/screen-recorder" target="_blank" class="btn-large btn-secondary">
         View Source Code
@@ -813,9 +813,9 @@
               <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
             </svg>
           </div>
-          <h3>Hardware Async</h3>
-          <p>Utilizes the incredibly fast Desktop Duplication API and Media Foundation for seamless,
-            hardware-accelerated encoding.</p>
+          <h3>Hardware First</h3>
+          <p>Uses Windows Graphics Capture, D3D11, and Media Foundation with Intel Quick Sync preference when available,
+            then falls back gracefully if hardware encoding is unavailable.</p>
         </div>
 
         <div class="card">
@@ -852,7 +852,8 @@
             </svg>
           </div>
           <h3>Privacy First</h3>
-          <p>No telemetry, no tracking, no phoning home. 100% open-source on GitHub so you can audit every line of code.
+          <p>No tracking and no phoning home. Local recording diagnostics stay beside your MP4 so you can verify the
+            selected adapter, encoder mode, power state, and completion status.
           </p>
         </div>
 
@@ -876,7 +877,8 @@
             </svg>
           </div>
           <h3>Camera Overlay</h3>
-          <p>Superimpose your webcam with automatic frame-rate adjustments to preserve CPU/battery power during long captures.</p>
+          <p>Superimpose your webcam with throttled default preview, an HQ 720p-capable profile, and guarded tuning to
+            avoid repeated background work during long captures.</p>
         </div>
 
         <div class="card">
@@ -908,7 +910,7 @@
             </div>
             ScreenRecorder
           </div>
-          <p>A native, high-performance screen recording tool crafted specifically for the Windows ecosystem.</p>
+          <p>A stable native screen recording tool crafted specifically for the Windows ecosystem.</p>
         </div>
 
         <div class="footer-col">
