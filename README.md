@@ -72,16 +72,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.6-windows-x64.zip`
+- `ScreenRecorder-0.3.8-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.6
-git push origin v0.3.6
-gh release create v0.3.6 ScreenRecorder-0.3.6-windows-x64.zip --title "v0.3.6" --notes "Release v0.3.6: stable hardware-first recording, efficiency/HQ profiles, camera overlay tuning, recording diagnostics, and app icon polish."
+git tag v0.3.8
+git push origin v0.3.8
+gh release create v0.3.8 ScreenRecorder-0.3.8-windows-x64.zip --title "v0.3.8" --notes "Release v0.3.8: Smooth default camera preview overlay rendering, testing updates, and Netlify documentation deployment."
 ```
 
 ## Project Layout
