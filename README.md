@@ -6,7 +6,9 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Stable-green)
-![Tests](https://img.shields.io/badge/Tests-136%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-138%20passing-brightgreen)
+
+Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.netlify.app)
 
 ## Features
 
