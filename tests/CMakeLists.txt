@@ -62,5 +62,5 @@ if(INTEGRATION_TEST_SRC)
         WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE WINRT_LEAN_AND_MEAN
     )
     include(GoogleTest)
-    gtest_discover_tests(integration_tests)
+    gtest_discover_tests(integration_tests DISCOVERY_TIMEOUT 30)
 endif()
