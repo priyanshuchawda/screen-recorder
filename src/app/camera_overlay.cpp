@@ -251,8 +251,19 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 
 void CameraOverlay::apply_preview_tuning() {
     const bool high_quality = high_quality_.load(std::memory_order_relaxed);
+    if (!should_reapply_preview_tuning(preview_tuning_applied_,
+                                       preview_tuning_on_battery_,
+                                       preview_tuning_high_quality_,
+                                       on_battery_,
+                                       high_quality)) {
+        return;
+    }
+
     const int interval = preview_interval_ms_for_profile(on_battery_, high_quality);
     capture_interval_ms_.store(interval, std::memory_order_relaxed);
+    preview_tuning_applied_ = true;
+    preview_tuning_on_battery_ = on_battery_;
+    preview_tuning_high_quality_ = high_quality;
     SR_LOG_INFO(L"CameraOverlay: %s preview target ~%u fps",
                 use_high_quality_preview(on_battery_, high_quality) ? L"HQ" : L"efficiency",
                 interval > 0 ? static_cast<unsigned>(1000 / interval) : 0u);
@@ -627,6 +638,7 @@ bool CameraOverlay::start(HWND owner) {
     resize_capture_to_client();
 
     on_battery_ = detect_on_battery();
+    preview_tuning_applied_ = false;
     apply_preview_tuning();
     capture_thread_ = std::thread(&CameraOverlay::capture_loop, this);
 
@@ -674,6 +686,7 @@ void CameraOverlay::stop() {
         SR_LOG_INFO(L"CameraOverlay: stopped");
     }
     running_ = false;
+    preview_tuning_applied_ = false;
 }
 
 } // namespace sr

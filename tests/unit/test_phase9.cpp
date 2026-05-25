@@ -331,6 +331,19 @@ TEST(T042_PowerMode, CameraPreviewProcessingSkipsFramesBeforeInterval) {
     EXPECT_TRUE(sr::CameraOverlay::should_process_preview_frame(1000, 1000, 0));
 }
 
+TEST(T042_PowerMode, CameraPreviewTuningOnlyReappliesWhenProfileChanges) {
+    EXPECT_TRUE(sr::CameraOverlay::should_reapply_preview_tuning(
+        false, false, false, false, false));
+    EXPECT_FALSE(sr::CameraOverlay::should_reapply_preview_tuning(
+        true, false, false, false, false));
+    EXPECT_TRUE(sr::CameraOverlay::should_reapply_preview_tuning(
+        true, false, false, true, false));
+    EXPECT_TRUE(sr::CameraOverlay::should_reapply_preview_tuning(
+        true, false, false, false, true));
+    EXPECT_FALSE(sr::CameraOverlay::should_reapply_preview_tuning(
+        true, true, true, false, true));
+}
+
 TEST(T042_PowerMode, CameraReadFailureBackoffIncreasesAndCaps) {
     EXPECT_EQ(sr::CameraOverlay::read_failure_backoff_ms(1), 25u);
     EXPECT_EQ(sr::CameraOverlay::read_failure_backoff_ms(4), 100u);

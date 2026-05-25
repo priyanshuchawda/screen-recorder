@@ -66,6 +66,24 @@ public:
                last_processed_ms == 0 ||
                now_ms - last_processed_ms >= static_cast<unsigned long long>(interval_ms);
     }
+    static bool should_reapply_preview_tuning(bool already_applied,
+                                              bool previous_on_battery,
+                                              bool previous_high_quality,
+                                              bool current_on_battery,
+                                              bool current_high_quality) {
+        if (!already_applied) return true;
+
+        return preview_interval_ms_for_profile(previous_on_battery, previous_high_quality) !=
+                   preview_interval_ms_for_profile(current_on_battery, current_high_quality) ||
+               preview_max_width_for_profile(previous_on_battery, previous_high_quality) !=
+                   preview_max_width_for_profile(current_on_battery, current_high_quality) ||
+               preview_max_height_for_profile(previous_on_battery, previous_high_quality) !=
+                   preview_max_height_for_profile(current_on_battery, current_high_quality) ||
+               preview_preferred_width_for_profile(previous_on_battery, previous_high_quality) !=
+                   preview_preferred_width_for_profile(current_on_battery, current_high_quality) ||
+               preview_preferred_height_for_profile(previous_on_battery, previous_high_quality) !=
+                   preview_preferred_height_for_profile(current_on_battery, current_high_quality);
+    }
     static constexpr UINT32 kMaxReadFailuresBeforeStop = 50;
     static UINT32 read_failure_backoff_ms(UINT32 consecutive_failures) {
         if (consecutive_failures == 0) return 0;
@@ -101,6 +119,9 @@ private:
 
     bool running_   = false;
     bool on_battery_ = false;
+    bool preview_tuning_applied_ = false;
+    bool preview_tuning_on_battery_ = false;
+    bool preview_tuning_high_quality_ = false;
 };
 
 } // namespace sr
