@@ -18,6 +18,7 @@
 #include "app/settings_dialog.h"
 #include "app/telemetry.h"             // T037: TelemetrySnapshot
 #include "app/camera_overlay.h"
+#include "app/app_icon.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -595,7 +596,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = g_brush_bg;
     wc.lpszClassName = L"ScreenRecorderClass";
-    wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon         = sr::load_app_icon(hInstance);
+    wc.hIconSm       = sr::load_app_icon(hInstance,
+                                         GetSystemMetrics(SM_CXSMICON),
+                                         GetSystemMetrics(SM_CYSMICON));
     RegisterClassExW(&wc);
 
     g_hwnd = CreateWindowExW(

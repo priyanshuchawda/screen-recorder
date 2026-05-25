@@ -2,6 +2,7 @@
 // T027: FPS radio buttons, directory browser, OK/Cancel, persists via AppSettings
 
 #include "app/settings_dialog.h"
+#include "app/app_icon.h"
 #include "utils/logging.h"
 
 #include <windows.h>
@@ -219,7 +220,10 @@ bool ShowSettingsDialog(HWND parent, AppSettings& settings) {
         wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
         wc.lpszClassName = L"SRSettingsDialog";
-        wc.hIcon         = LoadIconW(nullptr, IDI_APPLICATION);
+        wc.hIcon         = load_app_icon(wc.hInstance);
+        wc.hIconSm       = load_app_icon(wc.hInstance,
+                                         GetSystemMetrics(SM_CXSMICON),
+                                         GetSystemMetrics(SM_CYSMICON));
         if (!RegisterClassExW(&wc)) {
             SR_LOG_ERROR(L"RegisterClassEx for SettingsDialog failed");
             return false;
