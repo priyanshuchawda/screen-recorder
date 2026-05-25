@@ -1,4 +1,4 @@
-# Build Notes & Known Issues
+# Build Notes
 
 > Quick reference for building this project. For full details see `specs/001-screen-recorder/quickstart.md`.
 

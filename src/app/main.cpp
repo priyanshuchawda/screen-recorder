@@ -19,6 +19,7 @@
 #include "app/telemetry.h"             // T037: TelemetrySnapshot
 #include "app/camera_overlay.h"
 #include "app/app_icon.h"
+#include "app/app_version.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -603,7 +604,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     RegisterClassExW(&wc);
 
     g_hwnd = CreateWindowExW(
-        0, L"ScreenRecorderClass", L"Screen Recorder v1.0",
+        0, L"ScreenRecorderClass", sr::kAppWindowTitle,
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
         CW_USEDEFAULT, CW_USEDEFAULT, 450, 365,
         nullptr, nullptr, hInstance, nullptr
