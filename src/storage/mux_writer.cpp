@@ -15,6 +15,17 @@
 
 namespace sr {
 
+HRESULT configure_mux_writer_attributes(IMFAttributes* attrs) {
+    if (!attrs) return E_POINTER;
+
+    HRESULT hr = attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+    if (FAILED(hr)) return hr;
+
+    // Keep Sink Writer throttling enabled. Its default WriteSample backpressure
+    // prevents real-time recordings from accumulating large internal buffers.
+    return S_OK;
+}
+
 bool MuxWriter::initialize(const std::wstring& partial_path,
                             const std::wstring& final_path,
                             const MuxConfig& cfg)
@@ -22,13 +33,13 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
     partial_path_ = partial_path;
     final_path_   = final_path;
 
-    // --- Sink Writer Attributes (async + throttling disabled) ---
+    // --- Sink Writer Attributes ---
     ComPtr<IMFAttributes> attrs;
     HRESULT hr = MFCreateAttributes(&attrs, 4);
     if (FAILED(hr)) { SR_LOG_ERROR(L"MFCreateAttributes failed: 0x%08X", hr); return false; }
 
-    attrs->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
-    attrs->SetUINT32(MF_SINK_WRITER_DISABLE_THROTTLING,       TRUE);
+    hr = configure_mux_writer_attributes(attrs.Get());
+    if (FAILED(hr)) { SR_LOG_ERROR(L"MuxWriter attribute setup failed: 0x%08X", hr); return false; }
 
     // --- Create SinkWriter ---
     hr = MFCreateSinkWriterFromURL(partial_path.c_str(), nullptr, attrs.Get(),

@@ -14,6 +14,8 @@ namespace sr {
 
 using Microsoft::WRL::ComPtr;
 
+HRESULT configure_mux_writer_attributes(IMFAttributes* attrs);
+
 struct MuxConfig {
     // Video stream
     uint32_t video_width      = 1920;
