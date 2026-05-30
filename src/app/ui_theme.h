@@ -23,6 +23,10 @@ inline constexpr COLORREF kAccentHot = RGB(0, 158, 230);
 inline constexpr COLORREF kAccentPressed = RGB(0, 108, 176);
 inline constexpr COLORREF kAccentBorder = RGB(84, 191, 245);
 inline constexpr COLORREF kRecording = RGB(40, 210, 146);
+inline constexpr COLORREF kRecordingHot = RGB(82, 235, 180);
+inline constexpr COLORREF kPaused = RGB(245, 179, 71);
+inline constexpr COLORREF kStopping = RGB(248, 113, 113);
+inline constexpr COLORREF kStatusIdle = RGB(86, 99, 116);
 inline constexpr COLORREF kOverlayChrome = RGB(12, 15, 18);
 
 inline constexpr int kButtonCornerRadius = 6;
@@ -46,6 +50,21 @@ struct ButtonVisual {
     COLORREF fill;
     COLORREF border;
     COLORREF text;
+};
+
+enum class StatusTone {
+    Idle,
+    Recording,
+    Paused,
+    Stopping
+};
+
+struct StatusVisual {
+    COLORREF accent;
+    COLORREF fill;
+    COLORREF border;
+    COLORREF text;
+    bool animated;
 };
 
 constexpr ButtonVisual button_visual(ButtonRole role,
@@ -78,6 +97,38 @@ constexpr ButtonVisual button_visual(ButtonRole role,
     }
 
     return { kSurfaceRaised, kBorder, kText };
+}
+
+constexpr StatusVisual status_visual(StatusTone tone,
+                                     bool motion_enabled) noexcept {
+    switch (tone) {
+    case StatusTone::Recording:
+        return {
+            kRecording,
+            kSurface,
+            kRecording,
+            kTextStrong,
+            motion_enabled
+        };
+    case StatusTone::Paused:
+        return { kPaused, kSurface, kPaused, kTextStrong, false };
+    case StatusTone::Stopping:
+        return { kStopping, kSurface, kStopping, kTextStrong, false };
+    case StatusTone::Idle:
+        break;
+    }
+
+    return { kStatusIdle, kSurface, kBorder, kTextMuted, false };
+}
+
+constexpr COLORREF status_pulse_color(StatusTone tone,
+                                      bool pulse_on,
+                                      bool motion_enabled) noexcept {
+    const auto visual = status_visual(tone, motion_enabled);
+    if (visual.animated && pulse_on) {
+        return kRecordingHot;
+    }
+    return visual.accent;
 }
 
 constexpr RECT overlay_close_rect(const RECT& bounds) noexcept {

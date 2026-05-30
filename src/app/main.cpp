@@ -72,6 +72,8 @@ static HFONT  g_font_bold   = nullptr;
 static HFONT  g_font_title  = nullptr;
 static HFONT  g_font_metric = nullptr;
 static HWND   g_hot_button  = nullptr;
+static bool   g_motion_enabled = true;
+static sr::SessionState g_last_ui_state = sr::SessionState::Idle;
 
 static constexpr COLORREF kBgColor     = sr::ui::kWindowBackground;
 static constexpr COLORREF kTextColor   = sr::ui::kText;
@@ -87,6 +89,46 @@ static int64_t g_paused_total_ms = 0;
 static int64_t g_pause_start_ms  = 0;
 
 // ----------------------------------------------------------------------------
+static bool IsClientAreaAnimationEnabled() noexcept
+{
+    BOOL enabled = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &enabled, 0) != FALSE) {
+        return enabled != FALSE;
+    }
+    return true;
+}
+
+static sr::ui::StatusTone StatusToneForState(sr::SessionState state) noexcept
+{
+    switch (state) {
+        case sr::SessionState::Recording: return sr::ui::StatusTone::Recording;
+        case sr::SessionState::Paused:    return sr::ui::StatusTone::Paused;
+        case sr::SessionState::Stopping:  return sr::ui::StatusTone::Stopping;
+        case sr::SessionState::Idle:      break;
+    }
+    return sr::ui::StatusTone::Idle;
+}
+
+static const wchar_t* StatusPillLabel(sr::SessionState state) noexcept
+{
+    switch (state) {
+        case sr::SessionState::Recording: return L"REC";
+        case sr::SessionState::Paused:    return L"PAUSED";
+        case sr::SessionState::Stopping:  return L"STOPPING";
+        case sr::SessionState::Idle:      break;
+    }
+    return L"READY";
+}
+
+static void InvalidateStatusChrome(HWND hwnd)
+{
+    if (!hwnd) return;
+    RECT rc{};
+    GetClientRect(hwnd, &rc);
+    rc.bottom = 44;
+    InvalidateRect(hwnd, &rc, FALSE);
+}
+
 static void ApplyEncoderProfileFromSettings()
 {
     sr::EncoderProfile profile;
@@ -120,6 +162,8 @@ static void UpdateProfileLabel()
 void UpdateUI()
 {
     auto state = g_controller.state();
+    const bool state_changed = (state != g_last_ui_state);
+    g_last_ui_state = state;
 
     switch (state) {
         case sr::SessionState::Idle:      SetWindowTextW(g_lbl_status, L"Idle");      break;
@@ -186,6 +230,12 @@ void UpdateUI()
     SetWindowTextW(g_lbl_path, out_path.empty()
         ? g_storage.outputDirectory().c_str()
         : out_path.c_str());
+
+    const auto status_tone = StatusToneForState(state);
+    const auto status = sr::ui::status_visual(status_tone, g_motion_enabled);
+    if (state_changed || status.animated) {
+        InvalidateStatusChrome(g_hwnd);
+    }
 }
 
 static void ApplyUIFont(HWND hwnd) {
@@ -311,12 +361,61 @@ static void DrawButton(HDC hdc, const RECT& rc, const std::wstring& text,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
+static void DrawStatusPill(HDC hdc, const RECT& client_rc, sr::SessionState state)
+{
+    const auto tone = StatusToneForState(state);
+    const auto visual = sr::ui::status_visual(tone, g_motion_enabled);
+    const bool pulse_on = ((GetTickCount64() / 500ULL) % 2ULL) == 0ULL;
+    const COLORREF accent =
+        sr::ui::status_pulse_color(tone, pulse_on, g_motion_enabled);
+
+    RECT pill{client_rc.right - 142, 10, client_rc.right - 16, 34};
+    if (pill.left < 300) {
+        pill.left = 300;
+    }
+
+    HBRUSH fill_brush = CreateSolidBrush(visual.fill);
+    HPEN border_pen = CreatePen(PS_SOLID, 1, visual.border);
+    HGDIOBJ old_pen = SelectObject(hdc, border_pen);
+    HGDIOBJ old_brush = SelectObject(hdc, fill_brush);
+    RoundRect(hdc, pill.left, pill.top, pill.right, pill.bottom, 12, 12);
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(fill_brush);
+    DeleteObject(border_pen);
+
+    RECT dot{pill.left + 12, pill.top + 8, pill.left + 20, pill.top + 16};
+    HBRUSH dot_brush = CreateSolidBrush(accent);
+    HPEN dot_pen = CreatePen(PS_SOLID, 1, accent);
+    old_pen = SelectObject(hdc, dot_pen);
+    old_brush = SelectObject(hdc, dot_brush);
+    Ellipse(hdc, dot.left, dot.top, dot.right, dot.bottom);
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(dot_brush);
+    DeleteObject(dot_pen);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, visual.text);
+    HGDIOBJ old_font = nullptr;
+    if (g_font_metric) {
+        old_font = SelectObject(hdc, g_font_metric);
+    }
+    RECT text_rc{pill.left + 28, pill.top + 3, pill.right - 10, pill.bottom - 3};
+    DrawTextW(hdc, StatusPillLabel(state), -1, &text_rc,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    if (old_font) {
+        SelectObject(hdc, old_font);
+    }
+}
+
 // ----------------------------------------------------------------------------
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
 
     case WM_CREATE: {
+        g_motion_enabled = IsClientAreaAnimationEnabled();
         int y = 14;
 
         g_font_ui = CreateFontW(
@@ -444,9 +543,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         FillRect(hdc, &header, g_brush_header);
 
         RECT accent{0, 0, 3, 44};
-        HBRUSH accent_brush = CreateSolidBrush(sr::ui::kRecording);
+        const auto state = g_controller.state();
+        const auto tone = StatusToneForState(state);
+        const bool pulse_on = ((GetTickCount64() / 500ULL) % 2ULL) == 0ULL;
+        HBRUSH accent_brush = CreateSolidBrush(
+            sr::ui::status_pulse_color(tone, pulse_on, g_motion_enabled));
         FillRect(hdc, &accent, accent_brush);
         DeleteObject(accent_brush);
+
+        DrawStatusPill(hdc, rc, state);
 
         HPEN pen = CreatePen(PS_SOLID, 1, kBorderColor);
         HGDIOBJ old_pen = SelectObject(hdc, pen);
@@ -486,6 +591,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             UpdateUI();
             g_camera_overlay.refresh_power_profile();
         }
+        break;
+
+    case WM_SETTINGCHANGE:
+        g_motion_enabled = IsClientAreaAnimationEnabled();
+        InvalidateStatusChrome(hwnd);
         break;
 
     case WM_SR_STATUS: {
