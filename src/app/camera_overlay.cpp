@@ -1,4 +1,5 @@
 #include "app/camera_overlay.h"
+#include "app/ui_theme.h"
 #include "utils/logging.h"
 
 #include <mfapi.h>
@@ -17,6 +18,8 @@ namespace sr {
 using Microsoft::WRL::ComPtr;
 
 namespace {
+
+constexpr int kOverlayHeaderHeight = 36;
 
 struct CameraFormatChoice {
     ComPtr<IMFMediaType> native_type;
@@ -135,6 +138,31 @@ bool choose_camera_format(IMFSourceReader* reader,
     return true;
 }
 
+void draw_overlay_close_button_rect(HDC hdc, const RECT& close_rc) {
+    HBRUSH fill = CreateSolidBrush(ui::kAccentPressed);
+    HPEN border = CreatePen(PS_SOLID, 1, ui::kAccentBorder);
+    HGDIOBJ old_pen = SelectObject(hdc, border);
+    HGDIOBJ old_brush = SelectObject(hdc, fill);
+    Rectangle(hdc, close_rc.left, close_rc.top, close_rc.right, close_rc.bottom);
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(fill);
+    DeleteObject(border);
+
+    HPEN x_pen = CreatePen(PS_SOLID, 2, ui::kTextStrong);
+    old_pen = SelectObject(hdc, x_pen);
+    MoveToEx(hdc, close_rc.left + 7, close_rc.top + 7, nullptr);
+    LineTo(hdc, close_rc.right - 7, close_rc.bottom - 7);
+    MoveToEx(hdc, close_rc.right - 8, close_rc.top + 7, nullptr);
+    LineTo(hdc, close_rc.left + 6, close_rc.bottom - 7);
+    SelectObject(hdc, old_pen);
+    DeleteObject(x_pen);
+}
+
+void draw_overlay_close_button(HDC hdc, const RECT& host_rc) {
+    draw_overlay_close_button_rect(hdc, ui::overlay_close_rect(host_rc));
+}
+
 } // namespace
 
 bool CameraOverlay::detect_on_battery() const {
@@ -195,8 +223,8 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
         const int y = static_cast<short>(HIWORD(lp));
         RECT rc{};
         GetClientRect(hwnd, &rc);
-        const RECT close_rc{ rc.right - 28, 6, rc.right - 6, 28 };
-        if (x >= close_rc.left && x < close_rc.right && y >= close_rc.top && y < close_rc.bottom) {
+        const RECT close_rc = ui::overlay_close_rect(rc);
+        if (ui::point_in_rect(close_rc, x, y)) {
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
             return 0;
         }
@@ -227,6 +255,7 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
             }
 
             BitBlt(hdc, 0, 0, w, h, mem_dc, 0, 0, SRCCOPY);
+            draw_overlay_close_button(hdc, rc);
 
             SelectObject(mem_dc, old_obj);
             DeleteObject(bmp);
@@ -270,20 +299,33 @@ void CameraOverlay::apply_preview_tuning() {
 }
 
 void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
-    HBRUSH bg = CreateSolidBrush(RGB(0, 0, 0));
+    HBRUSH bg = CreateSolidBrush(ui::kOverlayChrome);
     FillRect(hdc, &rc, bg);
     DeleteObject(bg);
+
+    RECT header_rc{rc.left, rc.top, rc.right, rc.top + kOverlayHeaderHeight};
+    if (header_rc.bottom > rc.bottom) {
+        header_rc.bottom = rc.bottom;
+    }
+    HBRUSH header_bg = CreateSolidBrush(ui::kHeaderBackground);
+    FillRect(hdc, &header_rc, header_bg);
+    DeleteObject(header_bg);
+    draw_overlay_close_button(hdc, rc);
+
+    RECT content_rc = rc;
+    content_rc.top = header_rc.bottom;
+    if (content_rc.bottom <= content_rc.top) {
+        return;
+    }
 
     std::lock_guard<std::mutex> lock(frame_mutex_);
     if (latest_frame_.empty() || frame_width_ == 0 || frame_height_ == 0) {
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(210, 210, 210));
-        RECT txt = rc;
+        SetTextColor(hdc, ui::kTextMuted);
+        RECT txt = content_rc;
         DrawTextW(hdc, L"No camera frame", -1, &txt, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-        RECT close_rc{ rc.right - 28, 6, rc.right - 6, 28 };
-        SetTextColor(hdc, RGB(235, 235, 235));
-        DrawTextW(hdc, L"×", -1, &close_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        draw_overlay_close_button(hdc, rc);
         return;
     }
 
@@ -295,8 +337,8 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
 
-    const int dst_w = rc.right - rc.left;
-    const int dst_h = rc.bottom - rc.top;
+    const int dst_w = content_rc.right - content_rc.left;
+    const int dst_h = content_rc.bottom - content_rc.top;
     const double src_ar = frame_height_ ? (static_cast<double>(frame_width_) / static_cast<double>(frame_height_)) : 1.0;
     const double dst_ar = dst_h > 0 ? (static_cast<double>(dst_w) / static_cast<double>(dst_h)) : src_ar;
 
@@ -318,20 +360,22 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
     SetStretchBltMode(hdc, COLORONCOLOR);
     StretchDIBits(
         hdc,
-        dst_w, 0, -dst_w, dst_h,
+        content_rc.right, content_rc.top, -dst_w, dst_h,
         src_x, src_y, src_w, src_h,
         latest_frame_.data(),
         &bmi,
         DIB_RGB_COLORS,
         SRCCOPY);
 
-    RECT close_rc{ rc.right - 28, 6, rc.right - 6, 28 };
-    HBRUSH close_bg = CreateSolidBrush(RGB(24, 24, 24));
-    FillRect(hdc, &close_rc, close_bg);
-    DeleteObject(close_bg);
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(235, 235, 235));
-    DrawTextW(hdc, L"×", -1, &close_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    HPEN frame_pen = CreatePen(PS_SOLID, 1, ui::kBorderStrong);
+    HGDIOBJ old_pen = SelectObject(hdc, frame_pen);
+    HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+    Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(frame_pen);
+
+    draw_overlay_close_button(hdc, rc);
 }
 
 void CameraOverlay::capture_loop() {
@@ -631,6 +675,7 @@ bool CameraOverlay::start(HWND owner) {
             SR_LOG_ERROR(L"CameraOverlay: host window create failed: %u", GetLastError());
             return false;
         }
+
     }
 
     SetWindowPos(host_hwnd_, HWND_TOPMOST, x, y, host_w, host_h,

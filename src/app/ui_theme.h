@@ -23,9 +23,12 @@ inline constexpr COLORREF kAccentHot = RGB(0, 158, 230);
 inline constexpr COLORREF kAccentPressed = RGB(0, 108, 176);
 inline constexpr COLORREF kAccentBorder = RGB(84, 191, 245);
 inline constexpr COLORREF kRecording = RGB(40, 210, 146);
+inline constexpr COLORREF kOverlayChrome = RGB(12, 15, 18);
 
 inline constexpr int kButtonCornerRadius = 6;
 inline constexpr int kButtonFocusInset = 3;
+inline constexpr int kOverlayCloseInset = 8;
+inline constexpr int kOverlayCloseSize = 24;
 
 enum class ButtonRole {
     Primary,
@@ -75,6 +78,20 @@ constexpr ButtonVisual button_visual(ButtonRole role,
     }
 
     return { kSurfaceRaised, kBorder, kText };
+}
+
+constexpr RECT overlay_close_rect(const RECT& bounds) noexcept {
+    return {
+        bounds.right - kOverlayCloseInset - kOverlayCloseSize,
+        bounds.top + kOverlayCloseInset,
+        bounds.right - kOverlayCloseInset,
+        bounds.top + kOverlayCloseInset + kOverlayCloseSize
+    };
+}
+
+constexpr bool point_in_rect(const RECT& bounds, int x, int y) noexcept {
+    return x >= bounds.left && x < bounds.right &&
+           y >= bounds.top && y < bounds.bottom;
 }
 
 }  // namespace sr::ui

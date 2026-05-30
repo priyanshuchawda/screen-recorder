@@ -48,3 +48,16 @@ TEST(UiThemeTest, GeometryStaysCompactAndStable) {
     EXPECT_GE(sr::ui::kButtonCornerRadius, 4);
     EXPECT_LE(sr::ui::kButtonCornerRadius, 8);
 }
+
+TEST(UiThemeTest, OverlayCloseTargetIsInsetAndClickable) {
+    const RECT host{0, 0, 280, 210};
+    const RECT close = sr::ui::overlay_close_rect(host);
+
+    EXPECT_EQ(close.left, 248);
+    EXPECT_EQ(close.top, 8);
+    EXPECT_EQ(close.right, 272);
+    EXPECT_EQ(close.bottom, 32);
+    EXPECT_TRUE(sr::ui::point_in_rect(close, 260, 20));
+    EXPECT_FALSE(sr::ui::point_in_rect(close, 247, 20));
+    EXPECT_FALSE(sr::ui::point_in_rect(close, 260, 32));
+}
