@@ -20,6 +20,7 @@
 #include "app/camera_overlay.h"
 #include "app/app_icon.h"
 #include "app/app_version.h"
+#include "app/ui_theme.h"
 
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dwmapi.lib")
@@ -62,21 +63,20 @@ static HWND g_lbl_fps       = nullptr;
 static HWND g_lbl_path      = nullptr;
 static HWND g_lbl_dropped   = nullptr;
 static HWND g_lbl_profile   = nullptr;
+static HWND g_lbl_title     = nullptr;
 
 static HBRUSH g_brush_bg    = nullptr;
+static HBRUSH g_brush_header = nullptr;
 static HFONT  g_font_ui     = nullptr;
 static HFONT  g_font_bold   = nullptr;
+static HFONT  g_font_title  = nullptr;
+static HFONT  g_font_metric = nullptr;
+static HWND   g_hot_button  = nullptr;
 
-static constexpr COLORREF kBgColor      = RGB(31, 31, 31);
-static constexpr COLORREF kTextColor    = RGB(230, 230, 230);
-static constexpr COLORREF kMutedText    = RGB(170, 170, 170);
-static constexpr COLORREF kCardColor    = RGB(38, 38, 41);
-static constexpr COLORREF kBorderColor  = RGB(64, 64, 68);
-static constexpr COLORREF kAccent       = RGB(0, 120, 215);
-static constexpr COLORREF kAccentHover  = RGB(0, 132, 235);
-static constexpr COLORREF kBtnDark      = RGB(56, 56, 60);
-static constexpr COLORREF kBtnDarkHover = RGB(66, 66, 72);
-static constexpr COLORREF kBtnDisabled  = RGB(74, 74, 78);
+static constexpr COLORREF kBgColor     = sr::ui::kWindowBackground;
+static constexpr COLORREF kTextColor   = sr::ui::kText;
+static constexpr COLORREF kMutedText   = sr::ui::kTextMuted;
+static constexpr COLORREF kBorderColor = sr::ui::kBorder;
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -168,7 +168,7 @@ void UpdateUI()
             ts.frames_captured, ts.frames_encoded, ts.frames_dropped,
             ts.frames_backlogged,
             ts.encoder_mode_label(),
-            ts.is_on_ac ? L"" : L" \U0001F50B");
+            ts.is_on_ac ? L"" : L"  Battery");
         SetWindowTextW(g_lbl_fps, fps_buf);
 
         wchar_t drp_buf[64];
@@ -190,6 +190,7 @@ void UpdateUI()
 
 static void ApplyUIFont(HWND hwnd) {
     if (!g_font_ui || !g_font_bold) return;
+    HFONT metric_font = g_font_metric ? g_font_metric : g_font_ui;
     SendMessageW(hwnd, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
     if (g_btn_start)    SendMessageW(g_btn_start,    WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
     if (g_btn_stop)     SendMessageW(g_btn_stop,     WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
@@ -197,6 +198,12 @@ static void ApplyUIFont(HWND hwnd) {
     if (g_btn_mute)     SendMessageW(g_btn_mute,     WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
     if (g_btn_settings) SendMessageW(g_btn_settings, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
     if (g_btn_hq)       SendMessageW(g_btn_hq,       WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
+    if (g_lbl_status)   SendMessageW(g_lbl_status,   WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
+    if (g_lbl_time)     SendMessageW(g_lbl_time,     WM_SETFONT, reinterpret_cast<WPARAM>(metric_font), TRUE);
+    if (g_lbl_fps)      SendMessageW(g_lbl_fps,      WM_SETFONT, reinterpret_cast<WPARAM>(metric_font), TRUE);
+    if (g_lbl_path)     SendMessageW(g_lbl_path,     WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
+    if (g_lbl_dropped)  SendMessageW(g_lbl_dropped,  WM_SETFONT, reinterpret_cast<WPARAM>(metric_font), TRUE);
+    if (g_lbl_profile)  SendMessageW(g_lbl_profile,  WM_SETFONT, reinterpret_cast<WPARAM>(metric_font), TRUE);
 }
 
 static void EnableDarkTitleBar(HWND hwnd) {
@@ -209,43 +216,97 @@ static bool IsControlEnabled(HWND hwnd, UINT id) {
     return ctrl && IsWindowEnabled(ctrl);
 }
 
-static void DrawButton(HDC hdc, const RECT& rc, const std::wstring& text,
-                       bool enabled, bool pressed, bool primary)
+static LRESULT CALLBACK ButtonSubclassProc(HWND hwnd,
+                                           UINT msg,
+                                           WPARAM wParam,
+                                           LPARAM lParam,
+                                           UINT_PTR subclass_id,
+                                           DWORD_PTR ref_data)
 {
-    COLORREF fill = kBtnDark;
-    COLORREF border = kBorderColor;
-    COLORREF text_color = enabled ? kTextColor : RGB(180, 180, 180);
+    (void)subclass_id;
+    (void)ref_data;
 
-    if (!enabled) {
-        fill = kBtnDisabled;
-    } else if (primary) {
-        fill = pressed ? RGB(0, 102, 184) : kAccent;
-        border = pressed ? RGB(0, 92, 168) : RGB(20, 140, 230);
-        text_color = RGB(245, 245, 245);
-    } else {
-        fill = pressed ? RGB(48, 48, 54) : kBtnDark;
+    switch (msg) {
+    case WM_MOUSEMOVE:
+        if (g_hot_button != hwnd) {
+            HWND old_hot = g_hot_button;
+            g_hot_button = hwnd;
+            if (old_hot) InvalidateRect(old_hot, nullptr, FALSE);
+            InvalidateRect(hwnd, nullptr, FALSE);
+
+            TRACKMOUSEEVENT tme{};
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            TrackMouseEvent(&tme);
+        }
+        break;
+    case WM_MOUSELEAVE:
+        if (g_hot_button == hwnd) {
+            g_hot_button = nullptr;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        break;
+    case WM_NCDESTROY:
+        if (g_hot_button == hwnd) {
+            g_hot_button = nullptr;
+        }
+        RemoveWindowSubclass(hwnd, ButtonSubclassProc, 1);
+        break;
+    default:
+        break;
     }
 
-    HBRUSH fill_brush = CreateSolidBrush(fill);
-    FillRect(hdc, &rc, fill_brush);
-    DeleteObject(fill_brush);
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
 
-    HPEN pen = CreatePen(PS_SOLID, 1, border);
-    HGDIOBJ old_pen = SelectObject(hdc, pen);
-    HGDIOBJ old_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
-    Rectangle(hdc, rc.left, rc.top, rc.right, rc.bottom);
+static void InstallButtonHover(HWND hwnd) {
+    SetWindowSubclass(hwnd, ButtonSubclassProc, 1, 0);
+}
+
+static void DrawButton(HDC hdc, const RECT& rc, const std::wstring& text,
+                       bool enabled, bool pressed, bool hot, bool focused, bool primary)
+{
+    const auto role = primary ? sr::ui::ButtonRole::Primary : sr::ui::ButtonRole::Secondary;
+    const auto interaction =
+        !enabled ? sr::ui::ButtonInteraction::Disabled :
+        pressed  ? sr::ui::ButtonInteraction::Pressed :
+        hot      ? sr::ui::ButtonInteraction::Hot :
+                   sr::ui::ButtonInteraction::Normal;
+    const auto visual = sr::ui::button_visual(role, interaction);
+
+    FillRect(hdc, &rc, g_brush_bg);
+
+    HBRUSH fill_brush = CreateSolidBrush(visual.fill);
+    HPEN border_pen = CreatePen(PS_SOLID, 1, visual.border);
+    HGDIOBJ old_pen = SelectObject(hdc, border_pen);
+    HGDIOBJ old_brush = SelectObject(hdc, fill_brush);
+
+    const int radius = sr::ui::kButtonCornerRadius * 2;
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
+
     SelectObject(hdc, old_brush);
     SelectObject(hdc, old_pen);
-    DeleteObject(pen);
+    DeleteObject(fill_brush);
+    DeleteObject(border_pen);
+
+    if (focused && enabled) {
+        RECT focus_rc = rc;
+        InflateRect(&focus_rc, -sr::ui::kButtonFocusInset, -sr::ui::kButtonFocusInset);
+        HPEN focus_pen = CreatePen(PS_SOLID, 1, sr::ui::kFocusRing);
+        old_pen = SelectObject(hdc, focus_pen);
+        old_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+        RoundRect(hdc, focus_rc.left, focus_rc.top, focus_rc.right, focus_rc.bottom,
+                  radius, radius);
+        SelectObject(hdc, old_brush);
+        SelectObject(hdc, old_pen);
+        DeleteObject(focus_pen);
+    }
 
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, text_color);
+    SetTextColor(hdc, visual.text);
 
     RECT text_rc = rc;
-    if (pressed) {
-        text_rc.left += 1;
-        text_rc.top  += 1;
-    }
     DrawTextW(hdc, text.c_str(), -1, &text_rc,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
@@ -266,10 +327,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             -18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_font_title = CreateFontW(
+            -20, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        g_font_metric = CreateFontW(
+            -16, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Cascadia Mono");
 
-        CreateWindowW(L"STATIC", L"Screen Recorder",
-                      WS_VISIBLE | WS_CHILD,
-                      12, y, 220, 24, hwnd, nullptr, nullptr, nullptr);
+        g_lbl_title = CreateWindowW(L"STATIC", L"Screen Recorder",
+                                    WS_VISIBLE | WS_CHILD,
+                                    12, y, 250, 24, hwnd, nullptr, nullptr, nullptr);
+        if (g_font_title) {
+            SendMessageW(g_lbl_title, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_title), TRUE);
+        }
 
         y += 30;
         CreateWindowW(L"STATIC", L"Status:", WS_VISIBLE | WS_CHILD,
@@ -286,44 +358,51 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         y += 28;
         g_lbl_fps = CreateWindowW(L"STATIC", L"Captured:0  Encoded:0",
                     WS_VISIBLE | WS_CHILD,
-                    12, y, 390, 20, hwnd, (HMENU)ID_LABEL_FPS, nullptr, nullptr);
+                    12, y, 700, 20, hwnd, (HMENU)ID_LABEL_FPS, nullptr, nullptr);
 
         y += 24;
         g_lbl_dropped = CreateWindowW(L"STATIC", L"Dropped: 0",
                         WS_VISIBLE | WS_CHILD,
-                        12, y, 240, 20, hwnd, (HMENU)ID_LABEL_DROPPED, nullptr, nullptr);
+                        12, y, 360, 20, hwnd, (HMENU)ID_LABEL_DROPPED, nullptr, nullptr);
 
         y += 30;
         g_lbl_path = CreateWindowW(L"STATIC", g_storage.outputDirectory().c_str(),
                      WS_VISIBLE | WS_CHILD | SS_PATHELLIPSIS,
-                     12, y, 390, 20, hwnd, (HMENU)ID_LABEL_PATH, nullptr, nullptr);
+                     12, y, 700, 20, hwnd, (HMENU)ID_LABEL_PATH, nullptr, nullptr);
 
         y += 38;
         g_btn_start = CreateWindowW(L"BUTTON", L"Start",
                       WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                      12,  y, 92, 32, hwnd, (HMENU)ID_BTN_START, nullptr, nullptr);
+                      12,  y, 120, 32, hwnd, (HMENU)ID_BTN_START, nullptr, nullptr);
         g_btn_stop  = CreateWindowW(L"BUTTON", L"Stop",
                       WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                      112, y, 92, 32, hwnd, (HMENU)ID_BTN_STOP, nullptr, nullptr);
+                      144, y, 120, 32, hwnd, (HMENU)ID_BTN_STOP, nullptr, nullptr);
         g_btn_pause = CreateWindowW(L"BUTTON", L"Pause",
                       WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                      212, y, 92, 32, hwnd, (HMENU)ID_BTN_PAUSE, nullptr, nullptr);
+                      276, y, 120, 32, hwnd, (HMENU)ID_BTN_PAUSE, nullptr, nullptr);
         g_btn_mute  = CreateWindowW(L"BUTTON", L"Mute",
                       WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                      312, y, 92, 32, hwnd, (HMENU)ID_BTN_MUTE, nullptr, nullptr);
+                      408, y, 120, 32, hwnd, (HMENU)ID_BTN_MUTE, nullptr, nullptr);
 
         y += 42;
-        g_btn_settings = CreateWindowW(L"BUTTON", L"\u2699 Settings",
+        g_btn_settings = CreateWindowW(L"BUTTON", L"Settings",
                          WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                         12, y, 116, 28, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
+                         12, y, 132, 28, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
         g_btn_hq = CreateWindowW(L"BUTTON", L"HQ Off",
                    WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                   138, y, 78, 28, hwnd, (HMENU)ID_BTN_HQ, nullptr, nullptr);
+                   156, y, 92, 28, hwnd, (HMENU)ID_BTN_HQ, nullptr, nullptr);
+
+        InstallButtonHover(g_btn_start);
+        InstallButtonHover(g_btn_stop);
+        InstallButtonHover(g_btn_pause);
+        InstallButtonHover(g_btn_mute);
+        InstallButtonHover(g_btn_settings);
+        InstallButtonHover(g_btn_hq);
 
         // Profile label: e.g. "30fps | 848x480 | 4Mbps"
         g_lbl_profile = CreateWindowW(L"STATIC", L"30fps | 848x480 | 4Mbps",
                         WS_VISIBLE | WS_CHILD | SS_LEFT,
-                        226, y + 6, 206, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
+                        262, y + 6, 450, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
 
         ApplyUIFont(hwnd);
 
@@ -342,9 +421,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         const UINT id = static_cast<UINT>(dis->CtlID);
         const bool enabled = (dis->itemState & ODS_DISABLED) == 0;
         const bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+        const bool hot = ((dis->itemState & ODS_HOTLIGHT) != 0) || (dis->hwndItem == g_hot_button);
+        const bool focused = (dis->itemState & ODS_FOCUS) != 0;
         const bool primary = (id == ID_BTN_START);
 
-        DrawButton(dis->hDC, dis->rcItem, text, enabled, pressed, primary);
+        DrawButton(dis->hDC, dis->rcItem, text, enabled, pressed, hot, focused, primary);
         return TRUE;
     }
 
@@ -358,6 +439,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         RECT rc{};
         GetClientRect(hwnd, &rc);
         FillRect(hdc, &rc, g_brush_bg);
+
+        RECT header{0, 0, rc.right, 44};
+        FillRect(hdc, &header, g_brush_header);
+
+        RECT accent{0, 0, 3, 44};
+        HBRUSH accent_brush = CreateSolidBrush(sr::ui::kRecording);
+        FillRect(hdc, &accent, accent_brush);
+        DeleteObject(accent_brush);
 
         HPEN pen = CreatePen(PS_SOLID, 1, kBorderColor);
         HGDIOBJ old_pen = SelectObject(hdc, pen);
@@ -376,6 +465,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         SetBkMode(hdc, TRANSPARENT);
         if (child == g_lbl_profile || child == g_lbl_path) {
             SetTextColor(hdc, kMutedText);
+        } else if (child == g_lbl_title) {
+            SetTextColor(hdc, sr::ui::kTextStrong);
+            return reinterpret_cast<INT_PTR>(g_brush_header);
         } else {
             SetTextColor(hdc, kTextColor);
         }
@@ -529,6 +621,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             DeleteObject(g_font_bold);
             g_font_bold = nullptr;
         }
+        if (g_font_title) {
+            DeleteObject(g_font_title);
+            g_font_title = nullptr;
+        }
+        if (g_font_metric) {
+            DeleteObject(g_font_metric);
+            g_font_metric = nullptr;
+        }
+        if (g_brush_header) {
+            DeleteObject(g_brush_header);
+            g_brush_header = nullptr;
+        }
+        if (g_brush_bg) {
+            DeleteObject(g_brush_bg);
+            g_brush_bg = nullptr;
+        }
         PostQuitMessage(0);
         break;
 
@@ -545,6 +653,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 
     if (!g_brush_bg) {
         g_brush_bg = CreateSolidBrush(kBgColor);
+    }
+    if (!g_brush_header) {
+        g_brush_header = CreateSolidBrush(sr::ui::kHeaderBackground);
     }
 
 #ifdef _DEBUG
@@ -606,7 +717,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     g_hwnd = CreateWindowExW(
         0, L"ScreenRecorderClass", sr::kAppWindowTitle,
         WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 450, 365,
+        CW_USEDEFAULT, CW_USEDEFAULT, 760, 430,
         nullptr, nullptr, hInstance, nullptr
     );
 
