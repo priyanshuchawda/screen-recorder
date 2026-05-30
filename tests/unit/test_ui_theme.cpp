@@ -61,3 +61,51 @@ TEST(UiThemeTest, OverlayCloseTargetIsInsetAndClickable) {
     EXPECT_FALSE(sr::ui::point_in_rect(close, 247, 20));
     EXPECT_FALSE(sr::ui::point_in_rect(close, 260, 32));
 }
+
+TEST(UiThemeTest, StatusVisualKeepsIdleQuiet) {
+    const auto idle = sr::ui::status_visual(sr::ui::StatusTone::Idle, true);
+
+    EXPECT_EQ(idle.accent, sr::ui::kStatusIdle);
+    EXPECT_EQ(idle.fill, sr::ui::kSurface);
+    EXPECT_EQ(idle.text, sr::ui::kTextMuted);
+    EXPECT_FALSE(idle.animated);
+}
+
+TEST(UiThemeTest, StatusVisualAnimatesRecordingOnlyWhenMotionAllowed) {
+    const auto motion =
+        sr::ui::status_visual(sr::ui::StatusTone::Recording, true);
+    const auto reduced_motion =
+        sr::ui::status_visual(sr::ui::StatusTone::Recording, false);
+
+    EXPECT_EQ(motion.accent, sr::ui::kRecording);
+    EXPECT_TRUE(motion.animated);
+    EXPECT_EQ(reduced_motion.accent, sr::ui::kRecording);
+    EXPECT_FALSE(reduced_motion.animated);
+}
+
+TEST(UiThemeTest, StatusPulseFallsBackToStaticWhenReducedMotion) {
+    EXPECT_EQ(sr::ui::status_pulse_color(sr::ui::StatusTone::Recording,
+                                         false, true),
+              sr::ui::kRecording);
+    EXPECT_EQ(sr::ui::status_pulse_color(sr::ui::StatusTone::Recording,
+                                         true, true),
+              sr::ui::kRecordingHot);
+    EXPECT_EQ(sr::ui::status_pulse_color(sr::ui::StatusTone::Recording,
+                                         true, false),
+              sr::ui::kRecording);
+    EXPECT_EQ(sr::ui::status_pulse_color(sr::ui::StatusTone::Paused,
+                                         true, true),
+              sr::ui::kPaused);
+}
+
+TEST(UiThemeTest, StatusVisualProvidesDistinctPausedAndStoppingTone) {
+    const auto paused = sr::ui::status_visual(sr::ui::StatusTone::Paused, true);
+    const auto stopping =
+        sr::ui::status_visual(sr::ui::StatusTone::Stopping, true);
+
+    EXPECT_EQ(paused.accent, sr::ui::kPaused);
+    EXPECT_EQ(stopping.accent, sr::ui::kStopping);
+    EXPECT_FALSE(paused.animated);
+    EXPECT_FALSE(stopping.animated);
+    EXPECT_NE(paused.accent, stopping.accent);
+}
