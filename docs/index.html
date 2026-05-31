@@ -1,944 +1,1155 @@
 <!doctype html>
-<html lang="en" class="scroll-smooth">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ScreenRecorder — Stable Native Capture Tool for Windows</title>
+  <meta name="color-scheme" content="dark" />
+  <title>ScreenRecorder - Native Windows Screen Recorder</title>
   <meta name="description"
-    content="Download ScreenRecorder for Windows. A stable native Win32, Windows Graphics Capture, Media Foundation, and Intel Quick Sync capable screen recorder built for efficient recording." />
+    content="Download ScreenRecorder for Windows. A native Win32 screen recorder using Windows Graphics Capture, D3D11, Media Foundation, system audio, microphone audio, and camera overlay support." />
   <link rel="icon" type="image/png" href="favicon.png" />
-
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800;900&display=swap"
-    rel="stylesheet">
-
   <style>
     :root {
-      /* Colors */
-      --bg-base: #030712;
-      --bg-surface: #0f172a;
-      --bg-surface-hover: #1e293b;
-
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-
-      --brand-blue: #0078D4;
-      /* Windows Blue */
-      --brand-light: #38bdf8;
-
-      --border-subtle: rgba(255, 255, 255, 0.08);
-      --border-hover: rgba(56, 189, 248, 0.4);
-
-      --glass-bg: rgba(3, 7, 18, 0.6);
+      color-scheme: dark;
+      --bg: #05070b;
+      --bg-elevated: #0b1119;
+      --bg-panel: #101822;
+      --bg-panel-strong: #162231;
+      --border: #263648;
+      --border-strong: #37506a;
+      --text: #f7fafc;
+      --muted: #a7b4c4;
+      --soft: #738298;
+      --brand: #0ea5e9;
+      --brand-hot: #38bdf8;
+      --brand-deep: #0369a1;
+      --good: #28d292;
+      --warn: #f59e0b;
+      --danger: #f87171;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+      --radius: 14px;
+      --max: 1180px;
+      font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
     }
 
     * {
       box-sizing: border-box;
-      margin: 0;
-      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
     }
 
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background-color: var(--bg-base);
-      color: var(--text-main);
-      line-height: 1.6;
+      margin: 0;
+      background:
+        radial-gradient(circle at top left, rgba(14, 165, 233, 0.18), transparent 34rem),
+        radial-gradient(circle at top right, rgba(40, 210, 146, 0.12), transparent 32rem),
+        linear-gradient(180deg, #05070b 0%, #07101a 46%, #05070b 100%);
+      color: var(--text);
+      line-height: 1.55;
       overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    img,
+    figure,
+    svg {
+      display: block;
+    }
+
+    figure {
+      margin: 0;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .skip-link {
+      position: fixed;
+      left: 1rem;
+      top: 1rem;
+      z-index: 20;
+      transform: translateY(-160%);
+      border-radius: 999px;
+      background: var(--text);
+      color: #020617;
+      padding: 0.75rem 1rem;
+      font-weight: 700;
+      transition: transform 160ms ease;
+    }
+
+    .skip-link:focus-visible {
+      transform: translateY(0);
+      outline: 3px solid var(--brand-hot);
+      outline-offset: 3px;
+    }
+
+    .page-shell {
+      min-height: 100vh;
+    }
+
+    .container {
+      width: min(100% - 2rem, var(--max));
+      margin-inline: auto;
+    }
+
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(5, 7, 11, 0.82);
+      backdrop-filter: blur(18px);
+    }
+
+    .nav {
+      display: flex;
+      min-height: 72px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      min-width: 0;
+      align-items: center;
+      gap: 0.8rem;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .brand-mark {
+      width: 2.2rem;
+      height: 2.2rem;
+      border-radius: 0.65rem;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--brand), var(--good));
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22), 0 14px 32px rgba(14, 165, 233, 0.26);
+      flex: 0 0 auto;
+    }
+
+    .brand-mark svg {
+      width: 1.25rem;
+      height: 1.25rem;
+    }
+
+    .brand-text {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+      font-weight: 650;
+    }
+
+    .nav-links a {
+      border-radius: 999px;
+      padding: 0.55rem 0.8rem;
+      transition: color 160ms ease, background-color 160ms ease;
+    }
+
+    .nav-links a:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .focusable:focus-visible,
+    .nav-links a:focus-visible,
+    .button:focus-visible,
+    .download-card:focus-within {
+      outline: 3px solid var(--brand-hot);
+      outline-offset: 4px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 0.94fr) minmax(320px, 1.06fr);
+      gap: clamp(2rem, 5vw, 4.5rem);
+      align-items: center;
+      padding-block: clamp(4.5rem, 9vw, 7.5rem) 4rem;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      width: fit-content;
+      border: 1px solid rgba(56, 189, 248, 0.34);
+      border-radius: 999px;
+      background: rgba(14, 165, 233, 0.1);
+      color: #dff6ff;
+      padding: 0.42rem 0.75rem;
+      font-size: 0.88rem;
+      font-weight: 750;
+    }
+
+    .status-dot {
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 999px;
+      background: var(--good);
+      box-shadow: 0 0 0 5px rgba(40, 210, 146, 0.14);
     }
 
     h1,
     h2,
     h3,
-    h4,
-    .font-display {
-      font-family: 'Outfit', sans-serif;
+    p {
+      margin-block: 0;
     }
 
-    a {
-      text-decoration: none;
-      color: inherit;
+    h1 {
+      max-width: 11ch;
+      margin-top: 1.1rem;
+      font-size: clamp(3.2rem, 7.4vw, 6.7rem);
+      line-height: 0.9;
+      letter-spacing: 0;
+      text-wrap: balance;
     }
 
-    /* Core Layout */
-    .container {
-      width: 100%;
-      max-width: 1280px;
-      margin: 0 auto;
-      padding: 0 24px;
-    }
-
-    /* Ambient Background FX */
-    .ambient-bg {
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 100vh;
-      overflow: hidden;
-      z-index: -1;
-      pointer-events: none;
-    }
-
-    .ambient-glow {
-      position: absolute;
-      width: 800px;
-      height: 800px;
-      background: radial-gradient(circle at center, rgba(0, 120, 212, 0.15) 0%, transparent 60%);
-      top: -20%;
-      left: 50%;
-      transform: translateX(-50%);
-      filter: blur(60px);
-    }
-
-    .ambient-grid {
-      position: absolute;
-      inset: 0;
-      background-size: 50px 50px;
-      background-image: linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-      mask-image: linear-gradient(to bottom, black 20%, transparent 80%);
-      -webkit-mask-image: linear-gradient(to bottom, black 20%, transparent 80%);
-    }
-
-    /* Navbar */
-    .navbar {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 72px;
-      background: var(--glass-bg);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border-subtle);
-      z-index: 100;
-      display: flex;
-      align-items: center;
-    }
-
-    .nav-inner {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      width: 100%;
-    }
-
-    .nav-brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 1.25rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-    }
-
-    .nav-logo {
-      width: 32px;
-      height: 32px;
-      background: linear-gradient(135deg, var(--brand-blue), var(--brand-light));
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 4px 12px rgba(0, 120, 212, 0.3);
-    }
-
-    .nav-links {
-      display: flex;
-      gap: 32px;
-      align-items: center;
-    }
-
-    @media (max-width: 768px) {
-      .nav-links {
-        display: none;
-      }
-    }
-
-    .nav-link {
-      font-size: 0.9375rem;
-      font-weight: 500;
-      color: var(--text-muted);
-      transition: color 0.2s;
-    }
-
-    .nav-link:hover {
-      color: var(--text-main);
-    }
-
-    .nav-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--border-subtle);
-      font-size: 0.875rem;
-      font-weight: 600;
-      transition: all 0.2s;
-    }
-
-    .nav-btn:hover {
-      background: rgba(255, 255, 255, 0.1);
-      border-color: rgba(255, 255, 255, 0.2);
-    }
-
-    /* Hero Section */
-    .hero {
-      padding-top: 180px;
-      padding-bottom: 100px;
-      text-align: center;
-      position: relative;
-    }
-
-    .badge-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 16px;
-      border-radius: 100px;
-      background: rgba(0, 120, 212, 0.1);
-      border: 1px solid rgba(0, 120, 212, 0.2);
-      color: var(--brand-light);
-      font-size: 0.875rem;
-      font-weight: 600;
-      margin-bottom: 32px;
-      animation: fadeDown 0.6s ease-out;
-    }
-
-    .badge-pill span.dot {
-      width: 6px;
-      height: 6px;
-      background: var(--brand-light);
-      border-radius: 50%;
-      box-shadow: 0 0 8px var(--brand-light);
-    }
-
-    .hero-title {
-      font-size: clamp(3.5rem, 6vw, 5.5rem);
-      letter-spacing: -0.04em;
-      line-height: 1.1;
-      margin-bottom: 24px;
-      animation: fadeUp 0.8s ease-out 0.1s both;
-    }
-
-    .text-gradient {
-      background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .text-windows {
-      background: linear-gradient(135deg, #38bdf8 0%, #0078D4 100%);
-      -webkit-background-clip: text;
-      background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .hero-desc {
-      font-size: clamp(1.125rem, 2vw, 1.375rem);
-      color: var(--text-muted);
-      max-width: 680px;
-      margin: 0 auto 48px;
-      animation: fadeUp 0.8s ease-out 0.2s both;
+    .hero-copy {
+      max-width: 64ch;
+      margin-top: 1.35rem;
+      color: var(--muted);
+      font-size: clamp(1.04rem, 1.4vw, 1.2rem);
+      overflow-wrap: anywhere;
+      text-wrap: pretty;
     }
 
     .hero-actions {
       display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 20px;
-      margin-bottom: 24px;
       flex-wrap: wrap;
-      animation: fadeUp 0.8s ease-out 0.3s both;
+      gap: 0.85rem;
+      margin-top: 2rem;
     }
 
-    .btn-large {
+    .button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 12px;
-      padding: 18px 36px;
-      border-radius: 12px;
-      font-family: 'Outfit', sans-serif;
-      font-weight: 700;
-      font-size: 1.125rem;
-      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-      cursor: pointer;
+      gap: 0.65rem;
+      min-height: 3.25rem;
+      border-radius: 0.9rem;
+      border: 1px solid transparent;
+      padding: 0.85rem 1.05rem;
+      font-weight: 800;
+      touch-action: manipulation;
+      transition: transform 160ms ease, background-color 160ms ease, border-color 160ms ease, color 160ms ease;
     }
 
-    .btn-primary {
-      background: var(--brand-blue);
+    .button:hover {
+      transform: translateY(-1px);
+    }
+
+    .button-primary {
+      background: linear-gradient(135deg, var(--brand), var(--brand-deep));
       color: white;
-      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1) inset, 0 10px 30px -10px rgba(0, 120, 212, 0.6);
-      position: relative;
-      overflow: hidden;
+      box-shadow: 0 18px 38px rgba(14, 165, 233, 0.28);
     }
 
-    .btn-primary::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: -100%;
-      width: 50%;
-      height: 100%;
-      background: linear-gradient(to right, transparent, rgba(255, 255, 255, 0.2), transparent);
-      transform: skewX(-20deg);
-      transition: 0.5s;
+    .button-primary:hover {
+      background: linear-gradient(135deg, var(--brand-hot), var(--brand));
     }
 
-    .btn-primary:hover {
-      background: #0086F0;
-      transform: translateY(-2px);
-      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2) inset, 0 15px 40px -10px rgba(0, 120, 212, 0.8);
+    .button-secondary {
+      border-color: var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text);
     }
 
-    .btn-primary:hover::after {
-      left: 200%;
+    .button-secondary:hover {
+      border-color: var(--border-strong);
+      background: rgba(255, 255, 255, 0.07);
     }
 
-    .btn-secondary {
-      background: rgba(255, 255, 255, 0.03);
-      color: var(--text-main);
-      border: 1px solid var(--border-subtle);
+    .button svg {
+      width: 1.25rem;
+      height: 1.25rem;
+      flex: 0 0 auto;
     }
 
-    .btn-secondary:hover {
-      background: rgba(255, 255, 255, 1);
-      color: #000;
-      border-color: #fff;
-      transform: translateY(-2px);
-    }
-
-    .trust-text {
-      font-size: 0.875rem;
-      color: var(--text-muted);
+    .hero-meta {
       display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      animation: fadeUp 0.8s ease-out 0.4s both;
-    }
-
-    .trust-text span {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    /* Mockup Showcase */
-    .showcase {
-      margin-top: 80px;
-      perspective: 1000px;
-      animation: fadeUp 1s ease-out 0.5s both;
-    }
-
-    .windows-window {
-      background: rgba(15, 23, 42, 0.6);
-      border: 1px solid var(--border-subtle);
-      border-radius: 12px;
-      box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.05) inset;
-      max-width: 900px;
-      margin: 0 auto;
-      overflow: hidden;
-      transform: rotateX(2deg) translateY(0);
-      transition: transform 0.5s ease;
-      backdrop-filter: blur(20px);
-    }
-
-    .windows-window:hover {
-      transform: rotateX(0deg) translateY(-5px);
-    }
-
-    .win-header {
-      height: 40px;
-      background: rgba(255, 255, 255, 0.02);
-      border-bottom: 1px solid var(--border-subtle);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0 16px;
-    }
-
-    .win-title {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .win-controls {
-      display: flex;
-    }
-
-    .win-ctrl {
-      width: 44px;
-      height: 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: background 0.1s;
-    }
-
-    .win-ctrl:hover {
-      background: rgba(255, 255, 255, 0.1);
-    }
-
-    .win-ctrl.close:hover {
-      background: #E81123;
-      color: white;
-    }
-
-    .win-body {
-      padding: 60px 20px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: radial-gradient(circle at center, rgba(0, 120, 212, 0.05) 0%, transparent 70%);
-    }
-
-    /* Recording UI Mock */
-    .rec-island {
-      background: rgba(3, 7, 18, 0.8);
-      border: 1px solid var(--border-subtle);
-      border-radius: 100px;
-      padding: 12px 24px;
-      display: flex;
-      align-items: center;
-      gap: 24px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    }
-
-    .rec-status {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .rec-dot {
-      width: 12px;
-      height: 12px;
-      background: #ef4444;
-      border-radius: 50%;
-      box-shadow: 0 0 10px #ef4444;
-      animation: pulse 2s infinite;
-    }
-
-    .rec-time {
-      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-      font-size: 1.25rem;
-      font-weight: 600;
-      letter-spacing: 1px;
-    }
-
-    .rec-controls {
-      display: flex;
-      gap: 12px;
-      border-left: 1px solid var(--border-subtle);
-      padding-left: 24px;
-    }
-
-    .rec-btn {
-      width: 36px;
-      height: 36px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.05);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    /* Features Section */
-    .features {
-      padding: 120px 0;
-      background: linear-gradient(to bottom, transparent, var(--bg-surface));
-      border-top: 1px solid var(--border-subtle);
-    }
-
-    .section-header {
-      text-align: center;
-      margin-bottom: 80px;
-      max-width: 600px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-
-    .section-header h2 {
-      font-size: clamp(2rem, 4vw, 3rem);
-      margin-bottom: 16px;
-    }
-
-    .section-header p {
-      color: var(--text-muted);
-      font-size: 1.125rem;
-    }
-
-    .grid-3 {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 24px;
-    }
-
-    .card {
-      background: rgba(15, 23, 42, 0.4);
-      border: 1px solid var(--border-subtle);
-      border-radius: 20px;
-      padding: 40px;
-      transition: all 0.3s;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .card::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: radial-gradient(circle at 50% 0%, rgba(56, 189, 248, 0.1), transparent 70%);
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-
-    .card:hover {
-      border-color: var(--border-hover);
-      transform: translateY(-4px);
-      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.5);
-    }
-
-    .card:hover::before {
-      opacity: 1;
-    }
-
-    .card-icon {
-      width: 56px;
-      height: 56px;
-      background: linear-gradient(135deg, rgba(0, 120, 212, 0.1), rgba(56, 189, 248, 0.1));
-      border: 1px solid rgba(0, 120, 212, 0.2);
-      color: var(--brand-light);
-      border-radius: 16px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 24px;
-    }
-
-    .card h3 {
-      font-size: 1.5rem;
-      margin-bottom: 12px;
-    }
-
-    .card p {
-      color: var(--text-muted);
-    }
-
-    /* Footer */
-    .footer {
-      border-top: 1px solid var(--border-subtle);
-      background: var(--bg-surface);
-      padding: 80px 0 40px;
-    }
-
-    .footer-grid {
-      display: grid;
-      grid-template-columns: 2fr 1fr 1fr;
-      gap: 60px;
-      margin-bottom: 60px;
-    }
-
-    @media (max-width: 768px) {
-      .footer-grid {
-        grid-template-columns: 1fr;
-        gap: 40px;
-      }
-    }
-
-    .footer-brand p {
-      color: var(--text-muted);
-      margin-top: 16px;
-      max-width: 300px;
-    }
-
-    .footer-col h4 {
-      font-size: 1.125rem;
-      margin-bottom: 20px;
-      color: var(--text-main);
-    }
-
-    .footer-col ul {
-      list-style: none;
-    }
-
-    .footer-col ul li {
-      margin-bottom: 12px;
-    }
-
-    .footer-col ul a {
-      color: var(--text-muted);
-      transition: color 0.2s;
-    }
-
-    .footer-col ul a:hover {
-      color: var(--text-main);
-    }
-
-    .footer-bottom {
-      padding-top: 32px;
-      border-top: 1px solid var(--border-subtle);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      color: var(--text-muted);
-      font-size: 0.875rem;
       flex-wrap: wrap;
-      gap: 16px;
+      gap: 0.65rem;
+      margin-top: 1.35rem;
+      color: var(--muted);
+      font-size: 0.94rem;
     }
 
-    /* Keyframes */
-    @keyframes fadeUp {
-      from {
-        opacity: 0;
-        transform: translateY(20px);
+    .meta-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.045);
+      padding: 0.42rem 0.72rem;
+      white-space: nowrap;
+    }
+
+    .meta-pill svg {
+      width: 1rem;
+      height: 1rem;
+      color: var(--brand-hot);
+    }
+
+    .preview-wrap {
+      position: relative;
+    }
+
+    .preview-wrap::before {
+      content: "";
+      position: absolute;
+      inset: 7% 4% auto 12%;
+      height: 54%;
+      border-radius: 50%;
+      background: rgba(14, 165, 233, 0.25);
+      filter: blur(60px);
+      pointer-events: none;
+    }
+
+    .preview-card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 1.35rem;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025));
+      box-shadow: var(--shadow);
+    }
+
+    .preview-card img {
+      width: 100%;
+      height: auto;
+      background: #0b1119;
+    }
+
+    .preview-caption {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 1rem;
+      align-items: center;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 1rem;
+      background: rgba(5, 7, 11, 0.72);
+    }
+
+    .preview-caption strong {
+      display: block;
+      font-size: 0.95rem;
+    }
+
+    .preview-caption span {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .live-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      border-radius: 999px;
+      background: rgba(40, 210, 146, 0.12);
+      color: #bbf7d0;
+      padding: 0.38rem 0.65rem;
+      font-size: 0.82rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .section {
+      padding-block: clamp(3.25rem, 7vw, 5.5rem);
+    }
+
+    .section-heading {
+      display: grid;
+      gap: 0.85rem;
+      max-width: 760px;
+      margin-bottom: 1.55rem;
+    }
+
+    .section-heading h2 {
+      font-size: clamp(2rem, 4vw, 3.2rem);
+      line-height: 1;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .section-heading p {
+      color: var(--muted);
+      font-size: 1.04rem;
+      overflow-wrap: anywhere;
+      text-wrap: pretty;
+    }
+
+    .download-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 1rem;
+    }
+
+    .download-card,
+    .feature-card,
+    .step-card {
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      border-radius: var(--radius);
+      background: rgba(16, 24, 34, 0.72);
+      box-shadow: 0 16px 54px rgba(0, 0, 0, 0.18);
+    }
+
+    .download-card {
+      display: grid;
+      gap: 1.2rem;
+      padding: clamp(1.15rem, 2.5vw, 1.6rem);
+    }
+
+    .download-card.primary {
+      background:
+        linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(40, 210, 146, 0.09)),
+        rgba(16, 24, 34, 0.86);
+      border-color: rgba(56, 189, 248, 0.3);
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: flex-start;
+    }
+
+    .platform {
+      display: flex;
+      gap: 0.8rem;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .platform-icon {
+      display: grid;
+      place-items: center;
+      width: 2.75rem;
+      height: 2.75rem;
+      border-radius: 0.85rem;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--brand-hot);
+      flex: 0 0 auto;
+    }
+
+    .platform-icon svg {
+      width: 1.45rem;
+      height: 1.45rem;
+    }
+
+    .platform h3 {
+      font-size: 1.15rem;
+      line-height: 1.15;
+    }
+
+    .platform p {
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 0.35rem 0.62rem;
+      background: rgba(40, 210, 146, 0.12);
+      color: #c7f9db;
+      font-size: 0.78rem;
+      font-weight: 850;
+      white-space: nowrap;
+    }
+
+    .tag.pending {
+      background: rgba(245, 158, 11, 0.12);
+      color: #fde68a;
+    }
+
+    .download-details {
+      display: grid;
+      gap: 0.45rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+      overflow-wrap: anywhere;
+    }
+
+    .download-details code {
+      border-radius: 0.4rem;
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text);
+      padding: 0.12rem 0.32rem;
+      font-family: "Cascadia Mono", "Consolas", monospace;
+      font-size: 0.9em;
+      word-break: break-word;
+    }
+
+    .muted-link {
+      color: #c6e9ff;
+      text-decoration: underline;
+      text-decoration-color: rgba(56, 189, 248, 0.45);
+      text-underline-offset: 0.22rem;
+    }
+
+    .platform-list {
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .platform-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 0.9rem;
+      padding: 0.9rem;
+      background: rgba(255, 255, 255, 0.035);
+    }
+
+    .platform-row strong {
+      display: block;
+      font-size: 0.95rem;
+    }
+
+    .platform-row span {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .status-unavailable {
+      color: var(--soft);
+      font-size: 0.86rem;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .feature-card {
+      padding: 1.2rem;
+    }
+
+    .feature-card svg {
+      width: 1.5rem;
+      height: 1.5rem;
+      margin-bottom: 0.95rem;
+      color: var(--brand-hot);
+    }
+
+    .feature-card h3 {
+      margin-bottom: 0.45rem;
+      font-size: 1.05rem;
+    }
+
+    .feature-card p {
+      color: var(--muted);
+      font-size: 0.95rem;
+      overflow-wrap: anywhere;
+    }
+
+    .quality-panel {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .mode-card {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--radius);
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      background: rgba(16, 24, 34, 0.72);
+      padding: 1.25rem;
+    }
+
+    .mode-card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: var(--good);
+    }
+
+    .mode-card.hq::before {
+      background: var(--brand-hot);
+    }
+
+    .mode-card h3 {
+      margin-bottom: 0.55rem;
+    }
+
+    .mode-card p {
+      color: var(--muted);
+    }
+
+    .spec-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      margin-top: 1rem;
+    }
+
+    .spec-list span {
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #d9e7f5;
+      padding: 0.35rem 0.55rem;
+      font-size: 0.84rem;
+      font-weight: 750;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .step-card {
+      padding: 1.15rem;
+    }
+
+    .step-number {
+      display: grid;
+      place-items: center;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 999px;
+      background: rgba(14, 165, 233, 0.14);
+      color: #dff6ff;
+      font-weight: 900;
+      margin-bottom: 0.85rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .step-card h3 {
+      margin-bottom: 0.45rem;
+    }
+
+    .step-card p {
+      color: var(--muted);
+      font-size: 0.95rem;
+      overflow-wrap: anywhere;
+    }
+
+    .site-footer {
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding-block: 2rem;
+      color: var(--muted);
+    }
+
+    .footer-inner {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.9rem;
+    }
+
+    .footer-links a {
+      color: #c6e9ff;
+    }
+
+    .footer-links a:hover {
+      color: white;
+    }
+
+    @media (max-width: 920px) {
+      .hero,
+      .download-grid,
+      .quality-panel {
+        grid-template-columns: 1fr;
       }
 
-      to {
-        opacity: 1;
-        transform: translateY(0);
+      .feature-grid,
+      .steps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      h1 {
+        max-width: 12ch;
       }
     }
 
-    @keyframes fadeDown {
-      from {
-        opacity: 0;
-        transform: translateY(-20px);
+    @media (max-width: 680px) {
+      .container {
+        width: min(100% - 1.25rem, var(--max));
       }
 
-      to {
-        opacity: 1;
-        transform: translateY(0);
+      .nav {
+        min-height: 64px;
+      }
+
+      .nav-links {
+        display: none;
+      }
+
+      .hero {
+        padding-top: 3rem;
+      }
+
+      .hero-actions,
+      .button,
+      .platform-row,
+      .preview-caption,
+      .card-top {
+        width: 100%;
+      }
+
+      .button,
+      .platform-row,
+      .preview-caption,
+      .card-top {
+        align-items: stretch;
+      }
+
+      .button {
+        min-width: 100%;
+      }
+
+      .feature-grid,
+      .steps {
+        grid-template-columns: 1fr;
+      }
+
+      .card-top,
+      .platform-row,
+      .preview-caption {
+        flex-direction: column;
+      }
+
+      .preview-caption {
+        display: flex;
       }
     }
 
-    @keyframes pulse {
-      0% {
-        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
       }
 
-      70% {
-        box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
-      }
-
-      100% {
-        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+      .button:hover {
+        transform: none;
       }
     }
   </style>
 </head>
 
 <body>
-
-  <!-- Ambient Background -->
-  <div class="ambient-bg">
-    <div class="ambient-glow"></div>
-    <div class="ambient-grid"></div>
-  </div>
-
-  <!-- Navbar -->
-  <nav class="navbar">
-    <div class="container nav-inner">
-      <div class="nav-brand">
-        <div class="nav-logo">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"
-            stroke-linecap="round" stroke-linejoin="round">
-            <path
-              d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-          </svg>
-        </div>
-        ScreenRecorder
-      </div>
-      <div class="nav-links">
-        <a href="#features" class="nav-link">Features</a>
-        <a href="https://github.com/priyanshuchawda/screen-recorder/releases" class="nav-link">Releases</a>
-        <a href="https://github.com/priyanshuchawda/screen-recorder" class="nav-link">Documentation</a>
-      </div>
-      <div>
-        <a href="https://github.com/priyanshuchawda/screen-recorder" target="_blank" class="nav-btn">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <path
-              d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-          </svg>
-          Star on GitHub
+  <a class="skip-link" href="#main">Skip to Main Content</a>
+  <div class="page-shell">
+    <header class="site-header">
+      <nav class="container nav" aria-label="Primary">
+        <a class="brand focusable" href="#top" aria-label="ScreenRecorder Home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none">
+              <rect x="4" y="5" width="16" height="11" rx="2" fill="white" opacity="0.95"></rect>
+              <path d="M8 20h8M12 16v4" stroke="#063b61" stroke-width="2" stroke-linecap="round"></path>
+              <circle cx="17" cy="8" r="2" fill="#ef4444"></circle>
+            </svg>
+          </span>
+          <span class="brand-text" translate="no">ScreenRecorder</span>
         </a>
-      </div>
-    </div>
-  </nav>
+        <div class="nav-links">
+          <a href="#download">Download</a>
+          <a href="#features">Features</a>
+          <a href="#quality">Quality Modes</a>
+          <a href="https://github.com/priyanshuchawda/screen-recorder" target="_blank" rel="noreferrer">GitHub</a>
+        </div>
+      </nav>
+    </header>
 
-  <!-- Hero Section -->
-  <header class="hero container">
-    <div class="badge-pill">
-      <span class="dot"></span>
-      Version 0.3.8 is now available
-    </div>
-
-    <h1 class="hero-title">
-      Flawless Screen Capture <br>
-      for <span class="text-windows">Windows</span>.
-    </h1>
-
-    <p class="hero-desc">
-      A stable native screen recorder built directly on Win32, Windows Graphics Capture, Media Foundation, and WASAPI.
-      Hardware-first recording, low-overhead defaults, and opt-in high quality when you need it.
-    </p>
-
-    <div class="hero-actions">
-      <a href="https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.8/ScreenRecorder-0.3.8-windows-x64.zip"
-        class="btn-large btn-primary">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-          stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-        Download v0.3.8 (.zip)
-      </a>
-      <a href="https://github.com/priyanshuchawda/screen-recorder" target="_blank" class="btn-large btn-secondary">
-        View Source Code
-      </a>
-    </div>
-
-    <div class="trust-text">
-      <span>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-          <polyline points="22 4 12 14.01 9 11.01"></polyline>
-        </svg>
-        100% Free & Open Source
-      </span>
-      <span>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-        </svg>
-        MIT Licensed
-      </span>
-      <span>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a8a29e" stroke-width="2"
-          stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-          <line x1="8" y1="21" x2="16" y2="21"></line>
-          <line x1="12" y1="17" x2="12" y2="21"></line>
-        </svg>
-        Win 10/11 x64
-      </span>
-    </div>
-
-    <!-- Windows Frame Showcase -->
-    <div class="showcase">
-      <div class="windows-window">
-        <!-- Windows 11 Title Bar -->
-        <div class="win-header">
-          <div class="win-title">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path
-                d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            ScreenRecorder
+    <main id="main">
+      <section class="container hero" id="top">
+        <div>
+          <div class="eyebrow">
+            <span class="status-dot" aria-hidden="true"></span>
+            Native Windows Recorder
           </div>
-          <div class="win-controls">
-            <div class="win-ctrl"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor"
-                stroke-width="1">
-                <line x1="0" y1="5" x2="10" y2="5"></line>
-              </svg></div>
-            <div class="win-ctrl"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1"
-                fill="none">
-                <rect x="1" y="1" width="8" height="8"></rect>
-              </svg></div>
-            <div class="win-ctrl close"><svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor"
-                stroke-width="1.2">
-                <line x1="1" y1="1" x2="9" y2="9"></line>
-                <line x1="9" y1="1" x2="1" y2="9"></line>
-              </svg></div>
+          <h1>Record Faster on Windows.</h1>
+          <p class="hero-copy">
+            ScreenRecorder is a native Win32 recorder built for low overhead capture, Intel GPU hardware acceleration,
+            system audio, microphone audio, and an optional camera overlay. Download the Windows package and start
+            recording without a cloud account.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" id="primary-download"
+              href="https://github.com/priyanshuchawda/screen-recorder/releases/latest">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <path d="M7 10l5 5 5-5"></path>
+                <path d="M12 15V3"></path>
+              </svg>
+              Download Windows Build
+            </a>
+            <a class="button button-secondary" href="https://github.com/priyanshuchawda/screen-recorder/releases"
+              target="_blank" rel="noreferrer">
+              View All Releases
+            </a>
+          </div>
+          <div class="hero-meta" aria-label="Project facts">
+            <span class="meta-pill">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M20 6 9 17l-5-5"></path>
+              </svg>
+              Free &amp; Open Source
+            </span>
+            <span class="meta-pill">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+                <path d="M8 21h8M12 18v3"></path>
+              </svg>
+              Windows 10/11 x64
+            </span>
+            <span class="meta-pill">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path>
+              </svg>
+              Local Recording
+            </span>
           </div>
         </div>
-        <!-- App Body -->
-        <div class="win-body">
-          <div class="rec-island">
-            <div class="rec-status">
-              <div class="rec-dot"></div>
-              <div class="rec-time">00:04:23</div>
-            </div>
-            <div class="rec-controls">
-              <div class="rec-btn">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
-                  <rect x="6" y="4" width="4" height="16"></rect>
-                  <rect x="14" y="4" width="4" height="16"></rect>
-                </svg>
-              </div>
-              <div class="rec-btn" style="background: rgba(239, 68, 68, 0.2); color: #ef4444;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-                </svg>
-              </div>
-            </div>
-          </div>
+
+        <div class="preview-wrap" aria-label="Application preview">
+          <figure class="preview-card">
+            <img src="app-preview.png" width="933" height="529"
+              alt="ScreenRecorder desktop app showing the dark main window with ready status, recording controls, high quality toggle, and recording profile." fetchpriority="high" />
+            <figcaption class="preview-caption">
+              <span>
+                <strong>Dark native interface</strong>
+                Low-distraction controls with a clear recording status pill.
+              </span>
+              <span class="live-chip"><span class="status-dot" aria-hidden="true"></span> Ready</span>
+            </figcaption>
+          </figure>
         </div>
-      </div>
-    </div>
-  </header>
+      </section>
 
-  <!-- Features -->
-  <section class="features" id="features">
-    <div class="container">
-      <div class="section-header">
-        <h2>Built for Performance</h2>
-        <p>ScreenRecorder leverages native Windows APIs to deliver high-quality captures without bogging down your
-          system.</p>
-      </div>
-
-      <div class="grid-3">
-        <div class="card">
-          <div class="card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
-            </svg>
-          </div>
-          <h3>Hardware First</h3>
-          <p>Uses Windows Graphics Capture, D3D11, and Media Foundation with Intel Quick Sync preference when available,
-            then falls back gracefully if hardware encoding is unavailable.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
-            </svg>
-          </div>
-          <h3>System Audio</h3>
-          <p>Record your microphone AND system audio (YouTube, games, apps) simultaneously with perfect sync.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
-              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
-              <path d="M2 2l7.5 1.5"></path>
-              <path d="M7 11L2 2"></path>
-            </svg>
-          </div>
-          <h3>Noise Gate</h3>
-          <p>Tuned RMS-based silence detection automatically eliminates background hiss and static from your mic.</p>
-        </div>
-
-        <div class="card">
-          <div class="card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-            </svg>
-          </div>
-          <h3>Privacy First</h3>
-          <p>No tracking and no phoning home. Local recording diagnostics stay beside your MP4 so you can verify the
-            selected adapter, encoder mode, power state, and completion status.
+      <section class="section container" id="download" aria-labelledby="download-title">
+        <div class="section-heading">
+          <h2 id="download-title">Download the Right Package</h2>
+          <p>
+            ScreenRecorder is currently packaged for Windows. The download button automatically points to the latest
+            GitHub release asset when the release API is available, with a safe fallback to the releases page.
           </p>
         </div>
 
-        <div class="card">
-          <div class="card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-            </svg>
-          </div>
-          <h3>High Quality Mode</h3>
-          <p>One-click toggle for a 1080p-capable hardware profile with higher bitrate recording (8-10 Mbps) on AC or battery.</p>
+        <div class="download-grid">
+          <article class="download-card primary">
+            <div class="card-top">
+              <div class="platform">
+                <div class="platform-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="4" width="18" height="14" rx="2"></rect>
+                    <path d="M8 21h8M12 18v3"></path>
+                  </svg>
+                </div>
+                <div>
+                  <h3>Windows x64</h3>
+                  <p>ZIP package containing the desktop recorder executable.</p>
+                </div>
+              </div>
+              <span class="tag" id="release-version">Latest Release</span>
+            </div>
+
+            <div class="download-details">
+              <p>Best for Intel laptops and Windows desktops with Windows Graphics Capture support.</p>
+              <p>Asset: <code id="release-asset">ScreenRecorder-*-windows-x64.zip</code></p>
+              <p id="release-meta">Release details load in the browser when GitHub is reachable.</p>
+            </div>
+
+            <div class="hero-actions">
+              <a class="button button-primary" id="asset-download"
+                href="https://github.com/priyanshuchawda/screen-recorder/releases/latest">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                  stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <path d="M7 10l5 5 5-5"></path>
+                  <path d="M12 15V3"></path>
+                </svg>
+                Download Windows ZIP
+              </a>
+              <a class="button button-secondary" href="https://github.com/priyanshuchawda/screen-recorder"
+                target="_blank" rel="noreferrer">Source Code</a>
+            </div>
+          </article>
+
+          <aside class="download-card" aria-labelledby="other-platforms">
+            <div class="card-top">
+              <div>
+                <h3 id="other-platforms">Other Platforms</h3>
+                <p class="download-details">No fake downloads. If a package is not built, it is marked clearly.</p>
+              </div>
+              <span class="tag pending">Roadmap</span>
+            </div>
+            <div class="platform-list">
+              <div class="platform-row">
+                <div>
+                  <strong>Android APK</strong>
+                  <span>Not available for this native Windows app.</span>
+                </div>
+                <span class="status-unavailable">Unavailable</span>
+              </div>
+              <div class="platform-row">
+                <div>
+                  <strong>macOS</strong>
+                  <span>No packaged build exists in this repository.</span>
+                </div>
+                <span class="status-unavailable">Unavailable</span>
+              </div>
+              <div class="platform-row">
+                <div>
+                  <strong>Linux</strong>
+                  <span>Windows APIs are required by the recorder pipeline.</span>
+                </div>
+                <span class="status-unavailable">Unavailable</span>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section container" id="features" aria-labelledby="features-title">
+        <div class="section-heading">
+          <h2 id="features-title">Built Around the Native Pipeline</h2>
+          <p>
+            The app is intentionally small and native: capture with Windows Graphics Capture, process frames on D3D11,
+            encode through Media Foundation, and keep fallbacks visible.
+          </p>
         </div>
 
-        <div class="card">
-          <div class="card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M13 2 3 14h8l-1 8 11-13h-8l1-7Z"></path>
+            </svg>
+            <h3>Hardware-First Encoding</h3>
+            <p>Prefers the Intel-capable hardware path when available and keeps software fallback behavior intact.</p>
+          </article>
+
+          <article class="feature-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M3 11v3a4 4 0 0 0 4 4h4"></path>
+              <path d="M21 11v3a4 4 0 0 1-4 4h-4"></path>
+              <path d="M8 8a4 4 0 1 1 8 0v8a4 4 0 1 1-8 0V8Z"></path>
+            </svg>
+            <h3>Mic &amp; System Audio</h3>
+            <p>Captures microphone and desktop audio through native Windows audio APIs for local MP4 output.</p>
+          </article>
+
+          <article class="feature-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2v11Z"></path>
               <circle cx="12" cy="13" r="4"></circle>
             </svg>
-          </div>
-          <h3>Camera Overlay</h3>
-          <p>Superimpose your webcam with throttled default preview, an HQ 720p-capable profile, and guarded tuning to
-            avoid repeated background work during long captures.</p>
-        </div>
+            <h3>Camera Overlay</h3>
+            <p>Optional floating camera preview with default efficiency tuning and an HQ-capable profile.</p>
+          </article>
 
-        <div class="card">
-          <div class="card-icon">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-              stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+          <article class="feature-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path>
             </svg>
-          </div>
-          <h3>Safety Recovery</h3>
-          <p>Includes low-disk auto-stop safety nets and native restoration of orphaned partial files in case of crash.</p>
-        </div>
-      </div>
-    </div>
-  </section>
+            <h3>Private by Default</h3>
+            <p>No account is required. Recordings and diagnostics stay on the machine.</p>
+          </article>
 
-  <!-- Footer -->
-  <footer class="footer">
-    <div class="container">
-      <div class="footer-grid">
-        <div class="footer-brand">
-          <div class="nav-brand">
-            <div class="nav-logo" style="width: 28px; height: 28px;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <path
-                  d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
+          <article class="feature-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M5 12h14"></path>
+              <path d="M12 5v14"></path>
+            </svg>
+            <h3>Simple Controls</h3>
+            <p>Start, stop, pause, mute, settings, and High Quality mode are visible in the first window.</p>
+          </article>
+
+          <article class="feature-card">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"></path>
+              <path d="M3.3 7 12 12l8.7-5"></path>
+              <path d="M12 22V12"></path>
+            </svg>
+            <h3>Crash Recovery</h3>
+            <p>Partial file recovery and low-disk safety checks reduce the chance of losing a recording.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section container" id="quality" aria-labelledby="quality-title">
+        <div class="section-heading">
+          <h2 id="quality-title">Choose Battery or Quality</h2>
+          <p>
+            The recorder keeps the default profile efficient for laptops and offers High Quality mode when sharpness is
+            the priority.
+          </p>
+        </div>
+
+        <div class="quality-panel">
+          <article class="mode-card">
+            <h3>Default Profile</h3>
+            <p>Balanced for low memory pressure, lower disk usage, and better battery life during normal recordings.</p>
+            <div class="spec-list" aria-label="Default profile highlights">
+              <span>30 fps</span>
+              <span>848x480 target</span>
+              <span>4 Mbps</span>
+              <span>Battery-aware</span>
             </div>
-            ScreenRecorder
-          </div>
-          <p>A stable native screen recording tool crafted specifically for the Windows ecosystem.</p>
+          </article>
+          <article class="mode-card hq">
+            <h3>High Quality Mode</h3>
+            <p>Higher resolution and bitrate for sharper screen captures when you want quality over file size.</p>
+            <div class="spec-list" aria-label="High quality profile highlights">
+              <span>30 fps</span>
+              <span>1920x1080 capable</span>
+              <span>8 Mbps</span>
+              <span>Hardware path preferred</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section container" aria-labelledby="install-title">
+        <div class="section-heading">
+          <h2 id="install-title">Install in 3 Steps</h2>
+          <p>Use the packaged Windows build from GitHub Releases. Source archives are also available for developers.</p>
         </div>
 
-        <div class="footer-col">
-          <h4>Product</h4>
-          <ul>
-            <li><a href="https://github.com/priyanshuchawda/screen-recorder/releases">Download Latest</a></li>
-            <li><a href="https://github.com/priyanshuchawda/screen-recorder/releases">Changelog</a></li>
-            <li><a href="https://github.com/priyanshuchawda/screen-recorder/issues">Report a Bug</a></li>
-          </ul>
+        <div class="steps">
+          <article class="step-card">
+            <div class="step-number">1</div>
+            <h3>Download</h3>
+            <p>Get the latest Windows x64 ZIP from the release page or from the direct asset link when it loads.</p>
+          </article>
+          <article class="step-card">
+            <div class="step-number">2</div>
+            <h3>Extract</h3>
+            <p>Unzip the package into a folder you control, such as Downloads or a tools folder.</p>
+          </article>
+          <article class="step-card">
+            <div class="step-number">3</div>
+            <h3>Run</h3>
+            <p>Start <code translate="no">ScreenRecorder.exe</code>, choose your settings, and record locally.</p>
+          </article>
         </div>
+      </section>
+    </main>
 
-        <div class="footer-col">
-          <h4>Legal & Open Source</h4>
-          <ul>
-            <li><a href="https://github.com/priyanshuchawda/screen-recorder">GitHub Repository</a></li>
-            <li><a href="https://github.com/priyanshuchawda/screen-recorder/blob/main/LICENSE">MIT License</a></li>
-            <li><a href="#">Privacy Policy</a></li>
-          </ul>
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <span>&copy; <span id="year">2026</span> ScreenRecorder. MIT licensed.</span>
+        <div class="footer-links">
+          <a href="https://github.com/priyanshuchawda/screen-recorder/releases" target="_blank"
+            rel="noreferrer">Releases</a>
+          <a href="https://github.com/priyanshuchawda/screen-recorder/issues" target="_blank"
+            rel="noreferrer">Issues</a>
+          <a href="https://github.com/priyanshuchawda/screen-recorder/blob/main/README.md" target="_blank"
+            rel="noreferrer">README</a>
         </div>
       </div>
+    </footer>
+  </div>
 
-      <div class="footer-bottom">
-        <p>&copy; Built by Priyanshu Chawda. All rights reserved.</p>
-        <p>Designed and built for developers.</p>
-      </div>
-    </div>
-  </footer>
+  <script>
+    (() => {
+      "use strict";
 
+      const repository = "priyanshuchawda/screen-recorder";
+      const latestReleaseUrl = `https://github.com/${repository}/releases/latest`;
+      const releaseApiUrl = `https://api.github.com/repos/${repository}/releases/latest`;
+      const assetNamePattern = /windows-x64\.zip$/i;
+
+      const formatBytes = (bytes) => {
+        if (!Number.isFinite(bytes) || bytes <= 0) return "";
+        return new Intl.NumberFormat(undefined, {
+          maximumFractionDigits: 1
+        }).format(bytes / (1024 * 1024)) + " MB";
+      };
+
+      const formatDate = (value) => {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "";
+        return new Intl.DateTimeFormat(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric"
+        }).format(date);
+      };
+
+      const setText = (id, text) => {
+        const node = document.getElementById(id);
+        if (node && text) node.textContent = text;
+      };
+
+      const setDownload = (href) => {
+        for (const id of ["primary-download", "asset-download"]) {
+          const node = document.getElementById(id);
+          if (node) node.setAttribute("href", href);
+        }
+      };
+
+      const loadLatestRelease = async () => {
+        const response = await fetch(releaseApiUrl, {
+          headers: { "Accept": "application/vnd.github+json" }
+        });
+        if (!response.ok) throw new Error(`GitHub release request failed: ${response.status}`);
+        const release = await response.json();
+        const assets = Array.isArray(release.assets) ? release.assets : [];
+        const asset = assets.find((item) => assetNamePattern.test(String(item.name || "")));
+
+        setText("release-version", release.tag_name || "Latest Release");
+        if (asset && asset.browser_download_url) {
+          setDownload(asset.browser_download_url);
+          setText("release-asset", asset.name);
+          const size = formatBytes(asset.size);
+          const published = formatDate(release.published_at);
+          const meta = [size, published && `published ${published}`].filter(Boolean).join(" - ");
+          setText("release-meta", meta || "Direct Windows package link loaded from GitHub Releases.");
+          return;
+        }
+
+        setDownload(latestReleaseUrl);
+        setText("release-meta", "Open the latest release and choose the Windows x64 ZIP asset.");
+      };
+
+      const setFooterYear = () => {
+        const year = document.getElementById("year");
+        if (year) year.textContent = String(new Date().getFullYear());
+      };
+
+      setFooterYear();
+      loadLatestRelease().catch(() => {
+        setDownload(latestReleaseUrl);
+        setText("release-meta", "Open the latest release and choose the Windows x64 ZIP asset.");
+      });
+    })();
+  </script>
 </body>
 
 </html>
