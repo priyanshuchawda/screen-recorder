@@ -1,0 +1,30 @@
+/* Footer Section */
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding-block: 2.5rem;
+  color: var(--soft);
+  background: rgba(2, 4, 10, 0.4);
+  margin-top: auto;
+}
+
+.footer-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+.footer-links {
+  display: flex;
+  gap: 1.5rem;
+}
+
+.footer-links a {
+  color: var(--muted);
+}
+
+.footer-links a:hover {
+  color: var(--brand-hot);
+}

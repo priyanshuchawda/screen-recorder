@@ -1,0 +1,62 @@
+/* ==========================================================================
+   Responsive Breakpoints & Accessibility
+   ========================================================================== */
+
+@media (max-width: 1024px) {
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 3rem;
+    padding-block: clamp(3rem, 8vw, 5rem) 3rem;
+  }
+  
+  .feature-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .container {
+    width: min(100% - 2rem, var(--max));
+  }
+
+  .nav-links {
+    display: none; /* Hide header links in narrow viewports */
+  }
+
+  .download-grid,
+  .quality-panel,
+  .steps {
+    grid-template-columns: 1fr;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .download-card,
+  .feature-card,
+  .step-card {
+    padding: 1.5rem;
+  }
+
+  h1 {
+    font-size: 2.25rem;
+  }
+}
+
+/* Reduced Motion Preference mapping */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .button:hover,
+  .sim-recorder:hover {
+    transform: none !important;
+  }
+}

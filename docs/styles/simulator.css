@@ -1,0 +1,434 @@
+/* Interactive C++ ScreenRecorder Simulator CSS */
+.preview-wrap {
+  perspective: 1000px;
+}
+
+.sim-recorder {
+  background: rgba(10, 15, 30, 0.85);
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  box-shadow: 
+    0 30px 60px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-style: preserve-3d;
+}
+
+.sim-recorder:hover {
+  transform: translateY(-5px) rotateX(1deg) rotateY(-1deg);
+  border-color: rgba(56, 189, 248, 0.3);
+  box-shadow: 
+    0 35px 70px rgba(14, 165, 233, 0.15),
+    0 0 0 1px rgba(56, 189, 248, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.sim-header {
+  background: rgba(3, 7, 18, 0.5);
+  border-bottom: 1px solid var(--border);
+  padding: 0.85rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sim-title-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sim-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.sim-dot.close { background: #ef4444; }
+.sim-dot.minimize { background: #f59e0b; }
+.sim-dot.maximize { background: #10b981; }
+
+.sim-title {
+  color: var(--muted);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  margin-left: 0.5rem;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  transition: all 0.3s ease;
+}
+
+.status-ready {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--good-hot);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.status-ready .status-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 6px var(--good);
+}
+
+.status-recording {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  animation: pulse-border 1.5s infinite;
+}
+
+.status-recording .status-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+  animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(239, 68, 68, 0.3); }
+  50% { border-color: rgba(239, 68, 68, 0.6); }
+}
+
+.sim-body {
+  padding: 1.5rem;
+}
+
+.sim-preview {
+  background: #02040a;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 16/10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mock-desktop {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.5s ease;
+}
+
+.mock-desktop-grid {
+  position: absolute;
+  inset: 0;
+  background-image: 
+    radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.mock-cursor {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M4.5 3v15.25l3.83-3.83 2.94 6.78 2.21-.96-2.94-6.78 4.79-.01L4.5 3z'/%3E%3C/svg%3E") no-repeat;
+  left: 20%;
+  top: 30%;
+  z-index: 5;
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.sim-preview.recording .mock-cursor {
+  animation: move-cursor 6s infinite ease-in-out;
+}
+
+@keyframes move-cursor {
+  0% { left: 20%; top: 30%; }
+  25% { left: 80%; top: 40%; }
+  50% { left: 50%; top: 80%; }
+  75% { left: 10%; top: 70%; }
+  100% { left: 20%; top: 30%; }
+}
+
+.mock-cam {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: rgba(17, 24, 39, 0.9);
+  border: 2px solid var(--brand);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 6;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  color: var(--muted);
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mock-cam-lens {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #000;
+  border: 2px solid #374151;
+  position: relative;
+  margin-bottom: 2px;
+}
+
+.mock-cam-lens::after {
+  content: "";
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #38bdf8;
+  top: 2px;
+  left: 2px;
+}
+
+.sim-preview.recording .mock-cam {
+  transform: scale(1.1);
+  box-shadow: 0 8px 25px rgba(14, 165, 233, 0.4);
+  background: radial-gradient(circle, rgba(14, 165, 233, 0.35) 0%, rgba(17, 24, 39, 0.9) 100%);
+  color: #fff;
+}
+
+.mock-recording-graphics {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  z-index: 2;
+}
+
+.sim-preview.recording .mock-recording-graphics {
+  display: flex;
+}
+
+.sim-preview.recording .mock-desktop {
+  background: linear-gradient(135deg, #090514 0%, #030712 100%);
+}
+
+.radar-scan {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  border: 1px solid rgba(14, 165, 233, 0.15);
+  position: relative;
+}
+
+.radar-scan::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, var(--brand) 0%, transparent 60%);
+  animation: rotate-radar 2.5s linear infinite;
+  mask-image: radial-gradient(circle, transparent 40%, black 100%);
+  -webkit-mask-image: radial-gradient(circle, transparent 40%, black 100%);
+}
+
+@keyframes rotate-radar {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.wave-container {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 40px;
+}
+
+.wave-bar {
+  width: 4px;
+  height: 10px;
+  background: var(--good);
+  border-radius: 99px;
+  transition: height 0.1s ease;
+}
+
+.sim-preview.recording .wave-bar {
+  animation: sound-bounce 0.8s infinite ease-in-out alternate;
+}
+
+.sim-preview.recording .wave-bar:nth-child(2) { animation-delay: 0.15s; }
+.sim-preview.recording .wave-bar:nth-child(3) { animation-delay: 0.3s; }
+.sim-preview.recording .wave-bar:nth-child(4) { animation-delay: 0.1s; }
+.sim-preview.recording .wave-bar:nth-child(5) { animation-delay: 0.25s; }
+
+@keyframes sound-bounce {
+  0% { height: 6px; background: var(--good); }
+  50% { height: 35px; background: var(--brand-hot); }
+  100% { height: 10px; background: var(--good); }
+}
+
+.recording-ui-overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 0.4rem 0.75rem;
+  display: none;
+  align-items: center;
+  gap: 0.6rem;
+  z-index: 10;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+}
+
+.sim-preview.recording .recording-ui-overlay {
+  display: flex;
+}
+
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 6px var(--danger);
+}
+
+.rec-time {
+  color: #fff;
+  font-weight: 700;
+}
+
+.rec-fps {
+  color: var(--muted);
+  font-size: 0.65rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.2);
+  padding-left: 0.6rem;
+}
+
+.sim-toggles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.sim-toggle-btn {
+  cursor: pointer;
+}
+
+.sim-toggle-btn input {
+  display: none;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.65rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  transition: all 0.2s ease;
+  user-select: none;
+  text-align: center;
+}
+
+.sim-toggle-btn input:checked + .toggle-label {
+  background: rgba(14, 165, 233, 0.08);
+  border-color: rgba(14, 165, 233, 0.4);
+  color: var(--brand-hot);
+}
+
+.sim-toggle-btn:hover .toggle-label {
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sim-toggle-btn input:checked:hover + .toggle-label {
+  background: rgba(14, 165, 233, 0.12);
+  border-color: var(--brand-hot);
+}
+
+.toggle-label svg {
+  flex-shrink: 0;
+}
+
+.sim-actions {
+  margin-top: 1rem;
+}
+
+.sim-record-button {
+  width: 100%;
+  height: 3.25rem;
+  border-radius: 12px;
+  border: none;
+  background: linear-gradient(135deg, var(--good), #059669);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  box-shadow: 0 4px 15px rgba(16, 185, 129, 0.2);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sim-record-button:hover {
+  background: linear-gradient(135deg, var(--good-hot), var(--good));
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(16, 185, 129, 0.3);
+}
+
+.sim-record-button .btn-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: all 0.3s ease;
+}
+
+.sim-recorder.active-rec .sim-record-button {
+  background: linear-gradient(135deg, var(--danger), #dc2626);
+  box-shadow: 0 4px 15px rgba(239, 68, 68, 0.2);
+}
+
+.sim-recorder.active-rec .sim-record-button:hover {
+  background: linear-gradient(135deg, #f87171, var(--danger));
+  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.3);
+}
+
+.sim-recorder.active-rec .sim-record-button .btn-icon {
+  border-radius: 2px;
+  transform: scale(0.9);
+}
