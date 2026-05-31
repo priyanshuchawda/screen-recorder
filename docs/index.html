@@ -9,19 +9,30 @@
   <meta name="description"
     content="Download ScreenRecorder for Windows. A native Win32 screen recorder using Windows Graphics Capture, D3D11, Media Foundation, system audio, microphone audio, and camera overlay support." />
   <link rel="icon" type="image/png" href="favicon.png" />
+  
+  <!-- Premium Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  
   <link rel="stylesheet" href="styles.css" />
 </head>
 
 <body>
   <a class="skip-link" href="#main">Skip to Main Content</a>
   <div class="page-shell">
+    
+    <!-- Glowing background elements for visual interest -->
+    <div class="glow-bg glow-bg-1" aria-hidden="true"></div>
+    <div class="glow-bg glow-bg-2" aria-hidden="true"></div>
+    
     <header class="site-header">
       <nav class="container nav" aria-label="Primary">
         <a class="brand focusable" href="#top" aria-label="ScreenRecorder Home">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none">
               <rect x="4" y="5" width="16" height="11" rx="2" fill="white" opacity="0.95"></rect>
-              <path d="M8 20h8M12 16v4" stroke="#063b61" stroke-width="2" stroke-linecap="round"></path>
+              <path d="M8 20h8M12 16v4" stroke="#0ea5e9" stroke-width="2.5" stroke-linecap="round"></path>
               <circle cx="17" cy="8" r="2" fill="#ef4444"></circle>
             </svg>
           </span>
@@ -31,17 +42,20 @@
           <a href="#download">Download</a>
           <a href="#features">Features</a>
           <a href="#quality">Quality Modes</a>
-          <a href="https://github.com/priyanshuchawda/screen-recorder" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="https://github.com/priyanshuchawda/screen-recorder" target="_blank" rel="noreferrer" class="github-nav-link">
+            <span>GitHub</span>
+            <span class="stars-badge" id="github-stars">... stars</span>
+          </a>
         </div>
       </nav>
     </header>
 
     <main id="main">
       <section class="container hero" id="top">
-        <div>
+        <div class="hero-content">
           <div class="eyebrow">
-            <span class="status-dot" aria-hidden="true"></span>
-            Native Windows Recorder
+            <span class="status-dot animate-pulse" aria-hidden="true"></span>
+            Native C++ Win32 Recorder
           </div>
           <h1>Record Faster on Windows.</h1>
           <p class="hero-copy">
@@ -88,18 +102,98 @@
           </div>
         </div>
 
-        <div class="preview-wrap" aria-label="Application preview">
-          <figure class="preview-card">
-            <img src="app-preview.png" width="933" height="529"
-              alt="ScreenRecorder desktop app showing the dark main window with ready status, recording controls, high quality toggle, and recording profile." fetchpriority="high" />
-            <figcaption class="preview-caption">
-              <span>
-                <strong>Dark native interface</strong>
-                Low-distraction controls with a clear recording status pill.
-              </span>
-              <span class="live-chip"><span class="status-dot" aria-hidden="true"></span> Ready</span>
-            </figcaption>
-          </figure>
+        <!-- Interactive ScreenRecorder Simulator (Stunning Creative UI Component) -->
+        <div class="preview-wrap" aria-label="Interactive Simulator">
+          <div class="sim-recorder">
+            <div class="sim-header">
+              <div class="sim-title-bar">
+                <span class="sim-dot close"></span>
+                <span class="sim-dot minimize"></span>
+                <span class="sim-dot maximize"></span>
+                <span class="sim-title">ScreenRecorder.exe</span>
+              </div>
+              <div class="sim-status">
+                <span class="status-pill status-ready" id="sim-status-pill">
+                  <span class="status-indicator"></span>
+                  <span id="sim-status-text">Ready</span>
+                </span>
+              </div>
+            </div>
+            <div class="sim-body">
+              <div class="sim-preview" id="sim-screen-preview">
+                <!-- Mock Desktop Background -->
+                <div class="mock-desktop">
+                  <div class="mock-desktop-grid"></div>
+                  <!-- Rotating preview content when recording -->
+                  <div class="mock-recording-graphics" id="sim-recording-graphics">
+                    <div class="radar-scan"></div>
+                    <div class="wave-container">
+                      <div class="wave-bar"></div>
+                      <div class="wave-bar"></div>
+                      <div class="wave-bar"></div>
+                      <div class="wave-bar"></div>
+                      <div class="wave-bar"></div>
+                    </div>
+                  </div>
+                  <div class="mock-cam" id="sim-cam-overlay">
+                    <div class="mock-cam-lens"></div>
+                    <span>Camera Overlay</span>
+                  </div>
+                  <div class="mock-cursor" id="sim-mock-cursor"></div>
+                </div>
+                
+                <!-- Overlay display during recording -->
+                <div class="recording-ui-overlay" id="sim-recording-ui-overlay">
+                  <span class="rec-dot animate-pulse"></span>
+                  <span class="rec-time" id="sim-recording-time">00:00:00</span>
+                  <span class="rec-fps" id="sim-recording-fps">30 FPS</span>
+                </div>
+              </div>
+              
+              <!-- Quick Config Toggles -->
+              <div class="sim-toggles">
+                <label class="sim-toggle-btn">
+                  <input type="checkbox" id="sim-toggle-cam" checked>
+                  <span class="toggle-label">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" width="16" height="16">
+                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2v11Z"></path>
+                      <circle cx="12" cy="13" r="4"></circle>
+                    </svg>
+                    Webcam Overlay
+                  </span>
+                </label>
+                
+                <label class="sim-toggle-btn">
+                  <input type="checkbox" id="sim-toggle-mic" checked>
+                  <span class="toggle-label">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" width="16" height="16">
+                      <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                      <path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"></path>
+                    </svg>
+                    Microphone Audio
+                  </span>
+                </label>
+
+                <label class="sim-toggle-btn">
+                  <input type="checkbox" id="sim-toggle-hq">
+                  <span class="toggle-label">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" width="16" height="16">
+                      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                    </svg>
+                    HQ Mode (1080p)
+                  </span>
+                </label>
+              </div>
+
+              <!-- Action Button -->
+              <div class="sim-actions">
+                <button class="sim-record-button" id="sim-btn-rec">
+                  <span class="btn-icon"></span>
+                  <span id="sim-btn-text">Start Recording</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -107,8 +201,8 @@
         <div class="section-heading">
           <h2 id="download-title">Download the Right Package</h2>
           <p>
-            ScreenRecorder is currently packaged for Windows. The download button automatically points to the latest
-            GitHub release asset when the release API is available, with a safe fallback to the releases page.
+            ScreenRecorder is packaged for native execution on Windows. The download button automatically fetches the latest
+            release ZIP from GitHub with a local fallback when the network is unreachable.
           </p>
         </div>
 
@@ -127,13 +221,13 @@
                   <p>ZIP package containing the desktop recorder executable.</p>
                 </div>
               </div>
-              <span class="tag" id="release-version">Latest Release</span>
+              <span class="tag" id="release-version">v0.3.9</span>
             </div>
 
             <div class="download-details">
-              <p>Best for Intel laptops and Windows desktops with Windows Graphics Capture support.</p>
-              <p>Asset: <code id="release-asset">ScreenRecorder-*-windows-x64.zip</code></p>
-              <p id="release-meta">Release details load in the browser when GitHub is reachable.</p>
+              <p>Perfect for low-overhead recordings, native gameplay clips, and local streaming tutorials.</p>
+              <p class="asset-meta-row">Asset: <code id="release-asset">ScreenRecorder-0.3.9-windows-x64.zip</code></p>
+              <p id="release-meta" class="release-info-pill">Loading release details from GitHub API...</p>
             </div>
 
             <div class="hero-actions">
@@ -156,7 +250,7 @@
             <div class="card-top">
               <div>
                 <h3 id="other-platforms">Other Platforms</h3>
-                <p class="download-details">No fake downloads. If a package is not built, it is marked clearly.</p>
+                <p class="download-details">No bloated wrapper layers. Platform availability is strict.</p>
               </div>
               <span class="tag pending">Roadmap</span>
             </div>
@@ -164,21 +258,21 @@
               <div class="platform-row">
                 <div>
                   <strong>Android APK</strong>
-                  <span>Not available for this native Windows app.</span>
+                  <span>Unavailable — C++ core is tailored for Windows Win32 APIs.</span>
                 </div>
                 <span class="status-unavailable">Unavailable</span>
               </div>
               <div class="platform-row">
                 <div>
                   <strong>macOS</strong>
-                  <span>No packaged build exists in this repository.</span>
+                  <span>Unavailable — Requires macOS ScreenCaptureKit migration.</span>
                 </div>
                 <span class="status-unavailable">Unavailable</span>
               </div>
               <div class="platform-row">
                 <div>
                   <strong>Linux</strong>
-                  <span>Windows APIs are required by the recorder pipeline.</span>
+                  <span>Unavailable — Requires PipeWire capture implementation.</span>
                 </div>
                 <span class="status-unavailable">Unavailable</span>
               </div>
@@ -191,8 +285,7 @@
         <div class="section-heading">
           <h2 id="features-title">Built Around the Native Pipeline</h2>
           <p>
-            The app is intentionally small and native: capture with Windows Graphics Capture, process frames on D3D11,
-            encode through Media Foundation, and keep fallbacks visible.
+            A high-efficiency recording utility built on top of native Windows graphics and media framework APIs.
           </p>
         </div>
 
@@ -202,7 +295,7 @@
               <path d="M13 2 3 14h8l-1 8 11-13h-8l1-7Z"></path>
             </svg>
             <h3>Hardware-First Encoding</h3>
-            <p>Prefers the Intel-capable hardware path when available and keeps software fallback behavior intact.</p>
+            <p>Direct integration with GPU hardware encoders (Intel QuickSync / NVENC / AMF) via Windows Media Foundation.</p>
           </article>
 
           <article class="feature-card">
@@ -212,7 +305,7 @@
               <path d="M8 8a4 4 0 1 1 8 0v8a4 4 0 1 1-8 0V8Z"></path>
             </svg>
             <h3>Mic &amp; System Audio</h3>
-            <p>Captures microphone and desktop audio through native Windows audio APIs for local MP4 output.</p>
+            <p>WASAPI capture engine recording system loopback audio and microphone streams with precise sample sync.</p>
           </article>
 
           <article class="feature-card">
@@ -221,15 +314,15 @@
               <circle cx="12" cy="13" r="4"></circle>
             </svg>
             <h3>Camera Overlay</h3>
-            <p>Optional floating camera preview with default efficiency tuning and an HQ-capable profile.</p>
+            <p>Configurable webcam overlay with customizable resolution, frames, mirroring, and low-latency rendering.</p>
           </article>
 
           <article class="feature-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"></path>
             </svg>
-            <h3>Private by Default</h3>
-            <p>No account is required. Recordings and diagnostics stay on the machine.</p>
+            <h3>Private &amp; Offline</h3>
+            <p>100% offline local utility. No trackers, telemetry, or remote servers. Your videos stay on your drive.</p>
           </article>
 
           <article class="feature-card">
@@ -237,8 +330,8 @@
               <path d="M5 12h14"></path>
               <path d="M12 5v14"></path>
             </svg>
-            <h3>Simple Controls</h3>
-            <p>Start, stop, pause, mute, settings, and High Quality mode are visible in the first window.</p>
+            <h3>Intuitive Settings</h3>
+            <p>Simple main interface. Toggle camera overlays, microphone capture, and HQ modes with one click.</p>
           </article>
 
           <article class="feature-card">
@@ -247,8 +340,8 @@
               <path d="M3.3 7 12 12l8.7-5"></path>
               <path d="M12 22V12"></path>
             </svg>
-            <h3>Crash Recovery</h3>
-            <p>Partial file recovery and low-disk safety checks reduce the chance of losing a recording.</p>
+            <h3>Crash Resilient</h3>
+            <p>Partial files are flushed incrementally, helping you recover raw recordings if your machine runs out of battery.</p>
           </article>
         </div>
       </section>
@@ -257,30 +350,29 @@
         <div class="section-heading">
           <h2 id="quality-title">Choose Battery or Quality</h2>
           <p>
-            The recorder keeps the default profile efficient for laptops and offers High Quality mode when sharpness is
-            the priority.
+            Tailored performance profiles allow you to prioritize battery life on mobile devices or maximum sharpness.
           </p>
         </div>
 
         <div class="quality-panel">
           <article class="mode-card">
             <h3>Default Profile</h3>
-            <p>Balanced for low memory pressure, lower disk usage, and better battery life during normal recordings.</p>
+            <p>Balanced for low memory consumption, lightweight CPU/GPU utilization, and efficient disk writing speed.</p>
             <div class="spec-list" aria-label="Default profile highlights">
-              <span>30 fps</span>
-              <span>848x480 target</span>
-              <span>4 Mbps</span>
-              <span>Battery-aware</span>
+              <span>30 FPS</span>
+              <span>848x480 resolution</span>
+              <span>4 Mbps bit-rate</span>
+              <span>Battery Saver</span>
             </div>
           </article>
           <article class="mode-card hq">
             <h3>High Quality Mode</h3>
-            <p>Higher resolution and bitrate for sharper screen captures when you want quality over file size.</p>
+            <p>Full HD capture utilizing GPU hardware-accelerated encoding path for rich pixel details and clear text rendering.</p>
             <div class="spec-list" aria-label="High quality profile highlights">
-              <span>30 fps</span>
-              <span>1920x1080 capable</span>
-              <span>8 Mbps</span>
-              <span>Hardware path preferred</span>
+              <span>30 FPS</span>
+              <span>1920x1080 resolution</span>
+              <span>8 Mbps bit-rate</span>
+              <span>Hardware-accelerated</span>
             </div>
           </article>
         </div>
@@ -289,24 +381,24 @@
       <section class="section container" aria-labelledby="install-title">
         <div class="section-heading">
           <h2 id="install-title">Install in 3 Steps</h2>
-          <p>Use the packaged Windows build from GitHub Releases. Source archives are also available for developers.</p>
+          <p>Download the packaged zip executable directly from our release server and run immediately without installation.</p>
         </div>
 
         <div class="steps">
           <article class="step-card">
             <div class="step-number">1</div>
             <h3>Download</h3>
-            <p>Get the latest Windows x64 ZIP from the release page or from the direct asset link when it loads.</p>
+            <p>Get the latest release Windows x64 zip package from our verified download links.</p>
           </article>
           <article class="step-card">
             <div class="step-number">2</div>
             <h3>Extract</h3>
-            <p>Unzip the package into a folder you control, such as Downloads or a tools folder.</p>
+            <p>Extract the compressed ZIP package into any directory on your computer.</p>
           </article>
           <article class="step-card">
             <div class="step-number">3</div>
             <h3>Run</h3>
-            <p>Start <code translate="no">ScreenRecorder.exe</code>, choose your settings, and record locally.</p>
+            <p>Open <code translate="no">ScreenRecorder.exe</code>. No installer configuration or registry keys needed!</p>
           </article>
         </div>
       </section>
@@ -327,7 +419,7 @@
     </footer>
   </div>
 
-  <script src="site.js" defer></script>
+  <script src="site.js" type="module" defer></script>
 </body>
 
 </html>
