@@ -32,6 +32,7 @@ set(WIN_LIBS
     ole32
     windowsapp
     Shlwapi
+    shell32
     Propsys
     avrt
 )

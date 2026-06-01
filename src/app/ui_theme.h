@@ -33,6 +33,11 @@ inline constexpr int kButtonCornerRadius = 6;
 inline constexpr int kButtonFocusInset = 3;
 inline constexpr int kOverlayCloseInset = 8;
 inline constexpr int kOverlayCloseSize = 24;
+inline constexpr int kOverlayCameraActionWidth = 196;
+inline constexpr int kOverlayCameraActionHeight = 30;
+inline constexpr int kOverlayCameraActionGap = 12;
+inline constexpr int kMainWindowMinWidth = 640;
+inline constexpr int kMainWindowMinHeight = 360;
 
 enum class ButtonRole {
     Primary,
@@ -137,6 +142,36 @@ constexpr RECT overlay_close_rect(const RECT& bounds) noexcept {
         bounds.top + kOverlayCloseInset,
         bounds.right - kOverlayCloseInset,
         bounds.top + kOverlayCloseInset + kOverlayCloseSize
+    };
+}
+
+constexpr int clamp_int(int value, int min_value, int max_value) noexcept {
+    return value < min_value ? min_value :
+           value > max_value ? max_value :
+           value;
+}
+
+constexpr RECT overlay_camera_action_rect(const RECT& content_bounds) noexcept {
+    const int content_w = content_bounds.right - content_bounds.left;
+    const int content_h = content_bounds.bottom - content_bounds.top;
+    const int max_w = content_w > 24 ? content_w - 24 : content_w;
+    const int button_w = max_w < kOverlayCameraActionWidth
+        ? (max_w > 0 ? max_w : 0)
+        : kOverlayCameraActionWidth;
+    const int button_h = content_h < kOverlayCameraActionHeight
+        ? (content_h > 0 ? content_h : 0)
+        : kOverlayCameraActionHeight;
+    const int center_x = content_bounds.left + (content_w / 2);
+    const int desired_top = content_bounds.top + (content_h / 2) +
+                            kOverlayCameraActionGap;
+    const int top = clamp_int(desired_top,
+                              content_bounds.top,
+                              content_bounds.bottom - button_h);
+    return {
+        center_x - (button_w / 2),
+        top,
+        center_x - (button_w / 2) + button_w,
+        top + button_h
     };
 }
 

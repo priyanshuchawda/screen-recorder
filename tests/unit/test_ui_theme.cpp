@@ -62,6 +62,33 @@ TEST(UiThemeTest, OverlayCloseTargetIsInsetAndClickable) {
     EXPECT_FALSE(sr::ui::point_in_rect(close, 260, 32));
 }
 
+TEST(UiThemeTest, OverlayCameraActionIsCenteredUnderNoFrameText) {
+    const RECT content{0, 36, 280, 210};
+    const RECT action = sr::ui::overlay_camera_action_rect(content);
+
+    EXPECT_EQ(action.left, 42);
+    EXPECT_EQ(action.right, 238);
+    EXPECT_EQ(action.top, 135);
+    EXPECT_EQ(action.bottom, 165);
+    EXPECT_TRUE(sr::ui::point_in_rect(action, 140, 150));
+    EXPECT_FALSE(sr::ui::point_in_rect(action, 140, 165));
+}
+
+TEST(UiThemeTest, OverlayCameraActionClampsInsideNarrowContent) {
+    const RECT content{0, 36, 120, 80};
+    const RECT action = sr::ui::overlay_camera_action_rect(content);
+
+    EXPECT_EQ(action.left, 12);
+    EXPECT_EQ(action.right, 108);
+    EXPECT_GE(action.top, content.top);
+    EXPECT_LE(action.bottom, content.bottom);
+}
+
+TEST(UiThemeTest, MainWindowMinimumSizeAllowsResizableChrome) {
+    EXPECT_GE(sr::ui::kMainWindowMinWidth, 640);
+    EXPECT_GE(sr::ui::kMainWindowMinHeight, 360);
+}
+
 TEST(UiThemeTest, StatusVisualKeepsIdleQuiet) {
     const auto idle = sr::ui::status_visual(sr::ui::StatusTone::Idle, true);
 
