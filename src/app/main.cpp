@@ -159,6 +159,34 @@ static void UpdateProfileLabel()
     SetWindowTextW(g_lbl_profile, prof_buf);
 }
 
+static void LayoutMainWindow(HWND hwnd)
+{
+    RECT rc{};
+    if (!hwnd || !GetClientRect(hwnd, &rc)) return;
+
+    const int content_w = rc.right > 24 ? rc.right - 24 : 100;
+    if (g_lbl_fps) {
+        SetWindowPos(g_lbl_fps, nullptr, 12, 102, content_w, 20,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if (g_lbl_dropped) {
+        SetWindowPos(g_lbl_dropped, nullptr, 12, 126, content_w, 20,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if (g_lbl_path) {
+        SetWindowPos(g_lbl_path, nullptr, 12, 156, content_w, 20,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if (g_lbl_profile) {
+        const int x = 262;
+        const int w = rc.right > x + 24 ? rc.right - x - 24 : 120;
+        SetWindowPos(g_lbl_profile, nullptr, x, 242, w, 18,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
 void UpdateUI()
 {
     auto state = g_controller.state();
@@ -504,6 +532,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                         262, y + 6, 450, 18, hwnd, (HMENU)ID_LABEL_PROFILE, nullptr, nullptr);
 
         ApplyUIFont(hwnd);
+        LayoutMainWindow(hwnd);
 
         SetTimer(hwnd, ID_TIMER_UPDATE, 250, nullptr);
         UpdateUI();
@@ -597,6 +626,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_motion_enabled = IsClientAreaAnimationEnabled();
         InvalidateStatusChrome(hwnd);
         break;
+
+    case WM_GETMINMAXINFO: {
+        auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        if (mmi) {
+            mmi->ptMinTrackSize.x = sr::ui::kMainWindowMinWidth;
+            mmi->ptMinTrackSize.y = sr::ui::kMainWindowMinHeight;
+        }
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (wParam != SIZE_MINIMIZED) {
+            LayoutMainWindow(hwnd);
+        }
+        return 0;
 
     case WM_SR_STATUS: {
         auto* s = reinterpret_cast<wchar_t*>(lParam);
@@ -826,7 +870,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 
     g_hwnd = CreateWindowExW(
         0, L"ScreenRecorderClass", sr::kAppWindowTitle,
-        WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
+        WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 760, 430,
         nullptr, nullptr, hInstance, nullptr
     );

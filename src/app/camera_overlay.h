@@ -99,6 +99,8 @@ private:
     static LRESULT CALLBACK HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     void capture_loop();
     void draw_latest_frame(HDC hdc, const RECT& rc);
+    bool has_latest_frame();
+    void open_camera_privacy_settings();
     void resize_capture_to_client();
     void stop_capture_thread();
 

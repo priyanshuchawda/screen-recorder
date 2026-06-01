@@ -7,6 +7,7 @@
 #include <mfobjects.h>
 #include <mfreadwrite.h>
 #include <mferror.h>
+#include <shellapi.h>
 #include <wrl/client.h>
 #include <climits>
 #include <cmath>
@@ -163,6 +164,26 @@ void draw_overlay_close_button(HDC hdc, const RECT& host_rc) {
     draw_overlay_close_button_rect(hdc, ui::overlay_close_rect(host_rc));
 }
 
+void draw_camera_settings_action(HDC hdc, const RECT& action_rc) {
+    HBRUSH fill = CreateSolidBrush(ui::kSurfaceRaised);
+    HPEN border = CreatePen(PS_SOLID, 1, ui::kAccentBorder);
+    HGDIOBJ old_pen = SelectObject(hdc, border);
+    HGDIOBJ old_brush = SelectObject(hdc, fill);
+    RoundRect(hdc,
+              action_rc.left, action_rc.top, action_rc.right, action_rc.bottom,
+              ui::kButtonCornerRadius * 2, ui::kButtonCornerRadius * 2);
+    SelectObject(hdc, old_brush);
+    SelectObject(hdc, old_pen);
+    DeleteObject(fill);
+    DeleteObject(border);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, ui::kTextStrong);
+    RECT text_rc = action_rc;
+    DrawTextW(hdc, L"Open camera settings", -1, &text_rc,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 } // namespace
 
 bool CameraOverlay::detect_on_battery() const {
@@ -226,6 +247,15 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
         const RECT close_rc = ui::overlay_close_rect(rc);
         if (ui::point_in_rect(close_rc, x, y)) {
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            return 0;
+        }
+
+        RECT content_rc = rc;
+        content_rc.top = content_rc.top + kOverlayHeaderHeight;
+        const RECT action_rc = ui::overlay_camera_action_rect(content_rc);
+        if (self && !self->has_latest_frame() &&
+            ui::point_in_rect(action_rc, x, y)) {
+            self->open_camera_privacy_settings();
             return 0;
         }
 
@@ -323,7 +353,14 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, ui::kTextMuted);
         RECT txt = content_rc;
-        DrawTextW(hdc, L"No camera frame", -1, &txt, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        const RECT action_rc = ui::overlay_camera_action_rect(content_rc);
+        txt.bottom = action_rc.top - ui::kOverlayCameraActionGap;
+        if (txt.bottom > txt.top) {
+            DrawTextW(hdc, L"No camera frame", -1, &txt, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        if (action_rc.right > action_rc.left && action_rc.bottom > action_rc.top) {
+            draw_camera_settings_action(hdc, action_rc);
+        }
 
         draw_overlay_close_button(hdc, rc);
         return;
@@ -376,6 +413,26 @@ void CameraOverlay::draw_latest_frame(HDC hdc, const RECT& rc) {
     DeleteObject(frame_pen);
 
     draw_overlay_close_button(hdc, rc);
+}
+
+bool CameraOverlay::has_latest_frame() {
+    std::lock_guard<std::mutex> lock(frame_mutex_);
+    return !latest_frame_.empty() && frame_width_ > 0 && frame_height_ > 0;
+}
+
+void CameraOverlay::open_camera_privacy_settings() {
+    HINSTANCE result = ShellExecuteW(host_hwnd_,
+                                     L"open",
+                                     L"ms-settings:privacy-webcam",
+                                     nullptr,
+                                     nullptr,
+                                     SW_SHOWNORMAL);
+    if (reinterpret_cast<INT_PTR>(result) <= 32) {
+        SR_LOG_WARN(L"CameraOverlay: failed to open camera privacy settings: %Id",
+                    reinterpret_cast<INT_PTR>(result));
+    } else {
+        SR_LOG_INFO(L"CameraOverlay: opened Windows camera privacy settings");
+    }
 }
 
 void CameraOverlay::capture_loop() {
