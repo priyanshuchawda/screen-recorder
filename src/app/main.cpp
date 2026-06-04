@@ -9,6 +9,7 @@
 #include <dwmapi.h>
 #include <string>
 #include <cstdio>
+#include <thread>
 #include "utils/logging.h"
 #include "utils/qpc_clock.h"
 #include "storage/storage_manager.h"
@@ -20,6 +21,7 @@
 #include "app/camera_overlay.h"
 #include "app/app_icon.h"
 #include "app/app_version.h"
+#include "app/stop_flow.h"
 #include "app/ui_theme.h"
 
 #pragma comment(lib, "comctl32.lib")
@@ -43,12 +45,15 @@
 // Custom messages for marshalling background thread callbacks to UI thread
 #define WM_SR_STATUS  (WM_USER + 1)
 #define WM_SR_ERROR   (WM_USER + 2)
+#define WM_SR_STOP_COMPLETE (WM_USER + 3)
 
 // Global state
 static sr::AppSettings       g_settings;
 static sr::StorageManager    g_storage;
 static sr::SessionController g_controller;
 static sr::CameraOverlay     g_camera_overlay;
+static sr::StopFlow          g_stop_flow;
+static std::thread           g_stop_thread;
 
 static HWND g_hwnd          = nullptr;
 static HWND g_btn_start     = nullptr;
@@ -187,21 +192,52 @@ static void LayoutMainWindow(HWND hwnd)
     InvalidateRect(hwnd, nullptr, FALSE);
 }
 
+static void JoinStopThreadIfFinished()
+{
+    if (g_stop_thread.joinable()) {
+        g_stop_thread.join();
+    }
+}
+
+void UpdateUI();
+
+static void BeginStopAsync(HWND hwnd, bool exit_after_stop)
+{
+    if (!g_stop_flow.begin_stop(exit_after_stop)) {
+        UpdateUI();
+        return;
+    }
+
+    JoinStopThreadIfFinished();
+    SetWindowTextW(g_lbl_status, L"Stopping");
+    UpdateUI();
+
+    g_stop_thread = std::thread([hwnd]() {
+        const bool stopped = g_controller.stop();
+        if (!PostMessageW(hwnd, WM_SR_STOP_COMPLETE, stopped ? 1 : 0, 0)) {
+            SR_LOG_WARN(L"Stop completion message could not be posted: %u", GetLastError());
+        }
+    });
+}
+
 void UpdateUI()
 {
-    auto state = g_controller.state();
-    const bool state_changed = (state != g_last_ui_state);
-    g_last_ui_state = state;
+    const auto state = g_controller.state();
+    const bool stop_in_progress = g_stop_flow.stop_in_progress();
+    const auto display_state = stop_in_progress ? sr::SessionState::Stopping : state;
+    const bool state_changed = (display_state != g_last_ui_state);
+    g_last_ui_state = display_state;
 
-    switch (state) {
+    switch (display_state) {
         case sr::SessionState::Idle:      SetWindowTextW(g_lbl_status, L"Idle");      break;
         case sr::SessionState::Recording: SetWindowTextW(g_lbl_status, L"Recording"); break;
         case sr::SessionState::Paused:    SetWindowTextW(g_lbl_status, L"Paused");    break;
         case sr::SessionState::Stopping:  SetWindowTextW(g_lbl_status, L"Stopping");  break;
     }
 
-    bool can_start = (state == sr::SessionState::Idle);
-    bool can_stop  = (state == sr::SessionState::Recording || state == sr::SessionState::Paused);
+    bool can_start = (state == sr::SessionState::Idle) && !stop_in_progress;
+    bool can_stop  = (state == sr::SessionState::Recording || state == sr::SessionState::Paused) &&
+                     !stop_in_progress;
 
     EnableWindow(g_btn_start, can_start ? TRUE : FALSE);
     EnableWindow(g_btn_stop,  can_stop  ? TRUE : FALSE);
@@ -214,7 +250,9 @@ void UpdateUI()
     SetWindowTextW(g_btn_hq,    g_settings.high_quality ? L"HQ On" : L"HQ Off");
 
     // Elapsed time
-    if (state == sr::SessionState::Recording || state == sr::SessionState::Paused) {
+    if (display_state == sr::SessionState::Recording ||
+        display_state == sr::SessionState::Paused ||
+        display_state == sr::SessionState::Stopping) {
         double now_ms   = static_cast<double>(sr::QPCClock::instance().now_ms());
         int64_t elapsed = static_cast<int64_t>(now_ms) - g_record_start_ms - g_paused_total_ms;
         if (state == sr::SessionState::Paused)
@@ -232,7 +270,9 @@ void UpdateUI()
     }
 
     // Counters — T037: use the rich telemetry snapshot
-    if (state == sr::SessionState::Recording || state == sr::SessionState::Paused) {
+    if (display_state == sr::SessionState::Recording ||
+        display_state == sr::SessionState::Paused ||
+        display_state == sr::SessionState::Stopping) {
         auto ts = g_controller.telemetry_snapshot();
         wchar_t fps_buf[120];
         _snwprintf_s(fps_buf, _countof(fps_buf), _TRUNCATE,
@@ -259,7 +299,7 @@ void UpdateUI()
         ? g_storage.outputDirectory().c_str()
         : out_path.c_str());
 
-    const auto status_tone = StatusToneForState(state);
+    const auto status_tone = StatusToneForState(display_state);
     const auto status = sr::ui::status_visual(status_tone, g_motion_enabled);
     if (state_changed || status.animated) {
         InvalidateStatusChrome(g_hwnd);
@@ -656,6 +696,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         UpdateUI();
         break;
     }
+    case WM_SR_STOP_COMPLETE: {
+        JoinStopThreadIfFinished();
+        const bool exit_after_stop = g_stop_flow.complete_stop();
+        if (wParam != 0) {
+            SR_LOG_INFO(L"Recording stopped");
+        }
+        UpdateUI();
+        if (exit_after_stop) {
+            DestroyWindow(hwnd);
+        }
+        return 0;
+    }
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -670,10 +722,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             break;
 
         case ID_BTN_STOP:
-            if (g_controller.stop()) {
-                SR_LOG_INFO(L"Recording stopped");
-            }
-            UpdateUI();
+            BeginStopAsync(hwnd, false);
             break;
 
         case ID_BTN_PAUSE:
@@ -763,8 +812,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         break;
 
+    case WM_CLOSE:
+        if (!g_controller.state_is_idle() || g_stop_flow.stop_in_progress()) {
+            BeginStopAsync(hwnd, true);
+            return 0;
+        }
+        DestroyWindow(hwnd);
+        return 0;
+
     case WM_DESTROY:
         KillTimer(hwnd, ID_TIMER_UPDATE);
+        JoinStopThreadIfFinished();
         if (!g_controller.state_is_idle()) g_controller.stop();
         g_camera_overlay.stop();
         if (g_font_ui) {
