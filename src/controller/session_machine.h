@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 
 namespace sr {
@@ -50,71 +51,83 @@ public:
 
     SessionMachine() : state_(SessionState::Idle) {}
 
-    SessionState state() const { return state_; }
+    SessionState state() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return state_;
+    }
 
     // Attempt a state transition. Returns true if valid, false if rejected
     bool transition(SessionEvent event) {
+        SessionState old_state;
         SessionState new_state;
+        StateChangeCallback callback;
 
-        switch (state_) {
-        case SessionState::Idle:
-            if (event == SessionEvent::Start) {
-                new_state = SessionState::Recording;
-            } else {
-                return false; // Invalid
-            }
-            break;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            switch (state_) {
+            case SessionState::Idle:
+                if (event == SessionEvent::Start) {
+                    new_state = SessionState::Recording;
+                } else {
+                    return false; // Invalid
+                }
+                break;
 
-        case SessionState::Recording:
-            if (event == SessionEvent::Stop) {
-                new_state = SessionState::Stopping;
-            } else if (event == SessionEvent::Pause) {
-                new_state = SessionState::Paused;
-            } else {
+            case SessionState::Recording:
+                if (event == SessionEvent::Stop) {
+                    new_state = SessionState::Stopping;
+                } else if (event == SessionEvent::Pause) {
+                    new_state = SessionState::Paused;
+                } else {
+                    return false;
+                }
+                break;
+
+            case SessionState::Paused:
+                if (event == SessionEvent::Resume) {
+                    new_state = SessionState::Recording;
+                } else if (event == SessionEvent::Stop) {
+                    new_state = SessionState::Stopping;
+                } else {
+                    return false;
+                }
+                break;
+
+            case SessionState::Stopping:
+                if (event == SessionEvent::Finalized) {
+                    new_state = SessionState::Idle;
+                } else {
+                    return false;
+                }
+                break;
+
+            default:
                 return false;
             }
-            break;
 
-        case SessionState::Paused:
-            if (event == SessionEvent::Resume) {
-                new_state = SessionState::Recording;
-            } else if (event == SessionEvent::Stop) {
-                new_state = SessionState::Stopping;
-            } else {
-                return false;
-            }
-            break;
-
-        case SessionState::Stopping:
-            if (event == SessionEvent::Finalized) {
-                new_state = SessionState::Idle;
-            } else {
-                return false;
-            }
-            break;
-
-        default:
-            return false;
+            old_state = state_;
+            state_ = new_state;
+            callback = on_state_change_;
         }
 
-        SessionState old_state = state_;
-        state_ = new_state;
-        if (on_state_change_) {
-            on_state_change_(old_state, new_state);
+        if (callback) {
+            callback(old_state, new_state);
         }
         return true;
     }
 
     void set_callback(StateChangeCallback cb) {
+        std::lock_guard<std::mutex> lock(mutex_);
         on_state_change_ = std::move(cb);
     }
 
-    bool is_idle()      const { return state_ == SessionState::Idle; }
-    bool is_recording() const { return state_ == SessionState::Recording; }
-    bool is_paused()    const { return state_ == SessionState::Paused; }
-    bool is_stopping()  const { return state_ == SessionState::Stopping; }
+    bool is_idle()      const { return state() == SessionState::Idle; }
+    bool is_recording() const { return state() == SessionState::Recording; }
+    bool is_paused()    const { return state() == SessionState::Paused; }
+    bool is_stopping()  const { return state() == SessionState::Stopping; }
 
 private:
+    mutable std::mutex   mutex_;
     SessionState        state_;
     StateChangeCallback on_state_change_;
 };
