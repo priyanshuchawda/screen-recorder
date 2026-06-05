@@ -21,6 +21,7 @@
 #include "app/camera_overlay.h"
 #include "app/app_icon.h"
 #include "app/app_version.h"
+#include "app/recovery_actions.h"
 #include "app/stop_flow.h"
 #include "app/ui_theme.h"
 
@@ -963,18 +964,34 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
                                      L"Incomplete Recording Found",
                                      MB_YESNOCANCEL | MB_ICONQUESTION);
             if (choice == IDYES) {
-                std::wstring final_path = sr::StorageManager::partialToFinal(orphan);
-                if (MoveFileExW(orphan.c_str(), final_path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                    SR_LOG_INFO(L"Orphan recovered: %s", final_path.c_str());
+                const auto recovery = sr::recover_orphan_partial(orphan);
+                if (recovery.succeeded) {
+                    SR_LOG_INFO(L"Orphan recovered: %s", recovery.final_path.c_str());
                     MessageBoxW(g_hwnd,
-                        (L"Recording recovered:\n" + final_path).c_str(),
+                        (L"Recording recovered:\n" + recovery.final_path).c_str(),
                         L"Recovery Complete", MB_ICONINFORMATION | MB_OK);
                 } else {
-                    SR_LOG_ERROR(L"Orphan recovery failed: %u", GetLastError());
+                    SR_LOG_ERROR(L"Orphan recovery failed: %u", recovery.error_code);
+                    wchar_t err[512]{};
+                    _snwprintf_s(err, _countof(err), _TRUNCATE,
+                                 L"Could not recover this recording:\n\n%s\n\nError: %u",
+                                 orphan.c_str(),
+                                 recovery.error_code);
+                    MessageBoxW(g_hwnd, err, L"Recovery Failed", MB_ICONERROR | MB_OK);
                 }
             } else if (choice == IDNO) {
-                DeleteFileW(orphan.c_str());
-                SR_LOG_INFO(L"Orphan deleted: %s", orphan.c_str());
+                const auto deletion = sr::delete_orphan_partial(orphan);
+                if (deletion.succeeded) {
+                    SR_LOG_INFO(L"Orphan deleted: %s", orphan.c_str());
+                } else {
+                    SR_LOG_ERROR(L"Orphan delete failed: %u", deletion.error_code);
+                    wchar_t err[512]{};
+                    _snwprintf_s(err, _countof(err), _TRUNCATE,
+                                 L"Could not delete this incomplete recording:\n\n%s\n\nError: %u",
+                                 orphan.c_str(),
+                                 deletion.error_code);
+                    MessageBoxW(g_hwnd, err, L"Delete Failed", MB_ICONERROR | MB_OK);
+                }
             }
             // IDCANCEL = ignore, leave file as-is
         }
