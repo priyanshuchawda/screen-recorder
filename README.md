@@ -6,7 +6,7 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Stable-green)
-![Tests](https://img.shields.io/badge/Tests-138%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-156%20passing-brightgreen)
 
 Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.netlify.app)
 
@@ -72,16 +72,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.8-windows-x64.zip`
+- `ScreenRecorder-0.3.10-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.8
-git push origin v0.3.8
-gh release create v0.3.8 ScreenRecorder-0.3.8-windows-x64.zip --title "v0.3.8" --notes "Release v0.3.8: Smooth default camera preview overlay rendering, testing updates, and Netlify documentation deployment."
+git tag v0.3.10
+git push origin v0.3.10
+gh release create v0.3.10 ScreenRecorder-0.3.10-windows-x64.zip --title "v0.3.10" --notes "Release v0.3.10: verified orphan recovery, responsive stop/finalize handling, and stability updates."
 ```
 
 ## Project Layout
