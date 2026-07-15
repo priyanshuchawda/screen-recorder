@@ -1,0 +1,44 @@
+---
+name: Fedora Linux CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'fedora-linux-app/**'
+      - '.github/workflows/fedora-linux-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'fedora-linux-app/**'
+      - '.github/workflows/fedora-linux-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Fedora 44 build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and test in Fedora 44
+        run: |
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            fedora:44 \
+            bash -lc '
+              dnf install -y --setopt=install_weak_deps=False \
+                gcc-c++ cmake ninja-build pkgconf-pkg-config \
+                gtk4-devel libadwaita-devel libportal-devel libportal-gtk4-devel \
+                gstreamer1-devel gstreamer1-plugins-base-devel gtest-devel \
+                desktop-file-utils appstream &&
+              cmake -S fedora-linux-app -B fedora-linux-app/build -G Ninja \
+                -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON &&
+              cmake --build fedora-linux-app/build &&
+              ctest --test-dir fedora-linux-app/build --output-on-failure &&
+              desktop-file-validate fedora-linux-app/io.github.screenrecorder.Fedora.desktop &&
+              appstreamcli validate --no-net fedora-linux-app/io.github.screenrecorder.Fedora.metainfo.xml
+            '
