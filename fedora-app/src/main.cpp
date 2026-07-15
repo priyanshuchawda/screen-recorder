@@ -1,0 +1,831 @@
+// Fedora Screen Recorder: C++20 + GTK4 + xdg-desktop-portal + PipeWire/GStreamer.
+// Wayland source selection remains owned by GNOME's ScreenCast portal.
+
+#include <adwaita.h>
+#include <gst/gst.h>
+#include <libportal/portal.h>
+#include <libportal-gtk4/portal-gtk4.h>
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <format>
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include <unistd.h>
+
+namespace {
+
+constexpr char kAppId[] = "io.github.screenrecorder.Fedora";
+
+struct AppSettings {
+    bool system_audio{true};
+    bool microphone{};
+    bool high_quality{};
+    bool camera{};
+    std::string output_dir;
+};
+
+std::filesystem::path settings_path() {
+    return std::filesystem::path(g_get_user_config_dir()) / "fedora-screen-recorder" / "settings.ini";
+}
+
+AppSettings load_settings() {
+    AppSettings settings;
+    GKeyFile* key_file = g_key_file_new();
+    GError* error = nullptr;
+    const auto path = settings_path().string();
+    if (g_key_file_load_from_file(key_file, path.c_str(), G_KEY_FILE_NONE, &error)) {
+        settings.system_audio = g_key_file_get_boolean(key_file, "Recording", "system_audio", nullptr);
+        settings.microphone = g_key_file_get_boolean(key_file, "Recording", "microphone", nullptr);
+        settings.high_quality = g_key_file_get_boolean(key_file, "Video", "high_quality", nullptr);
+        settings.camera = g_key_file_get_boolean(key_file, "Camera", "enabled", nullptr);
+        gchar* output = g_key_file_get_string(key_file, "Storage", "output_dir", nullptr);
+        if (output) settings.output_dir = output;
+        g_free(output);
+    }
+    g_clear_error(&error);
+    g_key_file_unref(key_file);
+    return settings;
+}
+
+void save_settings(const AppSettings& settings) {
+    std::error_code error;
+    std::filesystem::create_directories(settings_path().parent_path(), error);
+    if (error) return;
+    GKeyFile* key_file = g_key_file_new();
+    g_key_file_set_boolean(key_file, "Recording", "system_audio", settings.system_audio);
+    g_key_file_set_boolean(key_file, "Recording", "microphone", settings.microphone);
+    g_key_file_set_boolean(key_file, "Video", "high_quality", settings.high_quality);
+    g_key_file_set_boolean(key_file, "Camera", "enabled", settings.camera);
+    g_key_file_set_string(key_file, "Storage", "output_dir", settings.output_dir.c_str());
+    gsize length = 0;
+    gchar* data = g_key_file_to_data(key_file, &length, nullptr);
+    const auto path = settings_path().string();
+    g_file_set_contents(path.c_str(), data, static_cast<gssize>(length), nullptr);
+    g_free(data);
+    g_key_file_unref(key_file);
+}
+
+std::string default_output_directory() {
+    const char* videos = g_get_user_special_dir(G_USER_DIRECTORY_VIDEOS);
+    return (std::filesystem::path(videos ? videos : g_get_home_dir()) / "Screen Recordings").string();
+}
+
+std::string output_path(const std::string& configured_output_dir) {
+    const auto directory = std::filesystem::path(configured_output_dir.empty() ? default_output_directory() : configured_output_dir);
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    if (error) return {};
+    const auto now = std::chrono::system_clock::now();
+    const auto stamp = std::format("{:%Y-%m-%d_%H-%M-%S}", now);
+    auto candidate = directory / std::format("Screen Recording {}.partial.mp4", stamp);
+    for (unsigned index = 2; std::filesystem::exists(candidate); ++index) {
+        candidate = directory / std::format("Screen Recording {} ({}).partial.mp4", stamp, index);
+    }
+    return candidate.string();
+}
+
+std::string final_path_for(const std::string& partial) {
+    constexpr std::string_view suffix = ".partial.mp4";
+    if (partial.ends_with(suffix)) {
+        return partial.substr(0, partial.size() - suffix.size()) + ".mp4";
+    }
+    return partial + ".mp4";
+}
+
+bool has_element(const char* name) {
+    GstElementFactory* factory = gst_element_factory_find(name);
+    if (!factory) return false;
+    gst_object_unref(factory);
+    return true;
+}
+
+struct RecordingProfile {
+    int width;
+    int height;
+    int fps;
+    int bitrate_kbps;
+    bool high_quality;
+    bool on_ac;
+};
+
+struct EncoderChoice {
+    std::string element;
+    std::string name;
+    bool hardware;
+};
+
+bool is_on_ac_power() {
+    // UPower is present on Fedora Workstation. Treat lookup failures as AC so a
+    // desktop machine never receives an unexpected quality reduction.
+    GError* error = nullptr;
+    GDBusConnection* bus = g_bus_get_sync(G_BUS_TYPE_SYSTEM, nullptr, &error);
+    if (!bus) {
+        g_clear_error(&error);
+        return true;
+    }
+    GVariant* reply = g_dbus_connection_call_sync(
+        bus, "org.freedesktop.UPower", "/org/freedesktop/UPower",
+        "org.freedesktop.DBus.Properties", "Get",
+        g_variant_new("(ss)", "org.freedesktop.UPower", "OnBattery"),
+        G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, &error);
+    g_object_unref(bus);
+    if (!reply) {
+        g_clear_error(&error);
+        return true;
+    }
+    GVariant* boxed = nullptr;
+    g_variant_get(reply, "(@v)", &boxed);
+    GVariant* value = g_variant_get_variant(boxed);
+    const bool on_battery = g_variant_get_boolean(value);
+    g_variant_unref(value);
+    g_variant_unref(boxed);
+    g_variant_unref(reply);
+    return !on_battery;
+}
+
+RecordingProfile selected_profile(bool high_quality) {
+    const bool on_ac = is_on_ac_power();
+    if (high_quality) {
+        // Same rule as the Windows build: HQ is explicit, so do not silently
+        // downgrade it on battery.
+        return {1920, 1080, 30, 8000, true, on_ac};
+    }
+    if (!on_ac) {
+        return {848, 480, 15, 1500, false, false};
+    }
+    return {848, 480, 30, 4000, false, true};
+}
+
+std::optional<EncoderChoice> choose_encoder(const RecordingProfile& profile) {
+    // The Iris Xe driver exposes VA low-power H.264. These branches preserve
+    // DMABUF/VAMemory through vapostproc, avoiding a CPU encoder on the normal
+    // no-camera path. OpenH264 is a portable fallback only.
+    if (has_element("vah264lpenc")) {
+        return EncoderChoice{std::format("vah264lpenc bitrate={} key-int-max={}", profile.bitrate_kbps, profile.fps * 2), "Intel VA-API low-power H.264", true};
+    }
+    if (has_element("qsvh264enc")) {
+        return EncoderChoice{std::format("qsvh264enc bitrate={} gop-size={}", profile.bitrate_kbps, profile.fps * 2), "Intel Quick Sync H.264", true};
+    }
+    if (has_element("vah264enc")) {
+        return EncoderChoice{std::format("vah264enc bitrate={} key-int-max={}", profile.bitrate_kbps, profile.fps * 2), "VA-API H.264", true};
+    }
+    if (has_element("openh264enc")) {
+        return EncoderChoice{std::format("openh264enc bitrate={} gop-size={} complexity=low", profile.bitrate_kbps * 1000, profile.fps * 2), "OpenH264 software fallback", false};
+    }
+    return std::nullopt;
+}
+
+class RecorderWindow {
+public:
+    explicit RecorderWindow(AdwApplication* application)
+        : portal_(xdp_portal_new()), settings_(load_settings()) {
+        window_ = GTK_WINDOW(adw_application_window_new(GTK_APPLICATION(application)));
+        gtk_window_set_title(window_, "Fedora Screen Recorder");
+        gtk_window_set_default_size(window_, 560, 620);
+        g_signal_connect(window_, "close-request", G_CALLBACK(on_close), this);
+        build_ui();
+    }
+
+    ~RecorderWindow() {
+        cleanup_pipeline();
+        if (session_) {
+            xdp_session_close(session_);
+            g_object_unref(session_);
+        }
+        g_clear_object(&portal_);
+    }
+
+    void present() { gtk_window_present(window_); }
+
+private:
+    GtkWindow* window_{};
+    XdpPortal* portal_{};
+    XdpSession* session_{};
+    GstElement* pipeline_{};
+    guint bus_watch_{};
+    guint timer_{};
+    guint disk_check_{};
+    int remote_fd_{-1};
+    std::string partial_path_;
+    std::chrono::steady_clock::time_point started_at_;
+    std::optional<std::chrono::steady_clock::time_point> paused_at_;
+    std::chrono::seconds paused_for_{};
+    bool recording_{};
+    bool stopping_{};
+    bool muted_{};
+    AppSettings settings_;
+
+    GtkButton* record_button_{};
+    GtkButton* pause_button_{};
+    GtkButton* stop_button_{};
+    GtkButton* mute_button_{};
+    GtkLabel* status_label_{};
+    GtkLabel* time_label_{};
+    GtkSwitch* audio_switch_{};
+    GtkSwitch* microphone_switch_{};
+    GtkSwitch* high_quality_switch_{};
+    GtkSwitch* camera_switch_{};
+    GtkLabel* profile_label_{};
+    GtkLabel* output_label_{};
+
+    static void append(GtkBox* box, GtkWidget* child) { gtk_box_append(box, child); }
+
+    void build_ui() {
+        auto* content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+        gtk_widget_set_margin_start(content, 24);
+        gtk_widget_set_margin_end(content, 24);
+        gtk_widget_set_margin_top(content, 24);
+        gtk_widget_set_margin_bottom(content, 24);
+
+        auto* title = gtk_label_new("Screen Recorder");
+        gtk_widget_add_css_class(title, "title-1");
+        gtk_label_set_xalign(GTK_LABEL(title), 0.0F);
+        append(GTK_BOX(content), title);
+
+        auto* detail = gtk_label_new("Record a display or window through GNOME's secure Wayland portal.");
+        gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
+        gtk_label_set_xalign(GTK_LABEL(detail), 0.0F);
+        gtk_widget_add_css_class(detail, "dim-label");
+        append(GTK_BOX(content), detail);
+
+        auto* duration_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* duration = gtk_label_new("Duration");
+        gtk_widget_set_hexpand(duration, TRUE);
+        gtk_label_set_xalign(GTK_LABEL(duration), 0.0F);
+        time_label_ = GTK_LABEL(gtk_label_new("00:00:00"));
+        gtk_widget_add_css_class(GTK_WIDGET(time_label_), "title-3");
+        append(GTK_BOX(duration_row), duration);
+        append(GTK_BOX(duration_row), GTK_WIDGET(time_label_));
+        append(GTK_BOX(content), duration_row);
+
+        auto* audio_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* audio_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto* audio_title = gtk_label_new("System audio");
+        gtk_label_set_xalign(GTK_LABEL(audio_title), 0.0F);
+        auto* audio_detail = gtk_label_new("Include current desktop output in the MP4");
+        gtk_label_set_xalign(GTK_LABEL(audio_detail), 0.0F);
+        gtk_widget_add_css_class(audio_detail, "dim-label");
+        append(GTK_BOX(audio_box), audio_title);
+        append(GTK_BOX(audio_box), audio_detail);
+        gtk_widget_set_hexpand(audio_box, TRUE);
+        audio_switch_ = GTK_SWITCH(gtk_switch_new());
+        gtk_switch_set_active(audio_switch_, settings_.system_audio);
+        gtk_widget_set_valign(GTK_WIDGET(audio_switch_), GTK_ALIGN_CENTER);
+        append(GTK_BOX(audio_row), audio_box);
+        append(GTK_BOX(audio_row), GTK_WIDGET(audio_switch_));
+        append(GTK_BOX(content), audio_row);
+
+        auto* mic_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* mic_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto* mic_title = gtk_label_new("Microphone");
+        gtk_label_set_xalign(GTK_LABEL(mic_title), 0.0F);
+        auto* mic_detail = gtk_label_new("Optional voice track with a light noise gate");
+        gtk_label_set_xalign(GTK_LABEL(mic_detail), 0.0F);
+        gtk_widget_add_css_class(mic_detail, "dim-label");
+        append(GTK_BOX(mic_box), mic_title);
+        append(GTK_BOX(mic_box), mic_detail);
+        gtk_widget_set_hexpand(mic_box, TRUE);
+        microphone_switch_ = GTK_SWITCH(gtk_switch_new());
+        gtk_switch_set_active(microphone_switch_, settings_.microphone);
+        append(GTK_BOX(mic_row), mic_box);
+        append(GTK_BOX(mic_row), GTK_WIDGET(microphone_switch_));
+        append(GTK_BOX(content), mic_row);
+
+        auto* quality_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* quality_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto* quality_title = gtk_label_new("High quality mode");
+        gtk_label_set_xalign(GTK_LABEL(quality_title), 0.0F);
+        auto* quality_detail = gtk_label_new("1080p profile; remains opt-in on battery");
+        gtk_label_set_xalign(GTK_LABEL(quality_detail), 0.0F);
+        gtk_widget_add_css_class(quality_detail, "dim-label");
+        append(GTK_BOX(quality_box), quality_title);
+        append(GTK_BOX(quality_box), quality_detail);
+        gtk_widget_set_hexpand(quality_box, TRUE);
+        high_quality_switch_ = GTK_SWITCH(gtk_switch_new());
+        gtk_switch_set_active(high_quality_switch_, settings_.high_quality);
+        g_signal_connect(high_quality_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        append(GTK_BOX(quality_row), quality_box);
+        append(GTK_BOX(quality_row), GTK_WIDGET(high_quality_switch_));
+        append(GTK_BOX(content), quality_row);
+
+        auto* camera_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* camera_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto* camera_title = gtk_label_new("Camera overlay");
+        gtk_label_set_xalign(GTK_LABEL(camera_title), 0.0F);
+        auto* camera_detail = gtk_label_new("Low-rate picture-in-picture; disabled by default to preserve battery");
+        gtk_label_set_xalign(GTK_LABEL(camera_detail), 0.0F);
+        gtk_label_set_wrap(GTK_LABEL(camera_detail), TRUE);
+        gtk_widget_add_css_class(camera_detail, "dim-label");
+        append(GTK_BOX(camera_box), camera_title);
+        append(GTK_BOX(camera_box), camera_detail);
+        gtk_widget_set_hexpand(camera_box, TRUE);
+        camera_switch_ = GTK_SWITCH(gtk_switch_new());
+        gtk_switch_set_active(camera_switch_, settings_.camera);
+        append(GTK_BOX(camera_row), camera_box);
+        append(GTK_BOX(camera_row), GTK_WIDGET(camera_switch_));
+        append(GTK_BOX(content), camera_row);
+
+        auto* output_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* output_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto* output_title = gtk_label_new("Recording folder");
+        gtk_label_set_xalign(GTK_LABEL(output_title), 0.0F);
+        output_label_ = GTK_LABEL(gtk_label_new(output_directory().c_str()));
+        gtk_label_set_xalign(output_label_, 0.0F);
+        gtk_label_set_ellipsize(output_label_, PANGO_ELLIPSIZE_MIDDLE);
+        gtk_widget_add_css_class(GTK_WIDGET(output_label_), "dim-label");
+        append(GTK_BOX(output_box), output_title);
+        append(GTK_BOX(output_box), GTK_WIDGET(output_label_));
+        gtk_widget_set_hexpand(output_box, TRUE);
+        auto* choose_folder = gtk_button_new_with_label("Choose…");
+        g_signal_connect(choose_folder, "clicked", G_CALLBACK(on_choose_folder), this);
+        append(GTK_BOX(output_row), output_box);
+        append(GTK_BOX(output_row), choose_folder);
+        append(GTK_BOX(content), output_row);
+
+        profile_label_ = GTK_LABEL(gtk_label_new(""));
+        gtk_label_set_xalign(profile_label_, 0.0F);
+        gtk_widget_add_css_class(GTK_WIDGET(profile_label_), "dim-label");
+        append(GTK_BOX(content), GTK_WIDGET(profile_label_));
+        refresh_profile_label();
+
+        status_label_ = GTK_LABEL(gtk_label_new("Ready — secure portal capture, MP4 finalization, and diagnostics enabled"));
+        gtk_label_set_xalign(status_label_, 0.0F);
+        gtk_label_set_wrap(status_label_, TRUE);
+        gtk_widget_add_css_class(GTK_WIDGET(status_label_), "dim-label");
+        append(GTK_BOX(content), GTK_WIDGET(status_label_));
+
+        auto* controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        gtk_widget_set_halign(controls, GTK_ALIGN_CENTER);
+        record_button_ = GTK_BUTTON(gtk_button_new_with_label("Record"));
+        gtk_widget_add_css_class(GTK_WIDGET(record_button_), "suggested-action");
+        pause_button_ = GTK_BUTTON(gtk_button_new_with_label("Pause"));
+        mute_button_ = GTK_BUTTON(gtk_button_new_with_label("Mute"));
+        stop_button_ = GTK_BUTTON(gtk_button_new_with_label("Stop"));
+        gtk_widget_add_css_class(GTK_WIDGET(stop_button_), "destructive-action");
+        gtk_widget_set_sensitive(GTK_WIDGET(pause_button_), FALSE);
+        gtk_widget_set_sensitive(GTK_WIDGET(mute_button_), FALSE);
+        gtk_widget_set_sensitive(GTK_WIDGET(stop_button_), FALSE);
+        g_signal_connect(record_button_, "clicked", G_CALLBACK(on_record), this);
+        g_signal_connect(pause_button_, "clicked", G_CALLBACK(on_pause), this);
+        g_signal_connect(mute_button_, "clicked", G_CALLBACK(on_mute), this);
+        g_signal_connect(stop_button_, "clicked", G_CALLBACK(on_stop), this);
+        g_signal_connect(audio_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        g_signal_connect(microphone_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        g_signal_connect(camera_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        append(GTK_BOX(controls), GTK_WIDGET(record_button_));
+        append(GTK_BOX(controls), GTK_WIDGET(pause_button_));
+        append(GTK_BOX(controls), GTK_WIDGET(mute_button_));
+        append(GTK_BOX(controls), GTK_WIDGET(stop_button_));
+        append(GTK_BOX(content), controls);
+        adw_application_window_set_content(ADW_APPLICATION_WINDOW(window_), content);
+        report_orphaned_recordings();
+    }
+
+    void set_status(const std::string& text) { gtk_label_set_text(status_label_, text.c_str()); }
+
+    void report_orphaned_recordings() {
+        std::error_code error;
+        unsigned count = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(output_directory(), error)) {
+            if (entry.is_regular_file() && entry.path().filename().string().ends_with(".partial.mp4")) ++count;
+        }
+        if (count) {
+            set_status(std::format("Found {} unfinished recording{}; preserved safely as .partial.mp4.", count, count == 1 ? "" : "s"));
+        }
+    }
+
+    void set_controls(bool is_recording) {
+        gtk_widget_set_sensitive(GTK_WIDGET(record_button_), !is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(pause_button_), is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(stop_button_), is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(mute_button_), is_recording &&
+            (gtk_switch_get_active(audio_switch_) || gtk_switch_get_active(microphone_switch_)));
+        gtk_widget_set_sensitive(GTK_WIDGET(audio_switch_), !is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(microphone_switch_), !is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(high_quality_switch_), !is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), !is_recording);
+    }
+
+    std::string output_directory() const {
+        return settings_.output_dir.empty() ? default_output_directory() : settings_.output_dir;
+    }
+
+    RecordingProfile profile() const { return selected_profile(gtk_switch_get_active(high_quality_switch_)); }
+
+    void refresh_profile_label() {
+        const auto active = profile();
+        gtk_label_set_text(profile_label_, std::format(
+            "{} · {}×{} · {} FPS · {} Mbps · {}",
+            active.high_quality ? "High quality" : "Efficiency",
+            active.width, active.height, active.fps, active.bitrate_kbps / 1000,
+            active.on_ac ? "AC power" : "Battery saver").c_str());
+    }
+
+    void sync_settings() {
+        settings_.system_audio = gtk_switch_get_active(audio_switch_);
+        settings_.microphone = gtk_switch_get_active(microphone_switch_);
+        settings_.high_quality = gtk_switch_get_active(high_quality_switch_);
+        settings_.camera = gtk_switch_get_active(camera_switch_);
+        save_settings(settings_);
+    }
+
+    static void on_settings_changed(GtkSwitch*, GParamSpec*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        self->sync_settings();
+        self->refresh_profile_label();
+    }
+
+    static void on_choose_folder(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        auto* dialog = gtk_file_dialog_new();
+        gtk_file_dialog_set_title(dialog, "Choose recording folder");
+        GFile* initial = g_file_new_for_path(self->output_directory().c_str());
+        gtk_file_dialog_set_initial_folder(dialog, initial);
+        g_object_unref(initial);
+        gtk_file_dialog_select_folder(dialog, self->window_, nullptr, on_folder_chosen, self);
+        g_object_unref(dialog);
+    }
+
+    static void on_folder_chosen(GObject* source, GAsyncResult* result, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        GError* error = nullptr;
+        GFile* folder = gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(source), result, &error);
+        if (!folder) {
+            g_clear_error(&error);
+            return;
+        }
+        gchar* path = g_file_get_path(folder);
+        if (path) {
+            self->settings_.output_dir = path;
+            gtk_label_set_text(self->output_label_, path);
+            self->sync_settings();
+        }
+        g_free(path);
+        g_object_unref(folder);
+    }
+
+    static void on_record(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (!self->portal_) {
+            self->set_status("The xdg-desktop-portal service is unavailable.");
+            return;
+        }
+        if (!choose_encoder(self->profile())) {
+            self->set_status("No H.264 encoder found. Install gstreamer1-plugin-openh264.");
+            return;
+        }
+        self->set_controls(true);
+        self->set_status("Choose a display or window in the GNOME dialog…");
+        xdp_portal_create_screencast_session(
+            self->portal_, static_cast<XdpOutputType>(XDP_OUTPUT_MONITOR | XDP_OUTPUT_WINDOW),
+            XDP_SCREENCAST_FLAG_NONE, XDP_CURSOR_MODE_EMBEDDED, XDP_PERSIST_MODE_NONE,
+            nullptr, nullptr, on_session_created, self);
+    }
+
+    static void on_session_created(GObject* source, GAsyncResult* result, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        GError* error = nullptr;
+        self->session_ = xdp_portal_create_screencast_session_finish(XDP_PORTAL(source), result, &error);
+        if (!self->session_) {
+            self->set_status(std::format("Screen sharing was cancelled: {}", error ? error->message : "unknown error"));
+            g_clear_error(&error);
+            self->set_controls(false);
+            return;
+        }
+        XdpParent* parent = xdp_parent_new_gtk(self->window_);
+        xdp_session_start(self->session_, parent, nullptr, on_session_started, self);
+        xdp_parent_free(parent);
+    }
+
+    static void on_session_started(GObject* source, GAsyncResult* result, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        GError* error = nullptr;
+        if (!xdp_session_start_finish(XDP_SESSION(source), result, &error)) {
+            self->set_status(std::format("Screen sharing was cancelled: {}", error ? error->message : "unknown error"));
+            g_clear_error(&error);
+            self->close_session();
+            self->set_controls(false);
+            return;
+        }
+        if (!self->start_pipeline()) {
+            self->close_session();
+            self->set_controls(false);
+        }
+    }
+
+    bool start_pipeline() {
+        GVariant* streams = xdp_session_get_streams(session_);
+        if (!streams || g_variant_n_children(streams) == 0) {
+            set_status("The portal did not provide a video stream.");
+            return false;
+        }
+        guint32 node_id = 0;
+        GVariant* properties = nullptr;
+        g_variant_get_child(streams, 0, "(u@a{sv})", &node_id, &properties);
+        g_variant_unref(properties);
+        remote_fd_ = xdp_session_open_pipewire_remote(session_);
+        if (remote_fd_ < 0) {
+            set_status("Could not open the portal's PipeWire connection.");
+            return false;
+        }
+        partial_path_ = output_path(output_directory());
+        if (partial_path_.empty()) {
+            set_status("Could not create the Videos/Screen Recordings folder.");
+            return false;
+        }
+        const auto active_profile = profile();
+        const auto encoder = choose_encoder(active_profile);
+        if (!encoder) {
+            set_status("No supported H.264 encoder is available.");
+            return false;
+        }
+        const bool with_system_audio = gtk_switch_get_active(audio_switch_);
+        const bool with_microphone = gtk_switch_get_active(microphone_switch_);
+        const bool with_camera = gtk_switch_get_active(camera_switch_);
+        if (with_camera && !std::filesystem::exists("/dev/video0")) {
+            set_status("Camera overlay is enabled but no V4L2 camera was found.");
+            return false;
+        }
+        gchar* escaped_path = g_strescape(partial_path_.c_str(), nullptr);
+        const auto source = std::format(
+            "pipewiresrc fd={} path={} do-timestamp=true ! queue max-size-buffers=3 max-size-time=2000000000 leaky=downstream ",
+            remote_fd_, node_id);
+        std::string video;
+        if (!with_camera && encoder->hardware) {
+            // This is the normal laptop path: PipeWire negotiates DMA-BUF and
+            // VA post-processing feeds Intel's low-power encoder on the GPU.
+            video = std::format(
+                "{}! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={},height={},framerate={}/1 "
+                "! {} ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
+                source, active_profile.width, active_profile.height, active_profile.fps, encoder->element);
+        } else if (with_camera) {
+            const int camera_width = active_profile.high_quality ? 640 : 320;
+            const int camera_height = active_profile.high_quality ? 360 : 180;
+            const int camera_fps = active_profile.high_quality ? 30 : 10;
+            video = std::format(
+                "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
+                "! queue max-size-buffers=3 leaky=downstream ! compositor name=mix sink_1::xpos=24 sink_1::ypos=24 "
+                "! videoconvert ! {} ! h264parse config-interval=-1 ! queue ! mux. "
+                "v4l2src device=/dev/video0 do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
+                "! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
+                "! queue max-size-buffers=2 leaky=downstream ! mix. ",
+                source, active_profile.width, active_profile.height, active_profile.fps, encoder->element,
+                camera_width, camera_height, camera_fps);
+        } else {
+            // Software fallback retains the same bounded, scaled pipeline.
+            video = std::format(
+                "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
+                "! {} ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
+                source, active_profile.width, active_profile.height, active_profile.fps, encoder->element);
+        }
+        std::string audio;
+        if (with_system_audio || with_microphone) {
+            audio = "audiomixer name=audio_mix ! audioconvert ! audioresample ! "
+                    "audio/x-raw,format=F32LE,rate=48000,channels=2 ! volume name=audio_volume ! "
+                    "avenc_aac bitrate=128000 ! aacparse ! queue ! mux. ";
+            if (with_system_audio) {
+                // The Pulse compatibility monitor is the PipeWire desktop-output
+                // loopback; the ordinary default source would be the microphone.
+                audio += "pulsesrc device=@DEFAULT_MONITOR@ do-timestamp=true ! queue max-size-buffers=12 "
+                         "max-size-time=2000000000 leaky=downstream ! audioconvert ! audioresample ! audio_mix. ";
+            }
+            if (with_microphone) {
+                audio += "pulsesrc do-timestamp=true ! queue max-size-buffers=12 max-size-time=2000000000 leaky=downstream "
+                         "! audioconvert ! audioresample ! audiodynamic mode=expander threshold=0.02 ratio=4 "
+                         "characteristics=soft-knee ! audio_mix. ";
+            }
+        }
+        const std::string description = std::format(
+            "mp4mux name=mux faststart=true ! filesink location=\"{}\" {}{}", escaped_path, video, audio);
+        g_free(escaped_path);
+        GError* error = nullptr;
+        pipeline_ = gst_parse_launch(description.c_str(), &error);
+        if (!pipeline_) {
+            set_status(std::format("Could not create recording pipeline: {}", error ? error->message : "unknown error"));
+            g_clear_error(&error);
+            return false;
+        }
+        GstBus* bus = gst_element_get_bus(pipeline_);
+        bus_watch_ = gst_bus_add_watch(bus, on_bus_message, this);
+        gst_object_unref(bus);
+        if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+            set_status("GStreamer could not start the recording pipeline.");
+            cleanup_pipeline();
+            return false;
+        }
+        started_at_ = std::chrono::steady_clock::now();
+        paused_for_ = std::chrono::seconds::zero();
+        paused_at_.reset();
+        recording_ = true;
+        muted_ = false;
+        write_diagnostics("START", active_profile, *encoder, with_system_audio || with_microphone, with_camera);
+        set_status(std::format("Recording to {} ({})", std::filesystem::path(final_path_for(partial_path_)).filename().string(), encoder->name));
+        timer_ = g_timeout_add(250, update_timer, this);
+        disk_check_ = g_timeout_add_seconds(10, check_disk_space, this);
+        return true;
+    }
+
+    void write_diagnostics(const char* phase, const RecordingProfile& active_profile,
+                           const EncoderChoice& encoder, bool with_audio, bool with_camera) const {
+        std::ofstream file(partial_path_ + ".diagnostics.txt", std::ios::app);
+        if (!file) return;
+        file << phase << '\n'
+             << "encoder=" << encoder.name << (encoder.hardware ? " (hardware)" : " (software)") << '\n'
+             << "power=" << (active_profile.on_ac ? "AC" : "battery") << '\n'
+             << "profile=" << (active_profile.high_quality ? "high_quality" : "efficiency") << '\n'
+             << "video=" << active_profile.width << 'x' << active_profile.height << '@' << active_profile.fps
+             << " bitrate_kbps=" << active_profile.bitrate_kbps << '\n'
+             << "system_audio=" << (with_audio ? "on" : "off") << " camera_overlay=" << (with_camera ? "on" : "off") << '\n';
+    }
+
+    void write_stop_diagnostics(bool completed) const {
+        std::ofstream file(partial_path_ + ".diagnostics.txt", std::ios::app);
+        if (file) file << "STOP\nstatus=" << (completed ? "completed" : "partial") << '\n';
+    }
+
+    static gboolean check_disk_space(gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        std::error_code error;
+        const auto space = std::filesystem::space(std::filesystem::path(self->partial_path_).parent_path(), error);
+        if (!error && space.available < 500ULL * 1024ULL * 1024ULL) {
+            self->set_status("Less than 500 MB free — stopping safely to protect the recording.");
+            on_stop(nullptr, self);
+            return G_SOURCE_REMOVE;
+        }
+        return self->recording_ ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+    }
+
+    static gboolean on_bus_message(GstBus*, GstMessage* message, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        switch (GST_MESSAGE_TYPE(message)) {
+            case GST_MESSAGE_EOS:
+                self->bus_watch_ = 0;
+                self->finish_recording(true);
+                return G_SOURCE_REMOVE;
+            case GST_MESSAGE_ERROR: {
+                GError* error = nullptr;
+                gchar* debug = nullptr;
+                gst_message_parse_error(message, &error, &debug);
+                self->set_status(std::format("Recording error: {}", error ? error->message : "unknown error"));
+                g_clear_error(&error);
+                g_free(debug);
+                self->bus_watch_ = 0;
+                self->finish_recording(false);
+                return G_SOURCE_REMOVE;
+            }
+            default:
+                return G_SOURCE_CONTINUE;
+        }
+    }
+
+    static gboolean update_timer(gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (!self->recording_) return G_SOURCE_REMOVE;
+        const auto now = self->paused_at_.value_or(std::chrono::steady_clock::now());
+        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now - self->started_at_) - self->paused_for_;
+        gtk_label_set_text(self->time_label_, std::format("{:02}:{:02}:{:02}", seconds.count() / 3600, (seconds.count() / 60) % 60, seconds.count() % 60).c_str());
+        return G_SOURCE_CONTINUE;
+    }
+
+    static void on_pause(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (!self->pipeline_) return;
+        if (!self->paused_at_) {
+            gst_element_set_state(self->pipeline_, GST_STATE_PAUSED);
+            self->paused_at_ = std::chrono::steady_clock::now();
+            gtk_button_set_label(self->pause_button_, "Resume");
+            self->set_status("Recording paused");
+        } else {
+            self->paused_for_ += std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - *self->paused_at_);
+            self->paused_at_.reset();
+            gst_element_set_state(self->pipeline_, GST_STATE_PLAYING);
+            gtk_button_set_label(self->pause_button_, "Pause");
+            self->set_status("Recording resumed");
+        }
+    }
+
+    static void on_mute(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        self->muted_ = !self->muted_;
+        if (self->pipeline_) {
+            if (GstElement* volume = gst_bin_get_by_name(GST_BIN(self->pipeline_), "audio_volume")) {
+                g_object_set(volume, "volume", self->muted_ ? 0.0 : 1.0, nullptr);
+                gst_object_unref(volume);
+            }
+        }
+        gtk_button_set_label(self->mute_button_, self->muted_ ? "Unmute" : "Mute");
+    }
+
+    static void on_stop(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (!self->pipeline_ || self->stopping_) return;
+        self->stopping_ = true;
+        gtk_widget_set_sensitive(GTK_WIDGET(self->stop_button_), FALSE);
+        gtk_widget_set_sensitive(GTK_WIDGET(self->pause_button_), FALSE);
+        gtk_widget_set_sensitive(GTK_WIDGET(self->mute_button_), FALSE);
+        self->set_status("Finalizing MP4…");
+        gst_element_send_event(self->pipeline_, gst_event_new_eos());
+    }
+
+    void finish_recording(bool completed) {
+        const auto partial = partial_path_;
+        write_stop_diagnostics(completed);
+        cleanup_pipeline();
+        close_session();
+        recording_ = false;
+        stopping_ = false;
+        set_controls(false);
+        gtk_label_set_text(time_label_, "00:00:00");
+        if (completed && std::filesystem::exists(partial)) {
+            const auto final = final_path_for(partial);
+            std::error_code error;
+            std::filesystem::rename(partial, final, error);
+            if (!error) {
+                std::error_code diagnostics_error;
+                std::filesystem::rename(partial + ".diagnostics.txt", final + ".diagnostics.txt", diagnostics_error);
+            }
+            set_status(error ? std::format("Recording kept as {}", partial) : std::format("Saved {}", final));
+        } else if (std::filesystem::exists(partial)) {
+            set_status(std::format("Recording kept as {}", partial));
+        }
+    }
+
+    void cleanup_pipeline() {
+        if (timer_) {
+            g_source_remove(timer_);
+            timer_ = 0;
+        }
+        if (disk_check_) {
+            g_source_remove(disk_check_);
+            disk_check_ = 0;
+        }
+        if (bus_watch_) {
+            g_source_remove(bus_watch_);
+            bus_watch_ = 0;
+        }
+        if (pipeline_) {
+            gst_element_set_state(pipeline_, GST_STATE_NULL);
+            gst_object_unref(pipeline_);
+            pipeline_ = nullptr;
+        }
+        if (remote_fd_ >= 0) {
+            close(remote_fd_);
+            remote_fd_ = -1;
+        }
+    }
+
+    void close_session() {
+        if (session_) {
+            xdp_session_close(session_);
+            g_object_unref(session_);
+            session_ = nullptr;
+        }
+    }
+
+    static gboolean on_close(GtkWindow*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (self->recording_ && !self->stopping_) {
+            on_stop(nullptr, self);
+            return TRUE;
+        }
+        return FALSE;
+    }
+};
+
+void activate(GApplication* application, gpointer) {
+    if (auto* existing = static_cast<RecorderWindow*>(g_object_get_data(G_OBJECT(application), "recorder-window"))) {
+        existing->present();
+        return;
+    }
+    auto* window = new RecorderWindow(ADW_APPLICATION(application));
+    g_object_set_data_full(G_OBJECT(application), "recorder-window", window,
+                           [](gpointer data) { delete static_cast<RecorderWindow*>(data); });
+    window->present();
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    // GStreamer's shared registry can predate a newly installed Intel media
+    // driver. Keep a recorder-owned registry so hardware codec discovery is
+    // deterministic and never depends on an unrelated desktop app's cache.
+    if (!g_getenv("GST_REGISTRY")) {
+        const auto registry_dir = std::filesystem::path(g_get_user_cache_dir()) / "fedora-screen-recorder";
+        std::error_code error;
+        std::filesystem::create_directories(registry_dir, error);
+        if (!error) {
+            g_setenv("GST_REGISTRY", (registry_dir / "gstreamer-registry.bin").c_str(), FALSE);
+        }
+    }
+    gst_init(&argc, &argv);
+    gst_update_registry();
+    auto* application = adw_application_new(kAppId, G_APPLICATION_DEFAULT_FLAGS);
+    g_signal_connect(application, "activate", G_CALLBACK(activate), nullptr);
+    const int result = g_application_run(G_APPLICATION(application), argc, argv);
+    g_object_unref(application);
+    return result;
+}
