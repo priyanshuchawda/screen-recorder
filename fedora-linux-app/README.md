@@ -77,7 +77,7 @@ sudo dnf install gcc-c++ cmake ninja-build pkgconf-pkg-config \
 
 For this Intel Iris Xe laptop, the RPM Fusion packages `intel-media-driver` and `gstreamer1-plugins-bad-freeworld` enable the verified H.264 VA low-power encoder. The app refreshes the GStreamer registry at launch, then selects it automatically and falls back safely if unavailable.
 
-Available encoders are tried in a hardware-first order (VA low-power, Quick Sync, then VA-API). If one fails immediately while the recording pipeline starts, the app keeps the existing portal session and retries the next candidate, ending with OpenH264 rather than losing the recording attempt.
+Available encoders are tried in a hardware-first order (VA low-power, Quick Sync, then VA-API). If one fails while the pipeline starts or before its first encoded frame, the app keeps the existing portal session and retries the next candidate, ending with OpenH264 rather than losing the recording attempt. Once a frame is encoded, the partial-file safety model takes precedence and the recording is preserved rather than replaced.
 
 ## Behavior and safeguards
 

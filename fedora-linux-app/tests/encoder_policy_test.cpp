@@ -16,3 +16,9 @@ TEST(EncoderPolicy, UsesSoftwareWhenItIsTheOnlyAvailableEncoder) {
     ASSERT_EQ(candidates.size(), 1U);
     EXPECT_EQ(candidates.front(), sr::fedora::EncoderKind::OpenH264);
 }
+
+TEST(EncoderPolicy, RetriesOnlyBeforeTheFirstEncodedFrame) {
+    EXPECT_TRUE(sr::fedora::should_retry_encoder_startup(0, 0, 2));
+    EXPECT_FALSE(sr::fedora::should_retry_encoder_startup(1, 0, 2));
+    EXPECT_FALSE(sr::fedora::should_retry_encoder_startup(0, 1, 2));
+}
