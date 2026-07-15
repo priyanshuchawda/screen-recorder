@@ -11,6 +11,7 @@
 #include "telemetry.h"
 #include "recovery_actions.h"
 #include "camera_preview_policy.h"
+#include "recording_faults.h"
 
 #include <chrono>
 #include <algorithm>
@@ -895,6 +896,15 @@ private:
              << "qos_drops=" << snapshot.qos_drops << '\n';
     }
 
+    void write_fault_diagnostics(const sr::fedora::RecordingFault& fault, std::string_view source_name,
+                                 std::string_view detail) const {
+        std::ofstream file(partial_path_ + ".diagnostics.txt", std::ios::app);
+        if (!file) return;
+        file << "FAULT\nkind=" << fault.diagnostic_name << '\n'
+             << "source=" << source_name << '\n'
+             << "detail=" << detail << '\n';
+    }
+
     static gboolean check_disk_space(gpointer data) {
         auto* self = static_cast<RecorderWindow*>(data);
         std::error_code error;
@@ -943,11 +953,15 @@ private:
                 GError* error = nullptr;
                 gchar* debug = nullptr;
                 gst_message_parse_error(message, &error, &debug);
-                self->set_status(std::format("Recording error: {}", error ? error->message : "unknown error"));
+                const auto* source = GST_OBJECT_NAME(GST_MESSAGE_SRC(message));
+                const auto source_name = std::string{source ? source : "unknown"};
+                const auto fault = sr::fedora::classify_recording_fault(source_name);
+                const auto detail = std::string_view{error ? error->message : "unknown error"};
+                self->write_fault_diagnostics(fault, source_name, detail);
                 g_clear_error(&error);
                 g_free(debug);
                 self->bus_watch_ = 0;
-                self->finish_recording(false);
+                self->finish_recording(false, fault.user_message);
                 return G_SOURCE_REMOVE;
             }
             case GST_MESSAGE_QOS: {
@@ -1031,7 +1045,7 @@ private:
         gst_element_send_event(self->pipeline_, gst_event_new_eos());
     }
 
-    void finish_recording(bool completed) {
+    void finish_recording(bool completed, std::string_view failure_message = {}) {
         const auto partial = partial_path_;
         write_stop_diagnostics(completed);
         cleanup_pipeline();
@@ -1050,7 +1064,10 @@ private:
             }
             set_status(error ? std::format("Recording kept as {}", partial) : std::format("Saved {}", final));
         } else if (std::filesystem::exists(partial)) {
-            set_status(std::format("Recording kept as {}", partial));
+            set_status(failure_message.empty() ? std::format("Recording kept as {}", partial)
+                                               : std::format("{} Recording preserved as {}", failure_message, partial));
+        } else if (!failure_message.empty()) {
+            set_status(std::string{failure_message});
         }
     }
 
