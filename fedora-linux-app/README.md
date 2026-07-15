@@ -103,3 +103,16 @@ app, runs every GoogleTest, verifies the GTK4 preview sink and desktop metadata,
 checks the RPM helper syntax, and produces a native RPM. The repository-owned
 Fedora and Windows GitHub Actions workflows are intentionally disabled; checks
 are performed on the Fedora development laptop instead.
+
+For this Intel Iris Xe Fedora laptop, run the optional hardware-path gate after
+the portable check:
+
+```bash
+sudo dnf install ffmpeg-free
+./verify-intel-va.sh
+```
+
+It uses the app's private refreshed GStreamer registry, records a one-second
+VA low-power H.264 clip, and verifies its codec, 848×480 dimensions, and 30 FPS
+with `ffprobe`. It is intentionally Intel-specific and is not required on
+systems that use the OpenH264 fallback.
