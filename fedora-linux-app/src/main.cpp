@@ -9,6 +9,7 @@
 #include "profile_policy.h"
 #include "camera_devices.h"
 #include "telemetry.h"
+#include "recovery_actions.h"
 
 #include <chrono>
 #include <algorithm>
@@ -247,6 +248,8 @@ private:
     GtkLabel* profile_label_{};
     GtkLabel* output_label_{};
     GtkLabel* telemetry_label_{};
+    GtkButton* recovery_button_{};
+    std::vector<std::filesystem::path> orphaned_recordings_;
     std::vector<std::string> camera_devices_;
 
     static void append(GtkBox* box, GtkWidget* child) { gtk_box_append(box, child); }
@@ -413,6 +416,11 @@ private:
         gtk_widget_add_css_class(GTK_WIDGET(status_label_), "dim-label");
         append(GTK_BOX(content), GTK_WIDGET(status_label_));
 
+        recovery_button_ = GTK_BUTTON(gtk_button_new_with_label("Recover unfinished recordings"));
+        gtk_widget_set_halign(GTK_WIDGET(recovery_button_), GTK_ALIGN_START);
+        g_signal_connect(recovery_button_, "clicked", G_CALLBACK(on_recover_orphans), this);
+        append(GTK_BOX(content), GTK_WIDGET(recovery_button_));
+
         auto* controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         gtk_widget_set_halign(controls, GTK_ALIGN_CENTER);
         record_button_ = GTK_BUTTON(gtk_button_new_with_label("Record"));
@@ -444,13 +452,30 @@ private:
 
     void report_orphaned_recordings() {
         std::error_code error;
-        unsigned count = 0;
+        orphaned_recordings_.clear();
         for (const auto& entry : std::filesystem::directory_iterator(output_directory(), error)) {
-            if (entry.is_regular_file() && entry.path().filename().string().ends_with(".partial.mp4")) ++count;
+            if (entry.is_regular_file() && entry.path().filename().string().ends_with(".partial.mp4")) {
+                orphaned_recordings_.push_back(entry.path());
+            }
         }
-        if (count) {
-            set_status(std::format("Found {} unfinished recording{}; preserved safely as .partial.mp4.", count, count == 1 ? "" : "s"));
+        gtk_widget_set_visible(GTK_WIDGET(recovery_button_), !orphaned_recordings_.empty());
+        if (!orphaned_recordings_.empty()) {
+            const auto count = orphaned_recordings_.size();
+            set_status(std::format("Found {} unfinished recording{}; choose Recover to rename safely.", count, count == 1 ? "" : "s"));
         }
+    }
+
+    static void on_recover_orphans(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        unsigned recovered = 0;
+        unsigned skipped = 0;
+        for (const auto& partial : self->orphaned_recordings_) {
+            if (sr::fedora::recover_partial_recording(partial) == sr::fedora::RecoveryResult::Recovered) ++recovered;
+            else ++skipped;
+        }
+        self->report_orphaned_recordings();
+        self->set_status(std::format("Recovered {} unfinished recording{}; {} skipped to avoid data loss.",
+            recovered, recovered == 1 ? "" : "s", skipped));
     }
 
     void set_controls(bool is_recording) {
@@ -464,6 +489,7 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(high_quality_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), !is_recording && !camera_devices_.empty());
+        gtk_widget_set_sensitive(GTK_WIDGET(recovery_button_), !is_recording && !orphaned_recordings_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(fps_dropdown_), !is_recording);
     }
 
