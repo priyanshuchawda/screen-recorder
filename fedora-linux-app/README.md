@@ -85,6 +85,7 @@ Available encoders are tried in a hardware-first order (VA low-power, Quick Sync
 - The red recording file is written as `*.partial.mp4` and renamed to `.mp4` only after GStreamer sends EOS and the MP4 is finalized.
 - System-audio capture uses the PipeWire Pulse monitor (`@DEFAULT_MONITOR@`), not the microphone source.
 - The microphone track is optional and passes through a light expander/noise gate before mixing.
+- Pause/resume uses a monotonic clock with sub-second accounting, so repeated short pauses do not inflate the displayed recording duration.
 - Every recording has a neighboring `.diagnostics.txt` file with selected encoder, power state, profile, audio/camera choices, completion status, PipeWire captured-frame count, encoded-frame count, audio-buffer count, and GStreamer QoS drops.
 - The app checks free storage every 10 seconds and safely stops below 500 MB.
 - Recording options and the selected output folder persist in `~/.config/fedora-screen-recorder/settings.ini`.
