@@ -70,6 +70,7 @@ For this Intel Iris Xe laptop, the RPM Fusion packages `intel-media-driver` and 
 - The app checks free storage every 10 seconds and safely stops below 500 MB.
 - Recording options and the selected output folder persist in `~/.config/fedora-screen-recorder/settings.ini`.
 - Existing `.partial.mp4` files are detected at startup and preserved. The explicit recovery action uses the same safe rename model as Windows and refuses to overwrite an existing final MP4.
+- PipeWire, camera, audio, encoder, and output failures are classified in the UI and recorded as a `FAULT` block in diagnostics. The app never reopens a portal or device automatically; the user explicitly selects **Record** to retry.
 - The default destination is `~/Videos/Screen Recordings`.
 
 ## Validation
