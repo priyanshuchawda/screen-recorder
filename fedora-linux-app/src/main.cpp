@@ -39,6 +39,7 @@ struct AppSettings {
     bool high_quality{};
     bool battery_saver{};
     bool camera{};
+    bool camera_preview{true};
     std::string camera_device;
     int fps{30};
     std::string output_dir;
@@ -59,6 +60,10 @@ AppSettings load_settings() {
         settings.high_quality = g_key_file_get_boolean(key_file, "Video", "high_quality", nullptr);
         settings.battery_saver = g_key_file_get_boolean(key_file, "Video", "battery_saver", nullptr);
         settings.camera = g_key_file_get_boolean(key_file, "Camera", "enabled", nullptr);
+        GError* preview_error = nullptr;
+        const bool camera_preview = g_key_file_get_boolean(key_file, "Camera", "preview", &preview_error);
+        if (!preview_error) settings.camera_preview = camera_preview;
+        g_clear_error(&preview_error);
         gchar* camera_device = g_key_file_get_string(key_file, "Camera", "device", nullptr);
         if (camera_device) settings.camera_device = camera_device;
         g_free(camera_device);
@@ -82,6 +87,7 @@ void save_settings(const AppSettings& settings) {
     g_key_file_set_boolean(key_file, "Video", "high_quality", settings.high_quality);
     g_key_file_set_boolean(key_file, "Video", "battery_saver", settings.battery_saver);
     g_key_file_set_boolean(key_file, "Camera", "enabled", settings.camera);
+    g_key_file_set_boolean(key_file, "Camera", "preview", settings.camera_preview);
     g_key_file_set_string(key_file, "Camera", "device", settings.camera_device.c_str());
     g_key_file_set_integer(key_file, "Video", "fps", settings.fps);
     g_key_file_set_string(key_file, "Storage", "output_dir", settings.output_dir.c_str());
@@ -221,7 +227,10 @@ public:
         g_clear_object(&portal_);
     }
 
-    void present() { gtk_window_present(window_); }
+    void present() {
+        gtk_window_present(window_);
+        open_configured_camera_preview();
+    }
 
 private:
     GtkWindow* window_{};
@@ -264,6 +273,7 @@ private:
     GtkSwitch* high_quality_switch_{};
     GtkSwitch* battery_saver_switch_{};
     GtkSwitch* camera_switch_{};
+    GtkSwitch* camera_preview_switch_{};
     GtkDropDown* camera_device_dropdown_{};
     GtkDropDown* fps_dropdown_{};
     GtkLabel* profile_label_{};
@@ -271,12 +281,35 @@ private:
     GtkLabel* telemetry_label_{};
     GtkButton* recovery_button_{};
     GtkButton* preview_camera_button_{};
+    GtkButton* maximize_window_button_{};
     std::vector<std::filesystem::path> orphaned_recordings_;
     std::vector<std::string> camera_devices_;
 
     static void append(GtkBox* box, GtkWidget* child) { gtk_box_append(box, child); }
 
     void build_ui() {
+        auto* header = GTK_HEADER_BAR(gtk_header_bar_new());
+        gtk_header_bar_set_show_title_buttons(header, FALSE);
+        auto* header_title = adw_window_title_new("Fedora Screen Recorder", "Power-aware PipeWire capture");
+        gtk_header_bar_set_title_widget(header, header_title);
+
+        auto* minimize = gtk_button_new_from_icon_name("window-minimize-symbolic");
+        gtk_widget_set_tooltip_text(minimize, "Minimize");
+        g_signal_connect(minimize, "clicked", G_CALLBACK(on_minimize_window), this);
+        gtk_header_bar_pack_end(header, minimize);
+
+        maximize_window_button_ = GTK_BUTTON(gtk_button_new_from_icon_name("window-maximize-symbolic"));
+        gtk_widget_set_tooltip_text(GTK_WIDGET(maximize_window_button_), "Maximize");
+        g_signal_connect(maximize_window_button_, "clicked", G_CALLBACK(on_toggle_maximize_window), this);
+        gtk_header_bar_pack_end(header, GTK_WIDGET(maximize_window_button_));
+
+        auto* close = gtk_button_new_from_icon_name("window-close-symbolic");
+        gtk_widget_set_tooltip_text(close, "Close");
+        g_signal_connect(close, "clicked", G_CALLBACK(on_close_window_button), this);
+        gtk_header_bar_pack_end(header, close);
+        gtk_window_set_titlebar(window_, GTK_WIDGET(header));
+        g_signal_connect(window_, "notify::maximized", G_CALLBACK(on_window_maximized_changed), this);
+
         auto* content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
         gtk_widget_set_margin_start(content, 24);
         gtk_widget_set_margin_end(content, 24);
@@ -421,7 +454,26 @@ private:
         append(GTK_BOX(camera_device_row), GTK_WIDGET(camera_device_dropdown_));
         append(GTK_BOX(content), camera_device_row);
 
-        preview_camera_button_ = GTK_BUTTON(gtk_button_new_with_label("Preview selected camera"));
+        auto* preview_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* preview_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto* preview_title = gtk_label_new("Live camera preview");
+        gtk_label_set_xalign(GTK_LABEL(preview_title), 0.0F);
+        auto* preview_detail = gtk_label_new("Opens by default and pauses while recording; separate from the saved PiP overlay");
+        gtk_label_set_xalign(GTK_LABEL(preview_detail), 0.0F);
+        gtk_label_set_wrap(GTK_LABEL(preview_detail), TRUE);
+        gtk_widget_add_css_class(preview_detail, "dim-label");
+        append(GTK_BOX(preview_box), preview_title);
+        append(GTK_BOX(preview_box), preview_detail);
+        gtk_widget_set_hexpand(preview_box, TRUE);
+        camera_preview_switch_ = GTK_SWITCH(gtk_switch_new());
+        gtk_switch_set_active(camera_preview_switch_, settings_.camera_preview);
+        gtk_widget_set_sensitive(GTK_WIDGET(camera_preview_switch_), !camera_devices_.empty());
+        g_signal_connect(camera_preview_switch_, "notify::active", G_CALLBACK(on_camera_preview_changed), this);
+        append(GTK_BOX(preview_row), preview_box);
+        append(GTK_BOX(preview_row), GTK_WIDGET(camera_preview_switch_));
+        append(GTK_BOX(content), preview_row);
+
+        preview_camera_button_ = GTK_BUTTON(gtk_button_new_with_label("Open camera preview"));
         gtk_widget_set_halign(GTK_WIDGET(preview_camera_button_), GTK_ALIGN_START);
         gtk_widget_set_sensitive(GTK_WIDGET(preview_camera_button_), !camera_devices_.empty());
         g_signal_connect(preview_camera_button_, "clicked", G_CALLBACK(on_preview_camera), this);
@@ -535,9 +587,11 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(battery_saver_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), !is_recording && !camera_devices_.empty());
+        gtk_widget_set_sensitive(GTK_WIDGET(camera_preview_switch_), !is_recording && !camera_devices_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(preview_camera_button_), !is_recording && !camera_devices_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(recovery_button_), !is_recording && !orphaned_recordings_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(fps_dropdown_), !is_recording);
+        if (!is_recording) open_configured_camera_preview();
     }
 
     std::string output_directory() const {
@@ -569,6 +623,7 @@ private:
         settings_.high_quality = gtk_switch_get_active(high_quality_switch_);
         settings_.battery_saver = gtk_switch_get_active(battery_saver_switch_);
         settings_.camera = gtk_switch_get_active(camera_switch_);
+        settings_.camera_preview = gtk_switch_get_active(camera_preview_switch_);
         settings_.camera_device = selected_camera_device();
         settings_.fps = gtk_drop_down_get_selected(fps_dropdown_) == 1 ? 60 : 30;
         save_settings(settings_);
@@ -587,11 +642,28 @@ private:
     }
 
     static void on_camera_device_changed(GtkDropDown*, GParamSpec*, gpointer data) {
-        static_cast<RecorderWindow*>(data)->sync_settings();
+        auto* self = static_cast<RecorderWindow*>(data);
+        self->sync_settings();
+        self->stop_camera_preview();
+        self->open_configured_camera_preview();
+    }
+
+    static void on_camera_preview_changed(GtkSwitch*, GParamSpec*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        self->sync_settings();
+        if (gtk_switch_get_active(self->camera_preview_switch_)) self->open_configured_camera_preview();
+        else self->stop_camera_preview();
     }
 
     static void on_preview_camera(GtkButton*, gpointer data) {
-        static_cast<RecorderWindow*>(data)->start_camera_preview();
+        auto* self = static_cast<RecorderWindow*>(data);
+        gtk_switch_set_active(self->camera_preview_switch_, TRUE);
+        self->open_configured_camera_preview();
+    }
+
+    void open_configured_camera_preview() {
+        if (!sr::fedora::should_run_camera_preview(settings_.camera_preview, recording_, !camera_devices_.empty())) return;
+        if (!camera_preview_pipeline_) start_camera_preview();
     }
 
     void start_camera_preview() {
@@ -651,8 +723,11 @@ private:
 
     static gboolean on_preview_close(GtkWindow* preview_window, gpointer data) {
         auto* self = static_cast<RecorderWindow*>(data);
-        if (self->camera_preview_window_ == preview_window) self->camera_preview_window_ = nullptr;
+        if (self->camera_preview_window_ != preview_window) return FALSE;
+        self->camera_preview_window_ = nullptr;
         self->stop_camera_preview();
+        gtk_switch_set_active(self->camera_preview_switch_, FALSE);
+        self->set_status("Live camera preview closed.");
         return FALSE;
     }
 
@@ -664,7 +739,8 @@ private:
         self->camera_preview_bus_watch_ = 0;
         if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_EOS) {
             self->stop_camera_preview();
-            self->set_status("Camera preview ended. Select Preview selected camera to reopen it.");
+            gtk_switch_set_active(self->camera_preview_switch_, FALSE);
+            self->set_status("Camera preview ended. Turn on Live camera preview to reopen it.");
             return G_SOURCE_REMOVE;
         }
         GError* error = nullptr;
@@ -676,8 +752,30 @@ private:
         g_clear_error(&error);
         g_free(debug);
         self->stop_camera_preview();
+        gtk_switch_set_active(self->camera_preview_switch_, FALSE);
         self->set_status(std::format("Camera preview stopped: {} ({})", fault.user_message, detail));
         return G_SOURCE_REMOVE;
+    }
+
+    static void on_minimize_window(GtkButton*, gpointer data) {
+        gtk_window_minimize(static_cast<RecorderWindow*>(data)->window_);
+    }
+
+    static void on_toggle_maximize_window(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (gtk_window_is_maximized(self->window_)) gtk_window_unmaximize(self->window_);
+        else gtk_window_maximize(self->window_);
+    }
+
+    static void on_close_window_button(GtkButton*, gpointer data) {
+        gtk_window_close(static_cast<RecorderWindow*>(data)->window_);
+    }
+
+    static void on_window_maximized_changed(GtkWindow* window, GParamSpec*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        const bool maximized = gtk_window_is_maximized(window);
+        gtk_button_set_icon_name(self->maximize_window_button_, maximized ? "window-restore-symbolic" : "window-maximize-symbolic");
+        gtk_widget_set_tooltip_text(GTK_WIDGET(self->maximize_window_button_), maximized ? "Restore" : "Maximize");
     }
 
     void stop_camera_preview() {
