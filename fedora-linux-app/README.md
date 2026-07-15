@@ -21,7 +21,7 @@ The Fedora version intentionally mirrors the Windows project’s laptop policy.
 | Battery Saver | 640×360 | 15 | 1 Mbps | Explicit low-cost mode; HQ takes precedence |
 | High quality | 1920×1080 | 30 / 60 | 8 / 10 Mbps | Explicit opt-in; unchanged on battery |
 
-The camera PiP is off by default. The app discovers V4L2 camera paths and persists the selected device. When enabled it uses a bounded two-frame path at 320×180/10 FPS in efficiency mode, 160×90/5 FPS in Battery Saver, or a 1280×720/30 FPS HQ profile. It is deliberately separate from the normal zero/low-copy Intel encode path, because compositing a camera frame costs power. The separate **Preview selected camera** action uses the same policy, opens a GTK4 preview window, and always stops before screen recording begins or when its window closes.
+The camera PiP is off by default. The app discovers V4L2 camera paths and persists the selected device. When enabled it uses a bounded two-frame path at 320×180/10 FPS in efficiency mode, 160×90/5 FPS in Battery Saver, or a 1280×720/30 FPS HQ profile. It is deliberately separate from the normal zero/low-copy Intel encode path, because compositing a camera frame costs power. **Live camera preview** is separate from PiP and is enabled by default when a camera is available: it opens a movable GTK window at launch, stops while recording, and returns when recording or a cancelled portal request ends. Closing that window turns the preview off persistently.
 
 The preview also watches its own GStreamer errors: if a V4L2 device is disconnected or the preview ends, the app closes the preview cleanly and tells you how to reopen it after reconnecting the device.
 
@@ -89,6 +89,7 @@ Available encoders are tried in a hardware-first order (VA low-power, Quick Sync
 - Every recording has a neighboring `.diagnostics.txt` file with selected encoder, power state, profile, audio/camera choices, completion status, PipeWire captured-frame count, encoded-frame count, audio-buffer count, and GStreamer QoS drops.
 - The app checks free storage every 10 seconds and safely stops below 500 MB.
 - Recording options and the selected output folder persist in `~/.config/fedora-screen-recorder/settings.ini`.
+- The GTK title bar is draggable and includes explicit minimize, maximize/restore, and close controls.
 - Existing `.partial.mp4` files are detected at startup and preserved. The explicit recovery action uses the same safe rename model as Windows and refuses to overwrite an existing final MP4.
 - PipeWire, camera, audio, encoder, and output failures are classified in the UI and recorded as a `FAULT` block in diagnostics. The app never reopens a portal or device automatically; the user explicitly selects **Record** to retry.
 - The default destination is `~/Videos/Screen Recordings`.
