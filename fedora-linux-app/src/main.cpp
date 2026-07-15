@@ -233,6 +233,9 @@ public:
     void present() {
         gtk_window_present(window_);
         open_configured_camera_preview();
+        if (g_strcmp0(g_getenv("SCREEN_RECORDER_UI_SMOKE"), "preferences") == 0) {
+            adw_dialog_present(ADW_DIALOG(settings_dialog_), GTK_WIDGET(window_));
+        }
     }
 
 private:
@@ -283,12 +286,42 @@ private:
     GtkLabel* output_label_{};
     GtkLabel* telemetry_label_{};
     GtkButton* recovery_button_{};
+    GtkButton* preferences_button_{};
     GtkButton* preview_camera_button_{};
+    GtkButton* choose_folder_button_{};
     GtkButton* maximize_window_button_{};
+    AdwPreferencesDialog* settings_dialog_{};
+    AdwActionRow* settings_output_row_{};
     std::vector<std::filesystem::path> orphaned_recordings_;
     std::vector<std::string> camera_devices_;
 
     static void append(GtkBox* box, GtkWidget* child) { gtk_box_append(box, child); }
+
+    static AdwActionRow* make_action_row(const char* title, const char* subtitle) {
+        auto* row = ADW_ACTION_ROW(adw_action_row_new());
+        adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+        adw_action_row_set_subtitle(row, subtitle);
+        adw_action_row_set_subtitle_lines(row, 2);
+        return row;
+    }
+
+    static AdwPreferencesGroup* make_preferences_group(const char* title, const char* description = nullptr) {
+        auto* group = ADW_PREFERENCES_GROUP(adw_preferences_group_new());
+        adw_preferences_group_set_title(group, title);
+        if (description) adw_preferences_group_set_description(group, description);
+        return group;
+    }
+
+    GtkSwitch* add_switch_row(AdwPreferencesGroup* group, const char* title, const char* subtitle, bool active) {
+        auto* row = make_action_row(title, subtitle);
+        auto* toggle = GTK_SWITCH(gtk_switch_new());
+        gtk_switch_set_active(toggle, active);
+        gtk_widget_set_valign(GTK_WIDGET(toggle), GTK_ALIGN_CENTER);
+        adw_action_row_add_suffix(row, GTK_WIDGET(toggle));
+        adw_action_row_set_activatable_widget(row, GTK_WIDGET(toggle));
+        adw_preferences_group_add(group, GTK_WIDGET(row));
+        return toggle;
+    }
 
     void build_ui() {
         auto* header = GTK_HEADER_BAR(gtk_header_bar_new());
@@ -313,7 +346,7 @@ private:
         gtk_window_set_titlebar(window_, GTK_WIDGET(header));
         g_signal_connect(window_, "notify::maximized", G_CALLBACK(on_window_maximized_changed), this);
 
-        auto* content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 14);
+        auto* content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
         gtk_widget_set_margin_start(content, 24);
         gtk_widget_set_margin_end(content, 24);
         gtk_widget_set_margin_top(content, 24);
@@ -324,7 +357,7 @@ private:
         gtk_label_set_xalign(GTK_LABEL(title), 0.0F);
         append(GTK_BOX(content), title);
 
-        auto* detail = gtk_label_new("Record a display or window through GNOME's secure Wayland portal.");
+        auto* detail = gtk_label_new("A compact dashboard for secure Wayland recording.");
         gtk_label_set_wrap(GTK_LABEL(detail), TRUE);
         gtk_label_set_xalign(GTK_LABEL(detail), 0.0F);
         gtk_widget_add_css_class(detail, "dim-label");
@@ -340,149 +373,6 @@ private:
         append(GTK_BOX(duration_row), GTK_WIDGET(time_label_));
         append(GTK_BOX(content), duration_row);
 
-        auto* audio_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* audio_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        auto* audio_title = gtk_label_new("System audio");
-        gtk_label_set_xalign(GTK_LABEL(audio_title), 0.0F);
-        auto* audio_detail = gtk_label_new("Include current desktop output in the MP4");
-        gtk_label_set_xalign(GTK_LABEL(audio_detail), 0.0F);
-        gtk_widget_add_css_class(audio_detail, "dim-label");
-        append(GTK_BOX(audio_box), audio_title);
-        append(GTK_BOX(audio_box), audio_detail);
-        gtk_widget_set_hexpand(audio_box, TRUE);
-        audio_switch_ = GTK_SWITCH(gtk_switch_new());
-        gtk_switch_set_active(audio_switch_, settings_.system_audio);
-        gtk_widget_set_valign(GTK_WIDGET(audio_switch_), GTK_ALIGN_CENTER);
-        append(GTK_BOX(audio_row), audio_box);
-        append(GTK_BOX(audio_row), GTK_WIDGET(audio_switch_));
-        append(GTK_BOX(content), audio_row);
-
-        auto* mic_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* mic_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        auto* mic_title = gtk_label_new("Microphone");
-        gtk_label_set_xalign(GTK_LABEL(mic_title), 0.0F);
-        auto* mic_detail = gtk_label_new("Optional voice track with a light noise gate");
-        gtk_label_set_xalign(GTK_LABEL(mic_detail), 0.0F);
-        gtk_widget_add_css_class(mic_detail, "dim-label");
-        append(GTK_BOX(mic_box), mic_title);
-        append(GTK_BOX(mic_box), mic_detail);
-        gtk_widget_set_hexpand(mic_box, TRUE);
-        microphone_switch_ = GTK_SWITCH(gtk_switch_new());
-        gtk_switch_set_active(microphone_switch_, settings_.microphone);
-        append(GTK_BOX(mic_row), mic_box);
-        append(GTK_BOX(mic_row), GTK_WIDGET(microphone_switch_));
-        append(GTK_BOX(content), mic_row);
-
-        auto* quality_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* quality_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        auto* quality_title = gtk_label_new("High quality mode");
-        gtk_label_set_xalign(GTK_LABEL(quality_title), 0.0F);
-        auto* quality_detail = gtk_label_new("1080p profile; remains opt-in on battery");
-        gtk_label_set_xalign(GTK_LABEL(quality_detail), 0.0F);
-        gtk_widget_add_css_class(quality_detail, "dim-label");
-        append(GTK_BOX(quality_box), quality_title);
-        append(GTK_BOX(quality_box), quality_detail);
-        gtk_widget_set_hexpand(quality_box, TRUE);
-        high_quality_switch_ = GTK_SWITCH(gtk_switch_new());
-        gtk_switch_set_active(high_quality_switch_, settings_.high_quality);
-        g_signal_connect(high_quality_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
-        append(GTK_BOX(quality_row), quality_box);
-        append(GTK_BOX(quality_row), GTK_WIDGET(high_quality_switch_));
-        append(GTK_BOX(content), quality_row);
-
-        auto* saver_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* saver_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        auto* saver_title = gtk_label_new("Battery Saver");
-        gtk_label_set_xalign(GTK_LABEL(saver_title), 0.0F);
-        auto* saver_detail = gtk_label_new("640×360, 15 FPS, 1 Mbps; High Quality takes precedence");
-        gtk_label_set_xalign(GTK_LABEL(saver_detail), 0.0F);
-        gtk_widget_add_css_class(saver_detail, "dim-label");
-        append(GTK_BOX(saver_box), saver_title);
-        append(GTK_BOX(saver_box), saver_detail);
-        gtk_widget_set_hexpand(saver_box, TRUE);
-        battery_saver_switch_ = GTK_SWITCH(gtk_switch_new());
-        gtk_switch_set_active(battery_saver_switch_, settings_.battery_saver);
-        g_signal_connect(battery_saver_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
-        append(GTK_BOX(saver_row), saver_box);
-        append(GTK_BOX(saver_row), GTK_WIDGET(battery_saver_switch_));
-        append(GTK_BOX(content), saver_row);
-
-        auto* fps_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* fps_title = gtk_label_new("Frame rate");
-        gtk_label_set_xalign(GTK_LABEL(fps_title), 0.0F);
-        gtk_widget_set_hexpand(fps_title, TRUE);
-        const char* fps_options[] = {"30 FPS", "60 FPS", nullptr};
-        fps_dropdown_ = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(fps_options));
-        gtk_drop_down_set_selected(fps_dropdown_, settings_.fps == 60 ? 1 : 0);
-        g_signal_connect(fps_dropdown_, "notify::selected", G_CALLBACK(on_fps_changed), this);
-        append(GTK_BOX(fps_row), fps_title);
-        append(GTK_BOX(fps_row), GTK_WIDGET(fps_dropdown_));
-        append(GTK_BOX(content), fps_row);
-
-        auto* camera_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* camera_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        auto* camera_title = gtk_label_new("Camera overlay");
-        gtk_label_set_xalign(GTK_LABEL(camera_title), 0.0F);
-        auto* camera_detail = gtk_label_new("Low-rate picture-in-picture; disabled by default to preserve battery");
-        gtk_label_set_xalign(GTK_LABEL(camera_detail), 0.0F);
-        gtk_label_set_wrap(GTK_LABEL(camera_detail), TRUE);
-        gtk_widget_add_css_class(camera_detail, "dim-label");
-        append(GTK_BOX(camera_box), camera_title);
-        append(GTK_BOX(camera_box), camera_detail);
-        gtk_widget_set_hexpand(camera_box, TRUE);
-        camera_switch_ = GTK_SWITCH(gtk_switch_new());
-        gtk_switch_set_active(camera_switch_, settings_.camera);
-        append(GTK_BOX(camera_row), camera_box);
-        append(GTK_BOX(camera_row), GTK_WIDGET(camera_switch_));
-        append(GTK_BOX(content), camera_row);
-
-        auto* camera_device_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* camera_device_title = gtk_label_new("Camera device");
-        gtk_label_set_xalign(GTK_LABEL(camera_device_title), 0.0F);
-        gtk_widget_set_hexpand(camera_device_title, TRUE);
-        camera_devices_ = sr::fedora::discover_camera_device_paths();
-        auto* camera_device_model = gtk_string_list_new(nullptr);
-        for (const auto& device : camera_devices_) gtk_string_list_append(camera_device_model, device.c_str());
-        camera_device_dropdown_ = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(camera_device_model), nullptr));
-        g_object_unref(camera_device_model);
-        if (!camera_devices_.empty()) {
-            const auto saved = std::find(camera_devices_.begin(), camera_devices_.end(), settings_.camera_device);
-            gtk_drop_down_set_selected(camera_device_dropdown_, static_cast<guint>(saved == camera_devices_.end() ? 0 : saved - camera_devices_.begin()));
-        } else {
-            gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), FALSE);
-            gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), FALSE);
-        }
-        g_signal_connect(camera_device_dropdown_, "notify::selected", G_CALLBACK(on_camera_device_changed), this);
-        append(GTK_BOX(camera_device_row), camera_device_title);
-        append(GTK_BOX(camera_device_row), GTK_WIDGET(camera_device_dropdown_));
-        append(GTK_BOX(content), camera_device_row);
-
-        auto* preview_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-        auto* preview_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-        auto* preview_title = gtk_label_new("Live camera preview");
-        gtk_label_set_xalign(GTK_LABEL(preview_title), 0.0F);
-        auto* preview_detail = gtk_label_new("Opens by default and pauses while recording; separate from the saved PiP overlay");
-        gtk_label_set_xalign(GTK_LABEL(preview_detail), 0.0F);
-        gtk_label_set_wrap(GTK_LABEL(preview_detail), TRUE);
-        gtk_widget_add_css_class(preview_detail, "dim-label");
-        append(GTK_BOX(preview_box), preview_title);
-        append(GTK_BOX(preview_box), preview_detail);
-        gtk_widget_set_hexpand(preview_box, TRUE);
-        camera_preview_switch_ = GTK_SWITCH(gtk_switch_new());
-        gtk_switch_set_active(camera_preview_switch_, settings_.camera_preview);
-        gtk_widget_set_sensitive(GTK_WIDGET(camera_preview_switch_), !camera_devices_.empty());
-        g_signal_connect(camera_preview_switch_, "notify::active", G_CALLBACK(on_camera_preview_changed), this);
-        append(GTK_BOX(preview_row), preview_box);
-        append(GTK_BOX(preview_row), GTK_WIDGET(camera_preview_switch_));
-        append(GTK_BOX(content), preview_row);
-
-        preview_camera_button_ = GTK_BUTTON(gtk_button_new_with_label("Open camera preview"));
-        gtk_widget_set_halign(GTK_WIDGET(preview_camera_button_), GTK_ALIGN_START);
-        gtk_widget_set_sensitive(GTK_WIDGET(preview_camera_button_), !camera_devices_.empty());
-        g_signal_connect(preview_camera_button_, "clicked", G_CALLBACK(on_preview_camera), this);
-        append(GTK_BOX(content), GTK_WIDGET(preview_camera_button_));
-
-        auto* output_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         auto* output_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
         auto* output_title = gtk_label_new("Recording folder");
         gtk_label_set_xalign(GTK_LABEL(output_title), 0.0F);
@@ -492,20 +382,14 @@ private:
         gtk_widget_add_css_class(GTK_WIDGET(output_label_), "dim-label");
         append(GTK_BOX(output_box), output_title);
         append(GTK_BOX(output_box), GTK_WIDGET(output_label_));
-        gtk_widget_set_hexpand(output_box, TRUE);
-        auto* choose_folder = gtk_button_new_with_label("Choose…");
-        g_signal_connect(choose_folder, "clicked", G_CALLBACK(on_choose_folder), this);
-        append(GTK_BOX(output_row), output_box);
-        append(GTK_BOX(output_row), choose_folder);
-        append(GTK_BOX(content), output_row);
+        append(GTK_BOX(content), output_box);
 
         profile_label_ = GTK_LABEL(gtk_label_new(""));
         gtk_label_set_xalign(profile_label_, 0.0F);
         gtk_widget_add_css_class(GTK_WIDGET(profile_label_), "dim-label");
         append(GTK_BOX(content), GTK_WIDGET(profile_label_));
-        refresh_profile_label();
 
-        telemetry_label_ = GTK_LABEL(gtk_label_new("Encoded: 0  Audio: 0  QoS drops: 0"));
+        telemetry_label_ = GTK_LABEL(gtk_label_new("Captured: 0  Encoded: 0  Audio: 0  QoS drops: 0"));
         gtk_label_set_xalign(telemetry_label_, 0.0F);
         gtk_widget_add_css_class(GTK_WIDGET(telemetry_label_), "dim-label");
         append(GTK_BOX(content), GTK_WIDGET(telemetry_label_));
@@ -536,16 +420,111 @@ private:
         g_signal_connect(pause_button_, "clicked", G_CALLBACK(on_pause), this);
         g_signal_connect(mute_button_, "clicked", G_CALLBACK(on_mute), this);
         g_signal_connect(stop_button_, "clicked", G_CALLBACK(on_stop), this);
-        g_signal_connect(audio_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
-        g_signal_connect(microphone_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
-        g_signal_connect(camera_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
         append(GTK_BOX(controls), GTK_WIDGET(record_button_));
         append(GTK_BOX(controls), GTK_WIDGET(pause_button_));
         append(GTK_BOX(controls), GTK_WIDGET(mute_button_));
         append(GTK_BOX(controls), GTK_WIDGET(stop_button_));
         append(GTK_BOX(content), controls);
+
+        preferences_button_ = GTK_BUTTON(gtk_button_new_with_label("Recording settings"));
+        gtk_widget_set_halign(GTK_WIDGET(preferences_button_), GTK_ALIGN_CENTER);
+        g_signal_connect(preferences_button_, "clicked", G_CALLBACK(on_open_preferences), this);
+        append(GTK_BOX(content), GTK_WIDGET(preferences_button_));
         gtk_window_set_child(window_, content);
+
+        build_preferences_dialog();
+        refresh_profile_label();
         report_orphaned_recordings();
+    }
+
+    void build_preferences_dialog() {
+        settings_dialog_ = ADW_PREFERENCES_DIALOG(adw_preferences_dialog_new());
+        adw_dialog_set_title(ADW_DIALOG(settings_dialog_), "Recording settings");
+        adw_dialog_set_content_width(ADW_DIALOG(settings_dialog_), 620);
+        adw_dialog_set_content_height(ADW_DIALOG(settings_dialog_), 620);
+        adw_preferences_dialog_set_search_enabled(settings_dialog_, FALSE);
+
+        auto* recording_page = ADW_PREFERENCES_PAGE(adw_preferences_page_new());
+        adw_preferences_page_set_title(recording_page, "Recording");
+        adw_preferences_page_set_icon_name(recording_page, "media-record-symbolic");
+        auto* audio_group = make_preferences_group("Audio", "Choose which audio tracks are written to the MP4.");
+        audio_switch_ = add_switch_row(audio_group, "System audio", "Include current desktop output.", settings_.system_audio);
+        microphone_switch_ = add_switch_row(audio_group, "Microphone", "Optional voice track with a light noise gate.", settings_.microphone);
+        adw_preferences_page_add(recording_page, audio_group);
+        adw_preferences_dialog_add(settings_dialog_, recording_page);
+
+        auto* video_page = ADW_PREFERENCES_PAGE(adw_preferences_page_new());
+        adw_preferences_page_set_title(video_page, "Video & Power");
+        adw_preferences_page_set_icon_name(video_page, "video-display-symbolic");
+        auto* profile_group = make_preferences_group("Recording profile", "Hardware-first profiles preserve battery life by default.");
+        high_quality_switch_ = add_switch_row(profile_group, "High quality mode", "1080p profile; remains opt-in on battery.", settings_.high_quality);
+        battery_saver_switch_ = add_switch_row(profile_group, "Battery Saver", "640×360, 15 FPS, 1 Mbps. High Quality takes precedence.", settings_.battery_saver);
+        auto* fps_row = make_action_row("Frame rate", "30 FPS is recommended for battery life; 60 FPS prioritizes motion.");
+        const char* fps_options[] = {"30 FPS", "60 FPS", nullptr};
+        fps_dropdown_ = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(fps_options));
+        gtk_drop_down_set_selected(fps_dropdown_, settings_.fps == 60 ? 1 : 0);
+        adw_action_row_add_suffix(fps_row, GTK_WIDGET(fps_dropdown_));
+        adw_action_row_set_activatable_widget(fps_row, GTK_WIDGET(fps_dropdown_));
+        adw_preferences_group_add(profile_group, GTK_WIDGET(fps_row));
+        adw_preferences_page_add(video_page, profile_group);
+        adw_preferences_dialog_add(settings_dialog_, video_page);
+
+        auto* camera_page = ADW_PREFERENCES_PAGE(adw_preferences_page_new());
+        adw_preferences_page_set_title(camera_page, "Camera");
+        adw_preferences_page_set_icon_name(camera_page, "camera-video-symbolic");
+        auto* camera_group = make_preferences_group("Camera", "Preview and recorded picture-in-picture are controlled independently.");
+        camera_switch_ = add_switch_row(camera_group, "Camera overlay", "Low-rate picture-in-picture recorded into the MP4.", settings_.camera);
+        camera_devices_ = sr::fedora::discover_camera_device_paths();
+        auto* camera_device_row = make_action_row("Camera device", "Choose the V4L2 camera used for preview and picture-in-picture.");
+        auto* camera_device_model = gtk_string_list_new(nullptr);
+        for (const auto& device : camera_devices_) gtk_string_list_append(camera_device_model, device.c_str());
+        camera_device_dropdown_ = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(camera_device_model), nullptr));
+        g_object_unref(camera_device_model);
+        if (!camera_devices_.empty()) {
+            const auto saved = std::find(camera_devices_.begin(), camera_devices_.end(), settings_.camera_device);
+            gtk_drop_down_set_selected(camera_device_dropdown_, static_cast<guint>(saved == camera_devices_.end() ? 0 : saved - camera_devices_.begin()));
+        }
+        adw_action_row_add_suffix(camera_device_row, GTK_WIDGET(camera_device_dropdown_));
+        adw_action_row_set_activatable_widget(camera_device_row, GTK_WIDGET(camera_device_dropdown_));
+        adw_preferences_group_add(camera_group, GTK_WIDGET(camera_device_row));
+        camera_preview_switch_ = add_switch_row(camera_group, "Live camera preview", "Opens by default and pauses while recording.", settings_.camera_preview);
+        auto* preview_row = make_action_row("Open live preview", "Show the selected camera now.");
+        preview_camera_button_ = GTK_BUTTON(gtk_button_new_with_label("Open"));
+        adw_action_row_add_suffix(preview_row, GTK_WIDGET(preview_camera_button_));
+        adw_action_row_set_activatable_widget(preview_row, GTK_WIDGET(preview_camera_button_));
+        adw_preferences_group_add(camera_group, GTK_WIDGET(preview_row));
+        if (camera_devices_.empty()) {
+            gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), FALSE);
+            gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), FALSE);
+            gtk_widget_set_sensitive(GTK_WIDGET(camera_preview_switch_), FALSE);
+            gtk_widget_set_sensitive(GTK_WIDGET(preview_camera_button_), FALSE);
+        }
+        adw_preferences_page_add(camera_page, camera_group);
+        adw_preferences_dialog_add(settings_dialog_, camera_page);
+
+        auto* storage_page = ADW_PREFERENCES_PAGE(adw_preferences_page_new());
+        adw_preferences_page_set_title(storage_page, "Storage");
+        adw_preferences_page_set_icon_name(storage_page, "folder-symbolic");
+        auto* storage_group = make_preferences_group("Recording folder", "Completed recordings and diagnostics are stored here.");
+        settings_output_row_ = make_action_row("Location", output_directory().c_str());
+        adw_action_row_set_subtitle_selectable(settings_output_row_, TRUE);
+        choose_folder_button_ = GTK_BUTTON(gtk_button_new_with_label("Choose…"));
+        adw_action_row_add_suffix(settings_output_row_, GTK_WIDGET(choose_folder_button_));
+        adw_action_row_set_activatable_widget(settings_output_row_, GTK_WIDGET(choose_folder_button_));
+        adw_preferences_group_add(storage_group, GTK_WIDGET(settings_output_row_));
+        adw_preferences_page_add(storage_page, storage_group);
+        adw_preferences_dialog_add(settings_dialog_, storage_page);
+
+        g_signal_connect(audio_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        g_signal_connect(microphone_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        g_signal_connect(high_quality_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        g_signal_connect(battery_saver_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        g_signal_connect(camera_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        g_signal_connect(camera_preview_switch_, "notify::active", G_CALLBACK(on_camera_preview_changed), this);
+        g_signal_connect(camera_device_dropdown_, "notify::selected", G_CALLBACK(on_camera_device_changed), this);
+        g_signal_connect(fps_dropdown_, "notify::selected", G_CALLBACK(on_fps_changed), this);
+        g_signal_connect(preview_camera_button_, "clicked", G_CALLBACK(on_preview_camera), this);
+        g_signal_connect(choose_folder_button_, "clicked", G_CALLBACK(on_choose_folder), this);
     }
 
     void set_status(const std::string& text) { gtk_label_set_text(status_label_, text.c_str()); }
@@ -582,6 +561,7 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(record_button_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(pause_button_), is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(stop_button_), is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(preferences_button_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(mute_button_), is_recording &&
             (gtk_switch_get_active(audio_switch_) || gtk_switch_get_active(microphone_switch_)));
         gtk_widget_set_sensitive(GTK_WIDGET(audio_switch_), !is_recording);
@@ -592,6 +572,7 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), !is_recording && !camera_devices_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(camera_preview_switch_), !is_recording && !camera_devices_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(preview_camera_button_), !is_recording && !camera_devices_.empty());
+        gtk_widget_set_sensitive(GTK_WIDGET(choose_folder_button_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(recovery_button_), !is_recording && !orphaned_recordings_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(fps_dropdown_), !is_recording);
         if (!is_recording) open_configured_camera_preview();
@@ -662,6 +643,11 @@ private:
         auto* self = static_cast<RecorderWindow*>(data);
         gtk_switch_set_active(self->camera_preview_switch_, TRUE);
         self->open_configured_camera_preview();
+    }
+
+    static void on_open_preferences(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (!self->recording_) adw_dialog_present(ADW_DIALOG(self->settings_dialog_), GTK_WIDGET(self->window_));
     }
 
     void open_configured_camera_preview() {
@@ -821,6 +807,7 @@ private:
         if (path) {
             self->settings_.output_dir = path;
             gtk_label_set_text(self->output_label_, path);
+            adw_action_row_set_subtitle(self->settings_output_row_, path);
             self->sync_settings();
         }
         g_free(path);
@@ -838,6 +825,7 @@ private:
             return;
         }
         self->stop_camera_preview();
+        adw_dialog_close(ADW_DIALOG(self->settings_dialog_));
         self->set_controls(true);
         self->set_status("Choose a display or window in the GNOME dialog…");
         xdp_portal_create_screencast_session(
@@ -1318,7 +1306,10 @@ int main(int argc, char** argv) {
     }
     gst_init(&argc, &argv);
     gst_update_registry();
-    auto* application = adw_application_new(kAppId, G_APPLICATION_DEFAULT_FLAGS);
+    const auto application_flags = g_getenv("SCREEN_RECORDER_UI_SMOKE")
+        ? G_APPLICATION_NON_UNIQUE
+        : G_APPLICATION_DEFAULT_FLAGS;
+    auto* application = adw_application_new(kAppId, application_flags);
     g_signal_connect(application, "activate", G_CALLBACK(activate), nullptr);
     const int result = g_application_run(G_APPLICATION(application), argc, argv);
     g_object_unref(application);

@@ -81,6 +81,7 @@ Available encoders are tried in a hardware-first order (VA low-power, Quick Sync
 
 ## Behavior and safeguards
 
+- The main window is intentionally a compact recording dashboard. **Recording settings** opens native GNOME preference pages for audio, video and power, camera, and storage, so configuration does not obscure recording controls.
 - Screen/window selection is always mediated by GNOME; no capture permission is retained.
 - The red recording file is written as `*.partial.mp4` and renamed to `.mp4` only after GStreamer sends EOS and the MP4 is finalized.
 - System-audio capture uses the PipeWire Pulse monitor (`@DEFAULT_MONITOR@`), not the microphone source.

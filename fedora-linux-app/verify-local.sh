@@ -9,6 +9,7 @@ build_dir="$root/build"
 cmake -S "$root" -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
 cmake --build "$build_dir"
 ctest --test-dir "$build_dir" --output-on-failure
+"$root/verify-ui-runtime.sh" "$build_dir/fedora-screen-recorder"
 gst-inspect-1.0 gtk4paintablesink >/dev/null
 desktop-file-validate "$root/io.github.screenrecorder.Fedora.desktop"
 appstreamcli validate --no-net "$root/io.github.screenrecorder.Fedora.metainfo.xml"

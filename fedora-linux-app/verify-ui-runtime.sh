@@ -23,7 +23,7 @@ mkdir -p "$config_dir/fedora-screen-recorder"
 printf '%s\n' '[Camera]' 'preview=false' > "$config_dir/fedora-screen-recorder/settings.ini"
 
 set +e
-XDG_CONFIG_HOME="$config_dir" timeout --signal=TERM --kill-after=2 4 "$app" >"$log_file" 2>&1
+SCREEN_RECORDER_UI_SMOKE=preferences XDG_CONFIG_HOME="$config_dir" timeout --signal=TERM --kill-after=2 4 "$app" >"$log_file" 2>&1
 status=$?
 set -e
 
