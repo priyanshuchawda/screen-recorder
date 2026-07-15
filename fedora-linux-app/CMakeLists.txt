@@ -20,6 +20,16 @@ target_link_libraries(fedora-screen-recorder PRIVATE
 )
 target_compile_options(fedora-screen-recorder PRIVATE -Wall -Wextra -Wpedantic)
 
+include(CTest)
+if(BUILD_TESTING)
+    find_package(GTest REQUIRED)
+    add_executable(fedora-profile-tests tests/profile_policy_test.cpp)
+    target_include_directories(fedora-profile-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(fedora-profile-tests PRIVATE GTest::gtest_main)
+    include(GoogleTest)
+    gtest_discover_tests(fedora-profile-tests)
+endif()
+
 include(GNUInstallDirs)
 install(TARGETS fedora-screen-recorder RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES io.github.screenrecorder.Fedora.desktop

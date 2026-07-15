@@ -6,6 +6,8 @@
 #include <libportal/portal.h>
 #include <libportal-gtk4/portal-gtk4.h>
 
+#include "profile_policy.h"
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -25,6 +27,7 @@ struct AppSettings {
     bool microphone{};
     bool high_quality{};
     bool camera{};
+    int fps{30};
     std::string output_dir;
 };
 
@@ -42,6 +45,7 @@ AppSettings load_settings() {
         settings.microphone = g_key_file_get_boolean(key_file, "Recording", "microphone", nullptr);
         settings.high_quality = g_key_file_get_boolean(key_file, "Video", "high_quality", nullptr);
         settings.camera = g_key_file_get_boolean(key_file, "Camera", "enabled", nullptr);
+        settings.fps = g_key_file_get_integer(key_file, "Video", "fps", nullptr);
         gchar* output = g_key_file_get_string(key_file, "Storage", "output_dir", nullptr);
         if (output) settings.output_dir = output;
         g_free(output);
@@ -60,6 +64,7 @@ void save_settings(const AppSettings& settings) {
     g_key_file_set_boolean(key_file, "Recording", "microphone", settings.microphone);
     g_key_file_set_boolean(key_file, "Video", "high_quality", settings.high_quality);
     g_key_file_set_boolean(key_file, "Camera", "enabled", settings.camera);
+    g_key_file_set_integer(key_file, "Video", "fps", settings.fps);
     g_key_file_set_string(key_file, "Storage", "output_dir", settings.output_dir.c_str());
     gsize length = 0;
     gchar* data = g_key_file_to_data(key_file, &length, nullptr);
@@ -103,14 +108,7 @@ bool has_element(const char* name) {
     return true;
 }
 
-struct RecordingProfile {
-    int width;
-    int height;
-    int fps;
-    int bitrate_kbps;
-    bool high_quality;
-    bool on_ac;
-};
+using sr::fedora::RecordingProfile;
 
 struct EncoderChoice {
     std::string element;
@@ -147,17 +145,8 @@ bool is_on_ac_power() {
     return !on_battery;
 }
 
-RecordingProfile selected_profile(bool high_quality) {
-    const bool on_ac = is_on_ac_power();
-    if (high_quality) {
-        // Same rule as the Windows build: HQ is explicit, so do not silently
-        // downgrade it on battery.
-        return {1920, 1080, 30, 8000, true, on_ac};
-    }
-    if (!on_ac) {
-        return {848, 480, 15, 1500, false, false};
-    }
-    return {848, 480, 30, 4000, false, true};
+RecordingProfile selected_profile(bool high_quality, int fps) {
+    return sr::fedora::profile_for(high_quality, is_on_ac_power(), fps);
 }
 
 std::optional<EncoderChoice> choose_encoder(const RecordingProfile& profile) {
@@ -177,6 +166,12 @@ std::optional<EncoderChoice> choose_encoder(const RecordingProfile& profile) {
         return EncoderChoice{std::format("openh264enc bitrate={} gop-size={} complexity=low", profile.bitrate_kbps * 1000, profile.fps * 2), "OpenH264 software fallback", false};
     }
     return std::nullopt;
+}
+
+std::string named_encoder_element(const EncoderChoice& encoder) {
+    const auto separator = encoder.element.find(' ');
+    if (separator == std::string::npos) return encoder.element + " name=video_encoder";
+    return encoder.element.substr(0, separator) + " name=video_encoder" + encoder.element.substr(separator);
 }
 
 class RecorderWindow {
@@ -209,6 +204,7 @@ private:
     guint bus_watch_{};
     guint timer_{};
     guint disk_check_{};
+    guint power_check_{};
     int remote_fd_{-1};
     std::string partial_path_;
     std::chrono::steady_clock::time_point started_at_;
@@ -218,6 +214,10 @@ private:
     bool stopping_{};
     bool muted_{};
     AppSettings settings_;
+    RecordingProfile active_profile_{848, 480, 30, 4000, false, true};
+    std::optional<EncoderChoice> active_encoder_;
+    bool active_audio_{};
+    bool active_camera_{};
 
     GtkButton* record_button_{};
     GtkButton* pause_button_{};
@@ -229,6 +229,7 @@ private:
     GtkSwitch* microphone_switch_{};
     GtkSwitch* high_quality_switch_{};
     GtkSwitch* camera_switch_{};
+    GtkDropDown* fps_dropdown_{};
     GtkLabel* profile_label_{};
     GtkLabel* output_label_{};
 
@@ -311,6 +312,18 @@ private:
         append(GTK_BOX(quality_row), quality_box);
         append(GTK_BOX(quality_row), GTK_WIDGET(high_quality_switch_));
         append(GTK_BOX(content), quality_row);
+
+        auto* fps_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* fps_title = gtk_label_new("Frame rate");
+        gtk_label_set_xalign(GTK_LABEL(fps_title), 0.0F);
+        gtk_widget_set_hexpand(fps_title, TRUE);
+        const char* fps_options[] = {"30 FPS", "60 FPS", nullptr};
+        fps_dropdown_ = GTK_DROP_DOWN(gtk_drop_down_new_from_strings(fps_options));
+        gtk_drop_down_set_selected(fps_dropdown_, settings_.fps == 60 ? 1 : 0);
+        g_signal_connect(fps_dropdown_, "notify::selected", G_CALLBACK(on_fps_changed), this);
+        append(GTK_BOX(fps_row), fps_title);
+        append(GTK_BOX(fps_row), GTK_WIDGET(fps_dropdown_));
+        append(GTK_BOX(content), fps_row);
 
         auto* camera_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         auto* camera_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
@@ -408,13 +421,16 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(microphone_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(high_quality_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), !is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(fps_dropdown_), !is_recording);
     }
 
     std::string output_directory() const {
         return settings_.output_dir.empty() ? default_output_directory() : settings_.output_dir;
     }
 
-    RecordingProfile profile() const { return selected_profile(gtk_switch_get_active(high_quality_switch_)); }
+    RecordingProfile profile() const {
+        return selected_profile(gtk_switch_get_active(high_quality_switch_), settings_.fps);
+    }
 
     void refresh_profile_label() {
         const auto active = profile();
@@ -430,10 +446,17 @@ private:
         settings_.microphone = gtk_switch_get_active(microphone_switch_);
         settings_.high_quality = gtk_switch_get_active(high_quality_switch_);
         settings_.camera = gtk_switch_get_active(camera_switch_);
+        settings_.fps = gtk_drop_down_get_selected(fps_dropdown_) == 1 ? 60 : 30;
         save_settings(settings_);
     }
 
     static void on_settings_changed(GtkSwitch*, GParamSpec*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        self->sync_settings();
+        self->refresh_profile_label();
+    }
+
+    static void on_fps_changed(GtkDropDown*, GParamSpec*, gpointer data) {
         auto* self = static_cast<RecorderWindow*>(data);
         self->sync_settings();
         self->refresh_profile_label();
@@ -554,6 +577,7 @@ private:
         const auto source = std::format(
             "pipewiresrc fd={} path={} do-timestamp=true ! queue max-size-buffers=3 max-size-time=2000000000 leaky=downstream ",
             remote_fd_, node_id);
+        const auto encoder_element = named_encoder_element(*encoder);
         std::string video;
         if (!with_camera && encoder->hardware) {
             // This is the normal laptop path: PipeWire negotiates DMA-BUF and
@@ -561,7 +585,7 @@ private:
             video = std::format(
                 "{}! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={},height={},framerate={}/1 "
                 "! {} ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
-                source, active_profile.width, active_profile.height, active_profile.fps, encoder->element);
+                source, active_profile.width, active_profile.height, active_profile.fps, encoder_element);
         } else if (with_camera) {
             const int camera_width = active_profile.high_quality ? 640 : 320;
             const int camera_height = active_profile.high_quality ? 360 : 180;
@@ -573,14 +597,14 @@ private:
                 "v4l2src device=/dev/video0 do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
                 "! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=2 leaky=downstream ! mix. ",
-                source, active_profile.width, active_profile.height, active_profile.fps, encoder->element,
+                source, active_profile.width, active_profile.height, active_profile.fps, encoder_element,
                 camera_width, camera_height, camera_fps);
         } else {
             // Software fallback retains the same bounded, scaled pipeline.
             video = std::format(
                 "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! {} ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
-                source, active_profile.width, active_profile.height, active_profile.fps, encoder->element);
+                source, active_profile.width, active_profile.height, active_profile.fps, encoder_element);
         }
         std::string audio;
         if (with_system_audio || with_microphone) {
@@ -622,10 +646,15 @@ private:
         paused_at_.reset();
         recording_ = true;
         muted_ = false;
+        active_profile_ = active_profile;
+        active_encoder_ = *encoder;
+        active_audio_ = with_system_audio || with_microphone;
+        active_camera_ = with_camera;
         write_diagnostics("START", active_profile, *encoder, with_system_audio || with_microphone, with_camera);
         set_status(std::format("Recording to {} ({})", std::filesystem::path(final_path_for(partial_path_)).filename().string(), encoder->name));
         timer_ = g_timeout_add(250, update_timer, this);
         disk_check_ = g_timeout_add_seconds(10, check_disk_space, this);
+        power_check_ = g_timeout_add_seconds(10, check_power_state, this);
         return true;
     }
 
@@ -657,6 +686,31 @@ private:
             return G_SOURCE_REMOVE;
         }
         return self->recording_ ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+    }
+
+    static gboolean check_power_state(gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (!self->recording_) return G_SOURCE_REMOVE;
+        const auto updated = self->profile();
+        if (updated.on_ac == self->active_profile_.on_ac) return G_SOURCE_CONTINUE;
+
+        // The active portal stream keeps its negotiated resolution/FPS to avoid
+        // an MP4 discontinuity. The encoder bitrate is mutable, so efficiency
+        // mode immediately applies the battery cap; the next session receives
+        // the full negotiated battery profile including 15 FPS.
+        if (!updated.high_quality && self->pipeline_ && self->active_encoder_) {
+            if (GstElement* encoder = gst_bin_get_by_name(GST_BIN(self->pipeline_), "video_encoder")) {
+                const int bitrate = self->active_encoder_->hardware ? updated.bitrate_kbps : updated.bitrate_kbps * 1000;
+                g_object_set(encoder, "bitrate", bitrate, nullptr);
+                gst_object_unref(encoder);
+            }
+        }
+        self->active_profile_ = updated;
+        self->write_diagnostics("POWER_CHANGE", updated,
+                                self->active_encoder_.value_or(EncoderChoice{}), self->active_audio_, self->active_camera_);
+        self->set_status(std::format("Power changed to {}; active encoder bitrate is now {} Mbps.",
+            updated.on_ac ? "AC" : "battery", updated.bitrate_kbps / 1000));
+        return G_SOURCE_CONTINUE;
     }
 
     static gboolean on_bus_message(GstBus*, GstMessage* message, gpointer data) {
@@ -762,6 +816,10 @@ private:
         if (disk_check_) {
             g_source_remove(disk_check_);
             disk_check_ = 0;
+        }
+        if (power_check_) {
+            g_source_remove(power_check_);
+            power_check_ = 0;
         }
         if (bus_watch_) {
             g_source_remove(bus_watch_);
