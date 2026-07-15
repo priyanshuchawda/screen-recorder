@@ -16,11 +16,13 @@ The Fedora version intentionally mirrors the Windows project’s laptop policy.
 
 | Mode | Resolution | FPS | H.264 bitrate | Power behavior |
 |---|---:|---:|---:|---|
-| Efficiency on AC | 848×480 | 30 | 4 Mbps | Default; hardware-first |
+| Efficiency on AC | 848×480 | 30 / 60 | 4 / 6 Mbps | Default; hardware-first |
 | Efficiency on battery | 848×480 | 15 | 1.5 Mbps | Automatically clamped |
-| High quality | 1920×1080 | 30 | 8 Mbps | Explicit opt-in; unchanged on battery |
+| High quality | 1920×1080 | 30 / 60 | 8 / 10 Mbps | Explicit opt-in; unchanged on battery |
 
 The camera PiP is off by default. When enabled it uses a bounded two-frame V4L2 path at 320×180/10 FPS in efficiency mode or 640×360/30 FPS in HQ mode. It is deliberately separate from the normal zero/low-copy Intel encode path, because compositing a camera frame costs power.
+
+UPower is checked every ten seconds during a recording. A transition to battery immediately lowers the mutable encoder bitrate in efficiency mode; the next recording also receives the full 15 FPS battery profile. The active stream is not renegotiated in place, avoiding MP4 timestamp/resolution discontinuities.
 
 ## Install and run
 
@@ -74,6 +76,7 @@ For this Intel Iris Xe laptop, the RPM Fusion packages `intel-media-driver` and 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
 cmake --build build
+ctest --test-dir build --output-on-failure
 desktop-file-validate io.github.screenrecorder.Fedora.desktop
 appstreamcli validate io.github.screenrecorder.Fedora.metainfo.xml
 ```
