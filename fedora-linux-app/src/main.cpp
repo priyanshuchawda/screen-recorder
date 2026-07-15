@@ -244,6 +244,8 @@ private:
     AppSettings settings_;
     RecordingProfile active_profile_{848, 480, 30, 4000, false, false, true};
     std::optional<EncoderChoice> active_encoder_;
+    std::size_t active_candidate_index_{};
+    std::size_t active_candidate_count_{};
     bool active_audio_{};
     bool active_camera_{};
     std::atomic_uint64_t captured_frames_{};
@@ -911,6 +913,8 @@ private:
         muted_ = false;
         active_profile_ = active_profile;
         active_encoder_ = encoder;
+        active_candidate_index_ = candidate_index;
+        active_candidate_count_ = candidates.size();
         active_audio_ = with_system_audio || with_microphone;
         active_camera_ = with_camera;
         write_diagnostics("START", active_profile, encoder, with_system_audio || with_microphone, with_camera);
@@ -1007,7 +1011,26 @@ private:
                 const auto* source = GST_OBJECT_NAME(GST_MESSAGE_SRC(message));
                 const auto source_name = std::string{source ? source : "unknown"};
                 const auto fault = sr::fedora::classify_recording_fault(source_name);
-                const auto detail = std::string_view{error ? error->message : "unknown error"};
+                const auto detail = std::string{error ? error->message : "unknown error"};
+                const auto retry_encoder = source_name == "video_encoder" && !self->stopping_ &&
+                    sr::fedora::should_retry_encoder_startup(
+                        self->encoded_frames_.load(std::memory_order_relaxed),
+                        self->active_candidate_index_, self->active_candidate_count_);
+                if (retry_encoder) {
+                    const auto next_index = self->active_candidate_index_ + 1;
+                    const auto failed_encoder = self->active_encoder_.value_or(EncoderChoice{}).name;
+                    g_clear_error(&error);
+                    g_free(debug);
+                    self->bus_watch_ = 0;
+                    self->recording_ = false;
+                    self->cleanup_pipeline();
+                    self->set_status(std::format("{} failed before the first frame; trying the next H.264 encoder…", failed_encoder));
+                    if (!self->start_pipeline(next_index, true)) {
+                        self->close_session();
+                        self->set_controls(false);
+                    }
+                    return G_SOURCE_REMOVE;
+                }
                 self->write_fault_diagnostics(fault, source_name, detail);
                 g_clear_error(&error);
                 g_free(debug);
