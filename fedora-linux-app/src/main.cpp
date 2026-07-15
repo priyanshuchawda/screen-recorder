@@ -221,6 +221,7 @@ private:
     GstElement* camera_preview_pipeline_{};
     GtkWindow* camera_preview_window_{};
     guint bus_watch_{};
+    guint camera_preview_bus_watch_{};
     guint timer_{};
     guint disk_check_{};
     guint power_check_{};
@@ -608,6 +609,9 @@ private:
             g_clear_error(&error);
             return;
         }
+        GstBus* preview_bus = gst_element_get_bus(camera_preview_pipeline_);
+        camera_preview_bus_watch_ = gst_bus_add_watch(preview_bus, on_camera_preview_bus_message, this);
+        gst_object_unref(preview_bus);
         GstElement* sink = gst_bin_get_by_name(GST_BIN(camera_preview_pipeline_), "camera_preview_sink");
         GdkPaintable* paintable = nullptr;
         if (sink) g_object_get(sink, "paintable", &paintable, nullptr);
@@ -642,7 +646,35 @@ private:
         return FALSE;
     }
 
+    static gboolean on_camera_preview_bus_message(GstBus*, GstMessage* message, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (GST_MESSAGE_TYPE(message) != GST_MESSAGE_ERROR && GST_MESSAGE_TYPE(message) != GST_MESSAGE_EOS) {
+            return G_SOURCE_CONTINUE;
+        }
+        self->camera_preview_bus_watch_ = 0;
+        if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_EOS) {
+            self->stop_camera_preview();
+            self->set_status("Camera preview ended. Select Preview selected camera to reopen it.");
+            return G_SOURCE_REMOVE;
+        }
+        GError* error = nullptr;
+        gchar* debug = nullptr;
+        gst_message_parse_error(message, &error, &debug);
+        const auto* source = GST_OBJECT_NAME(GST_MESSAGE_SRC(message));
+        const auto fault = sr::fedora::classify_recording_fault(source ? source : "unknown");
+        const auto detail = std::string{error ? error->message : "unknown error"};
+        g_clear_error(&error);
+        g_free(debug);
+        self->stop_camera_preview();
+        self->set_status(std::format("Camera preview stopped: {} ({})", fault.user_message, detail));
+        return G_SOURCE_REMOVE;
+    }
+
     void stop_camera_preview() {
+        if (camera_preview_bus_watch_) {
+            g_source_remove(camera_preview_bus_watch_);
+            camera_preview_bus_watch_ = 0;
+        }
         if (camera_preview_pipeline_) {
             gst_element_set_state(camera_preview_pipeline_, GST_STATE_NULL);
             gst_object_unref(camera_preview_pipeline_);
