@@ -1,5 +1,5 @@
 Name:           fedora-screen-recorder
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Power-aware GNOME screen recorder for Fedora
 License:        MIT
@@ -47,5 +47,9 @@ power-aware H.264/AAC MP4 recording.
 %{_metainfodir}/io.github.screenrecorder.Fedora.metainfo.xml
 
 %changelog
+* Wed Jul 15 2026 ScreenRecorder contributors <contributors@screenrecorder.invalid> - 0.1.1-1
+- Add draggable window controls and default live camera preview.
+- Add a graphical startup smoke test for the custom window shell.
+
 * Wed Jul 15 2026 ScreenRecorder contributors <contributors@screenrecorder.invalid> - 0.1.0-1
 - Initial Fedora package
