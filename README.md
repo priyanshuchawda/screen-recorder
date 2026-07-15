@@ -2,7 +2,7 @@
 
 Lightweight native Windows screen recorder built with C++20, Win32, Windows Graphics Capture, Media Foundation, D3D11, Intel Quick Sync capable hardware encoding, and WASAPI.
 
-> Fedora 44 GNOME/Wayland users: a separate, portal-first native implementation lives in [fedora-app](fedora-app/README.md). It uses PipeWire + GStreamer and does not attempt to build the Windows source tree on Linux.
+> Fedora 44 GNOME/Wayland users: a separate, portal-first native implementation lives in [fedora-linux-app](fedora-linux-app/README.md). It uses PipeWire + GStreamer and does not attempt to build the Windows source tree on Linux.
 
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)

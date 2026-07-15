@@ -27,7 +27,7 @@ The camera PiP is off by default. When enabled it uses a bounded two-frame V4L2 
 This laptop already has the required runtime packages. Install the app for the current user:
 
 ```bash
-cd fedora-app
+cd fedora-linux-app
 ./install.sh
 fedora-screen-recorder
 ```
