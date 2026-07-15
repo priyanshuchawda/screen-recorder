@@ -5,6 +5,8 @@
 TEST(RecordingFaults, ClassifiesDeviceAndOutputFailures) {
     EXPECT_EQ(sr::fedora::classify_recording_fault("pipewiresrc0").kind, sr::fedora::RecordingFaultKind::PipeWire);
     EXPECT_EQ(sr::fedora::classify_recording_fault("v4l2src0").kind, sr::fedora::RecordingFaultKind::Camera);
+    EXPECT_EQ(sr::fedora::classify_recording_fault("v4l2src0").user_message,
+              "Camera became unavailable. Reconnect it, then select Record.");
     EXPECT_EQ(sr::fedora::classify_recording_fault("pulsesrc0").kind, sr::fedora::RecordingFaultKind::Audio);
     EXPECT_EQ(sr::fedora::classify_recording_fault("video_encoder").kind, sr::fedora::RecordingFaultKind::Encoder);
     EXPECT_EQ(sr::fedora::classify_recording_fault("filesink0").kind, sr::fedora::RecordingFaultKind::Output);

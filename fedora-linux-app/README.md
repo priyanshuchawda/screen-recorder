@@ -23,6 +23,8 @@ The Fedora version intentionally mirrors the Windows project’s laptop policy.
 
 The camera PiP is off by default. The app discovers V4L2 camera paths and persists the selected device. When enabled it uses a bounded two-frame path at 320×180/10 FPS in efficiency mode, 160×90/5 FPS in Battery Saver, or a 1280×720/30 FPS HQ profile. It is deliberately separate from the normal zero/low-copy Intel encode path, because compositing a camera frame costs power. The separate **Preview selected camera** action uses the same policy, opens a GTK4 preview window, and always stops before screen recording begins or when its window closes.
 
+The preview also watches its own GStreamer errors: if a V4L2 device is disconnected or the preview ends, the app closes the preview cleanly and tells you how to reopen it after reconnecting the device.
+
 UPower is checked every ten seconds during a recording. A transition to battery immediately lowers the mutable encoder bitrate in efficiency mode; the next recording also receives the full 15 FPS battery profile. The active stream is not renegotiated in place, avoiding MP4 timestamp/resolution discontinuities.
 
 ## Install and run
