@@ -236,6 +236,7 @@ private:
     std::optional<EncoderChoice> active_encoder_;
     bool active_audio_{};
     bool active_camera_{};
+    std::atomic_uint64_t captured_frames_{};
     std::atomic_uint64_t encoded_frames_{};
     std::atomic_uint64_t audio_buffers_{};
     std::atomic_uint64_t qos_drops_{};
@@ -768,7 +769,8 @@ private:
         }
         gchar* escaped_path = g_strescape(partial_path_.c_str(), nullptr);
         const auto source = std::format(
-            "pipewiresrc fd={} path={} do-timestamp=true ! queue max-size-buffers=3 max-size-time=2000000000 leaky=downstream ",
+            "pipewiresrc fd={} path={} do-timestamp=true ! identity name=captured_counter signal-handoffs=true "
+            "! queue max-size-buffers=3 max-size-time=2000000000 leaky=downstream ",
             remote_fd_, node_id);
         const auto encoder_element = named_encoder_element(*encoder);
         std::string video;
@@ -826,9 +828,14 @@ private:
             g_clear_error(&error);
             return false;
         }
+        captured_frames_.store(0, std::memory_order_relaxed);
         encoded_frames_.store(0, std::memory_order_relaxed);
         audio_buffers_.store(0, std::memory_order_relaxed);
         qos_drops_.store(0, std::memory_order_relaxed);
+        if (GstElement* counter = gst_bin_get_by_name(GST_BIN(pipeline_), "captured_counter")) {
+            g_signal_connect(counter, "handoff", G_CALLBACK(on_captured_handoff), this);
+            gst_object_unref(counter);
+        }
         if (GstElement* counter = gst_bin_get_by_name(GST_BIN(pipeline_), "encoded_counter")) {
             g_signal_connect(counter, "handoff", G_CALLBACK(on_encoded_handoff), this);
             gst_object_unref(counter);
@@ -882,6 +889,7 @@ private:
         if (!file) return;
         const auto snapshot = telemetry_snapshot();
         file << "STOP\nstatus=" << (completed ? "completed" : "partial") << '\n'
+             << "captured_frames=" << snapshot.captured_frames << '\n'
              << "encoded_frames=" << snapshot.encoded_frames << '\n'
              << "audio_buffers=" << snapshot.audio_buffers << '\n'
              << "qos_drops=" << snapshot.qos_drops << '\n';
@@ -965,9 +973,14 @@ private:
     }
 
     sr::fedora::TelemetrySnapshot telemetry_snapshot() const {
-        return {encoded_frames_.load(std::memory_order_relaxed),
+        return {captured_frames_.load(std::memory_order_relaxed),
+                encoded_frames_.load(std::memory_order_relaxed),
                 audio_buffers_.load(std::memory_order_relaxed),
                 qos_drops_.load(std::memory_order_relaxed)};
+    }
+
+    static void on_captured_handoff(GstElement*, GstBuffer*, gpointer data) {
+        static_cast<RecorderWindow*>(data)->captured_frames_.fetch_add(1, std::memory_order_relaxed);
     }
 
     static void on_encoded_handoff(GstElement*, GstBuffer*, gpointer data) {
