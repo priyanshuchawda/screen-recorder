@@ -78,6 +78,9 @@ vcpkg_installed/
 .agent/
 .agents/
 .egent/
+
+# Fedora RPM build outputs
+fedora-linux-app/packaging/rpmbuild/
 .gemini/
 .antigravitycli/
 .specify/

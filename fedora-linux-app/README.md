@@ -45,6 +45,21 @@ cmake --build build
 
 The launcher is also installed as **Fedora Screen Recorder** in the GNOME app grid.
 
+### Build a native RPM
+
+The repository includes a reproducible Fedora RPM recipe. On a Fedora build
+machine with the dependencies below, run:
+
+```bash
+cd fedora-linux-app
+sudo dnf install rpm-build
+./packaging/build-rpm.sh
+sudo dnf install packaging/rpmbuild/RPMS/$(uname -m)/fedora-screen-recorder-0.1.0-1.*.rpm
+```
+
+This packages the executable, GNOME desktop entry, AppStream metadata, and
+icon. The generated RPMs are intentionally ignored by Git.
+
 ## Fedora dependencies
 
 The app checks these at recording time and gives a precise error if one is unavailable:
