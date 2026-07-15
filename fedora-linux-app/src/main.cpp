@@ -32,6 +32,7 @@ struct AppSettings {
     bool system_audio{true};
     bool microphone{};
     bool high_quality{};
+    bool battery_saver{};
     bool camera{};
     std::string camera_device;
     int fps{30};
@@ -51,6 +52,7 @@ AppSettings load_settings() {
         settings.system_audio = g_key_file_get_boolean(key_file, "Recording", "system_audio", nullptr);
         settings.microphone = g_key_file_get_boolean(key_file, "Recording", "microphone", nullptr);
         settings.high_quality = g_key_file_get_boolean(key_file, "Video", "high_quality", nullptr);
+        settings.battery_saver = g_key_file_get_boolean(key_file, "Video", "battery_saver", nullptr);
         settings.camera = g_key_file_get_boolean(key_file, "Camera", "enabled", nullptr);
         gchar* camera_device = g_key_file_get_string(key_file, "Camera", "device", nullptr);
         if (camera_device) settings.camera_device = camera_device;
@@ -73,6 +75,7 @@ void save_settings(const AppSettings& settings) {
     g_key_file_set_boolean(key_file, "Recording", "system_audio", settings.system_audio);
     g_key_file_set_boolean(key_file, "Recording", "microphone", settings.microphone);
     g_key_file_set_boolean(key_file, "Video", "high_quality", settings.high_quality);
+    g_key_file_set_boolean(key_file, "Video", "battery_saver", settings.battery_saver);
     g_key_file_set_boolean(key_file, "Camera", "enabled", settings.camera);
     g_key_file_set_string(key_file, "Camera", "device", settings.camera_device.c_str());
     g_key_file_set_integer(key_file, "Video", "fps", settings.fps);
@@ -156,8 +159,8 @@ bool is_on_ac_power() {
     return !on_battery;
 }
 
-RecordingProfile selected_profile(bool high_quality, int fps) {
-    return sr::fedora::profile_for(high_quality, is_on_ac_power(), fps);
+RecordingProfile selected_profile(bool high_quality, bool battery_saver, int fps) {
+    return sr::fedora::profile_for(high_quality, battery_saver, is_on_ac_power(), fps);
 }
 
 std::optional<EncoderChoice> choose_encoder(const RecordingProfile& profile) {
@@ -225,7 +228,7 @@ private:
     bool stopping_{};
     bool muted_{};
     AppSettings settings_;
-    RecordingProfile active_profile_{848, 480, 30, 4000, false, true};
+    RecordingProfile active_profile_{848, 480, 30, 4000, false, false, true};
     std::optional<EncoderChoice> active_encoder_;
     bool active_audio_{};
     bool active_camera_{};
@@ -242,6 +245,7 @@ private:
     GtkSwitch* audio_switch_{};
     GtkSwitch* microphone_switch_{};
     GtkSwitch* high_quality_switch_{};
+    GtkSwitch* battery_saver_switch_{};
     GtkSwitch* camera_switch_{};
     GtkDropDown* camera_device_dropdown_{};
     GtkDropDown* fps_dropdown_{};
@@ -331,6 +335,23 @@ private:
         append(GTK_BOX(quality_row), quality_box);
         append(GTK_BOX(quality_row), GTK_WIDGET(high_quality_switch_));
         append(GTK_BOX(content), quality_row);
+
+        auto* saver_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* saver_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+        auto* saver_title = gtk_label_new("Battery Saver");
+        gtk_label_set_xalign(GTK_LABEL(saver_title), 0.0F);
+        auto* saver_detail = gtk_label_new("640×360, 15 FPS, 1 Mbps; High Quality takes precedence");
+        gtk_label_set_xalign(GTK_LABEL(saver_detail), 0.0F);
+        gtk_widget_add_css_class(saver_detail, "dim-label");
+        append(GTK_BOX(saver_box), saver_title);
+        append(GTK_BOX(saver_box), saver_detail);
+        gtk_widget_set_hexpand(saver_box, TRUE);
+        battery_saver_switch_ = GTK_SWITCH(gtk_switch_new());
+        gtk_switch_set_active(battery_saver_switch_, settings_.battery_saver);
+        g_signal_connect(battery_saver_switch_, "notify::active", G_CALLBACK(on_settings_changed), this);
+        append(GTK_BOX(saver_row), saver_box);
+        append(GTK_BOX(saver_row), GTK_WIDGET(battery_saver_switch_));
+        append(GTK_BOX(content), saver_row);
 
         auto* fps_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         auto* fps_title = gtk_label_new("Frame rate");
@@ -487,6 +508,7 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(audio_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(microphone_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(high_quality_switch_), !is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(battery_saver_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), !is_recording && !camera_devices_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(recovery_button_), !is_recording && !orphaned_recordings_.empty());
@@ -503,14 +525,15 @@ private:
     }
 
     RecordingProfile profile() const {
-        return selected_profile(gtk_switch_get_active(high_quality_switch_), settings_.fps);
+        return selected_profile(gtk_switch_get_active(high_quality_switch_),
+                                gtk_switch_get_active(battery_saver_switch_), settings_.fps);
     }
 
     void refresh_profile_label() {
         const auto active = profile();
         gtk_label_set_text(profile_label_, std::format(
             "{} · {}×{} · {} FPS · {} Mbps · {}",
-            active.high_quality ? "High quality" : "Efficiency",
+            active.high_quality ? "High quality" : active.battery_saver ? "Battery Saver" : "Efficiency",
             active.width, active.height, active.fps, active.bitrate_kbps / 1000,
             active.on_ac ? "AC power" : "Battery saver").c_str());
     }
@@ -519,6 +542,7 @@ private:
         settings_.system_audio = gtk_switch_get_active(audio_switch_);
         settings_.microphone = gtk_switch_get_active(microphone_switch_);
         settings_.high_quality = gtk_switch_get_active(high_quality_switch_);
+        settings_.battery_saver = gtk_switch_get_active(battery_saver_switch_);
         settings_.camera = gtk_switch_get_active(camera_switch_);
         settings_.camera_device = selected_camera_device();
         settings_.fps = gtk_drop_down_get_selected(fps_dropdown_) == 1 ? 60 : 30;
@@ -667,9 +691,9 @@ private:
                 "! {} ! identity name=encoded_counter signal-handoffs=true ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
                 source, active_profile.width, active_profile.height, active_profile.fps, encoder_element);
         } else if (with_camera) {
-            const int camera_width = active_profile.high_quality ? 1280 : 320;
-            const int camera_height = active_profile.high_quality ? 720 : 180;
-            const int camera_fps = active_profile.high_quality ? 30 : 10;
+            const int camera_width = active_profile.high_quality ? 1280 : active_profile.battery_saver ? 160 : 320;
+            const int camera_height = active_profile.high_quality ? 720 : active_profile.battery_saver ? 90 : 180;
+            const int camera_fps = active_profile.high_quality ? 30 : active_profile.battery_saver ? 5 : 10;
             video = std::format(
                 "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=3 leaky=downstream ! compositor name=mix sink_1::xpos=24 sink_1::ypos=24 "
@@ -756,7 +780,8 @@ private:
         file << phase << '\n'
              << "encoder=" << encoder.name << (encoder.hardware ? " (hardware)" : " (software)") << '\n'
              << "power=" << (active_profile.on_ac ? "AC" : "battery") << '\n'
-             << "profile=" << (active_profile.high_quality ? "high_quality" : "efficiency") << '\n'
+             << "profile=" << (active_profile.high_quality ? "high_quality" : active_profile.battery_saver ? "battery_saver" : "efficiency") << '\n'
+             << "battery_saver=" << (active_profile.battery_saver ? "on" : "off") << '\n'
              << "video=" << active_profile.width << 'x' << active_profile.height << '@' << active_profile.fps
              << " bitrate_kbps=" << active_profile.bitrate_kbps << '\n'
              << "system_audio=" << (with_audio ? "on" : "off") << " camera_overlay=" << (with_camera ? "on" : "off") << '\n';
