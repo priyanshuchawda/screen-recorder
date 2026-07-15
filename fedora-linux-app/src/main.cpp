@@ -8,9 +8,11 @@
 
 #include "profile_policy.h"
 #include "camera_devices.h"
+#include "telemetry.h"
 
 #include <chrono>
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <format>
@@ -226,6 +228,9 @@ private:
     std::optional<EncoderChoice> active_encoder_;
     bool active_audio_{};
     bool active_camera_{};
+    std::atomic_uint64_t encoded_frames_{};
+    std::atomic_uint64_t audio_buffers_{};
+    std::atomic_uint64_t qos_drops_{};
 
     GtkButton* record_button_{};
     GtkButton* pause_button_{};
@@ -241,6 +246,7 @@ private:
     GtkDropDown* fps_dropdown_{};
     GtkLabel* profile_label_{};
     GtkLabel* output_label_{};
+    GtkLabel* telemetry_label_{};
     std::vector<std::string> camera_devices_;
 
     static void append(GtkBox* box, GtkWidget* child) { gtk_box_append(box, child); }
@@ -395,6 +401,11 @@ private:
         gtk_widget_add_css_class(GTK_WIDGET(profile_label_), "dim-label");
         append(GTK_BOX(content), GTK_WIDGET(profile_label_));
         refresh_profile_label();
+
+        telemetry_label_ = GTK_LABEL(gtk_label_new("Encoded: 0  Audio: 0  QoS drops: 0"));
+        gtk_label_set_xalign(telemetry_label_, 0.0F);
+        gtk_widget_add_css_class(GTK_WIDGET(telemetry_label_), "dim-label");
+        append(GTK_BOX(content), GTK_WIDGET(telemetry_label_));
 
         status_label_ = GTK_LABEL(gtk_label_new("Ready — secure portal capture, MP4 finalization, and diagnostics enabled"));
         gtk_label_set_xalign(status_label_, 0.0F);
@@ -627,7 +638,7 @@ private:
             // VA post-processing feeds Intel's low-power encoder on the GPU.
             video = std::format(
                 "{}! vapostproc ! video/x-raw(memory:VAMemory),format=NV12,width={},height={},framerate={}/1 "
-                "! {} ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
+                "! {} ! identity name=encoded_counter signal-handoffs=true ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
                 source, active_profile.width, active_profile.height, active_profile.fps, encoder_element);
         } else if (with_camera) {
             const int camera_width = active_profile.high_quality ? 1280 : 320;
@@ -636,7 +647,7 @@ private:
             video = std::format(
                 "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=3 leaky=downstream ! compositor name=mix sink_1::xpos=24 sink_1::ypos=24 "
-                "! videoconvert ! {} ! h264parse config-interval=-1 ! queue ! mux. "
+                "! videoconvert ! {} ! identity name=encoded_counter signal-handoffs=true ! h264parse config-interval=-1 ! queue ! mux. "
                 "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
                 "! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=2 leaky=downstream ! mix. ",
@@ -646,14 +657,14 @@ private:
             // Software fallback retains the same bounded, scaled pipeline.
             video = std::format(
                 "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
-                "! {} ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
+                "! {} ! identity name=encoded_counter signal-handoffs=true ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
                 source, active_profile.width, active_profile.height, active_profile.fps, encoder_element);
         }
         std::string audio;
         if (with_system_audio || with_microphone) {
             audio = "audiomixer name=audio_mix ! audioconvert ! audioresample ! "
                     "audio/x-raw,format=F32LE,rate=48000,channels=2 ! volume name=audio_volume ! "
-                    "avenc_aac bitrate=128000 ! aacparse ! queue ! mux. ";
+                    "avenc_aac bitrate=128000 ! aacparse ! identity name=audio_counter signal-handoffs=true ! queue ! mux. ";
             if (with_system_audio) {
                 // The Pulse compatibility monitor is the PipeWire desktop-output
                 // loopback; the ordinary default source would be the microphone.
@@ -675,6 +686,17 @@ private:
             set_status(std::format("Could not create recording pipeline: {}", error ? error->message : "unknown error"));
             g_clear_error(&error);
             return false;
+        }
+        encoded_frames_.store(0, std::memory_order_relaxed);
+        audio_buffers_.store(0, std::memory_order_relaxed);
+        qos_drops_.store(0, std::memory_order_relaxed);
+        if (GstElement* counter = gst_bin_get_by_name(GST_BIN(pipeline_), "encoded_counter")) {
+            g_signal_connect(counter, "handoff", G_CALLBACK(on_encoded_handoff), this);
+            gst_object_unref(counter);
+        }
+        if (GstElement* counter = gst_bin_get_by_name(GST_BIN(pipeline_), "audio_counter")) {
+            g_signal_connect(counter, "handoff", G_CALLBACK(on_audio_handoff), this);
+            gst_object_unref(counter);
         }
         GstBus* bus = gst_element_get_bus(pipeline_);
         bus_watch_ = gst_bus_add_watch(bus, on_bus_message, this);
@@ -717,7 +739,12 @@ private:
 
     void write_stop_diagnostics(bool completed) const {
         std::ofstream file(partial_path_ + ".diagnostics.txt", std::ios::app);
-        if (file) file << "STOP\nstatus=" << (completed ? "completed" : "partial") << '\n';
+        if (!file) return;
+        const auto snapshot = telemetry_snapshot();
+        file << "STOP\nstatus=" << (completed ? "completed" : "partial") << '\n'
+             << "encoded_frames=" << snapshot.encoded_frames << '\n'
+             << "audio_buffers=" << snapshot.audio_buffers << '\n'
+             << "qos_drops=" << snapshot.qos_drops << '\n';
     }
 
     static gboolean check_disk_space(gpointer data) {
@@ -775,6 +802,13 @@ private:
                 self->finish_recording(false);
                 return G_SOURCE_REMOVE;
             }
+            case GST_MESSAGE_QOS: {
+                guint64 processed = 0;
+                guint64 dropped = 0;
+                gst_message_parse_qos_stats(message, nullptr, &processed, &dropped);
+                self->qos_drops_.store(dropped, std::memory_order_relaxed);
+                return G_SOURCE_CONTINUE;
+            }
             default:
                 return G_SOURCE_CONTINUE;
         }
@@ -786,7 +820,22 @@ private:
         const auto now = self->paused_at_.value_or(std::chrono::steady_clock::now());
         const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now - self->started_at_) - self->paused_for_;
         gtk_label_set_text(self->time_label_, std::format("{:02}:{:02}:{:02}", seconds.count() / 3600, (seconds.count() / 60) % 60, seconds.count() % 60).c_str());
+        gtk_label_set_text(self->telemetry_label_, sr::fedora::format_telemetry(self->telemetry_snapshot()).c_str());
         return G_SOURCE_CONTINUE;
+    }
+
+    sr::fedora::TelemetrySnapshot telemetry_snapshot() const {
+        return {encoded_frames_.load(std::memory_order_relaxed),
+                audio_buffers_.load(std::memory_order_relaxed),
+                qos_drops_.load(std::memory_order_relaxed)};
+    }
+
+    static void on_encoded_handoff(GstElement*, GstBuffer*, gpointer data) {
+        static_cast<RecorderWindow*>(data)->encoded_frames_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    static void on_audio_handoff(GstElement*, GstBuffer*, gpointer data) {
+        static_cast<RecorderWindow*>(data)->audio_buffers_.fetch_add(1, std::memory_order_relaxed);
     }
 
     static void on_pause(GtkButton*, gpointer data) {
