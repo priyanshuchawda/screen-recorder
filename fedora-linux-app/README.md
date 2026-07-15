@@ -20,7 +20,7 @@ The Fedora version intentionally mirrors the Windows project’s laptop policy.
 | Efficiency on battery | 848×480 | 15 | 1.5 Mbps | Automatically clamped |
 | High quality | 1920×1080 | 30 / 60 | 8 / 10 Mbps | Explicit opt-in; unchanged on battery |
 
-The camera PiP is off by default. When enabled it uses a bounded two-frame V4L2 path at 320×180/10 FPS in efficiency mode or 640×360/30 FPS in HQ mode. It is deliberately separate from the normal zero/low-copy Intel encode path, because compositing a camera frame costs power.
+The camera PiP is off by default. The app discovers V4L2 camera paths and persists the selected device. When enabled it uses a bounded two-frame path at 320×180/10 FPS in efficiency mode or a 1280×720/30 FPS HQ profile. It is deliberately separate from the normal zero/low-copy Intel encode path, because compositing a camera frame costs power.
 
 UPower is checked every ten seconds during a recording. A transition to battery immediately lowers the mutable encoder bitrate in efficiency mode; the next recording also receives the full 15 FPS battery profile. The active stream is not renegotiated in place, avoiding MP4 timestamp/resolution discontinuities.
 
