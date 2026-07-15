@@ -33,12 +33,13 @@ jobs:
               dnf install -y --setopt=install_weak_deps=False \
                 gcc-c++ cmake ninja-build pkgconf-pkg-config \
                 gtk4-devel libadwaita-devel libportal-devel libportal-gtk4-devel \
-                gstreamer1-devel gstreamer1-plugins-base-devel gtest-devel \
+                gstreamer1-devel gstreamer1-plugins-base-devel gtest-devel rpm-build \
                 desktop-file-utils appstream &&
               cmake -S fedora-linux-app -B fedora-linux-app/build -G Ninja \
                 -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON &&
               cmake --build fedora-linux-app/build &&
               ctest --test-dir fedora-linux-app/build --output-on-failure &&
+              fedora-linux-app/packaging/build-rpm.sh &&
               desktop-file-validate fedora-linux-app/io.github.screenrecorder.Fedora.desktop &&
               appstreamcli validate --no-net fedora-linux-app/io.github.screenrecorder.Fedora.metainfo.xml
             '
