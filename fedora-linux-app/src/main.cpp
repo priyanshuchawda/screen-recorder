@@ -12,10 +12,12 @@
 #include "recovery_actions.h"
 #include "camera_preview_policy.h"
 #include "recording_faults.h"
+#include "encoder_policy.h"
 
 #include <chrono>
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <format>
@@ -165,23 +167,30 @@ RecordingProfile selected_profile(bool high_quality, bool battery_saver, int fps
     return sr::fedora::profile_for(high_quality, battery_saver, is_on_ac_power(), fps);
 }
 
-std::optional<EncoderChoice> choose_encoder(const RecordingProfile& profile) {
+std::vector<EncoderChoice> choose_encoders(const RecordingProfile& profile) {
     // The Iris Xe driver exposes VA low-power H.264. These branches preserve
     // DMABUF/VAMemory through vapostproc, avoiding a CPU encoder on the normal
     // no-camera path. OpenH264 is a portable fallback only.
-    if (has_element("vah264lpenc")) {
-        return EncoderChoice{std::format("vah264lpenc bitrate={} key-int-max={}", profile.bitrate_kbps, profile.fps * 2), "Intel VA-API low-power H.264", true};
+    std::vector<EncoderChoice> candidates;
+    const auto available = sr::fedora::encoder_candidates({
+        has_element("vah264lpenc"), has_element("qsvh264enc"), has_element("vah264enc"), has_element("openh264enc")});
+    for (const auto kind : available) {
+        switch (kind) {
+            case sr::fedora::EncoderKind::VaLowPower:
+                candidates.push_back({std::format("vah264lpenc bitrate={} key-int-max={}", profile.bitrate_kbps, profile.fps * 2), "Intel VA-API low-power H.264", true});
+                break;
+            case sr::fedora::EncoderKind::QuickSync:
+                candidates.push_back({std::format("qsvh264enc bitrate={} gop-size={}", profile.bitrate_kbps, profile.fps * 2), "Intel Quick Sync H.264", true});
+                break;
+            case sr::fedora::EncoderKind::VaApi:
+                candidates.push_back({std::format("vah264enc bitrate={} key-int-max={}", profile.bitrate_kbps, profile.fps * 2), "VA-API H.264", true});
+                break;
+            case sr::fedora::EncoderKind::OpenH264:
+                candidates.push_back({std::format("openh264enc bitrate={} gop-size={} complexity=low", profile.bitrate_kbps * 1000, profile.fps * 2), "OpenH264 software fallback", false});
+                break;
+        }
     }
-    if (has_element("qsvh264enc")) {
-        return EncoderChoice{std::format("qsvh264enc bitrate={} gop-size={}", profile.bitrate_kbps, profile.fps * 2), "Intel Quick Sync H.264", true};
-    }
-    if (has_element("vah264enc")) {
-        return EncoderChoice{std::format("vah264enc bitrate={} key-int-max={}", profile.bitrate_kbps, profile.fps * 2), "VA-API H.264", true};
-    }
-    if (has_element("openh264enc")) {
-        return EncoderChoice{std::format("openh264enc bitrate={} gop-size={} complexity=low", profile.bitrate_kbps * 1000, profile.fps * 2), "OpenH264 software fallback", false};
-    }
-    return std::nullopt;
+    return candidates;
 }
 
 std::string named_encoder_element(const EncoderChoice& encoder) {
@@ -722,7 +731,7 @@ private:
             self->set_status("The xdg-desktop-portal service is unavailable.");
             return;
         }
-        if (!choose_encoder(self->profile())) {
+        if (choose_encoders(self->profile()).empty()) {
             self->set_status("No H.264 encoder found. Install gstreamer1-plugin-openh264.");
             return;
         }
@@ -766,7 +775,7 @@ private:
         }
     }
 
-    bool start_pipeline() {
+    bool start_pipeline(std::size_t candidate_index = 0, bool reuse_output_path = false) {
         GVariant* streams = xdp_session_get_streams(session_);
         if (!streams || g_variant_n_children(streams) == 0) {
             set_status("The portal did not provide a video stream.");
@@ -781,17 +790,18 @@ private:
             set_status("Could not open the portal's PipeWire connection.");
             return false;
         }
-        partial_path_ = output_path(output_directory());
+        if (!reuse_output_path) partial_path_ = output_path(output_directory());
         if (partial_path_.empty()) {
             set_status("Could not create the Videos/Screen Recordings folder.");
             return false;
         }
         const auto active_profile = profile();
-        const auto encoder = choose_encoder(active_profile);
-        if (!encoder) {
+        const auto candidates = choose_encoders(active_profile);
+        if (candidate_index >= candidates.size()) {
             set_status("No supported H.264 encoder is available.");
             return false;
         }
+        const auto& encoder = candidates[candidate_index];
         const bool with_system_audio = gtk_switch_get_active(audio_switch_);
         const bool with_microphone = gtk_switch_get_active(microphone_switch_);
         const bool with_camera = gtk_switch_get_active(camera_switch_);
@@ -805,9 +815,9 @@ private:
             "pipewiresrc fd={} path={} do-timestamp=true ! identity name=captured_counter signal-handoffs=true "
             "! queue max-size-buffers=3 max-size-time=2000000000 leaky=downstream ",
             remote_fd_, node_id);
-        const auto encoder_element = named_encoder_element(*encoder);
+        const auto encoder_element = named_encoder_element(encoder);
         std::string video;
-        if (!with_camera && encoder->hardware) {
+        if (!with_camera && encoder.hardware) {
             // This is the normal laptop path: PipeWire negotiates DMA-BUF and
             // VA post-processing feeds Intel's low-power encoder on the GPU.
             video = std::format(
@@ -857,8 +867,15 @@ private:
         GError* error = nullptr;
         pipeline_ = gst_parse_launch(description.c_str(), &error);
         if (!pipeline_) {
-            set_status(std::format("Could not create recording pipeline: {}", error ? error->message : "unknown error"));
+            const auto detail = std::string{error ? error->message : "unknown error"};
             g_clear_error(&error);
+            close(remote_fd_);
+            remote_fd_ = -1;
+            if (candidate_index + 1 < candidates.size()) {
+                set_status(std::format("{} was unavailable; retrying {}…", encoder.name, candidates[candidate_index + 1].name));
+                return start_pipeline(candidate_index + 1, true);
+            }
+            set_status(std::format("Could not create recording pipeline: {}", detail));
             return false;
         }
         captured_frames_.store(0, std::memory_order_relaxed);
@@ -881,8 +898,13 @@ private:
         bus_watch_ = gst_bus_add_watch(bus, on_bus_message, this);
         gst_object_unref(bus);
         if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-            set_status("GStreamer could not start the recording pipeline.");
+            const auto failed_encoder = encoder.name;
             cleanup_pipeline();
+            if (candidate_index + 1 < candidates.size()) {
+                set_status(std::format("{} could not start; retrying {}…", failed_encoder, candidates[candidate_index + 1].name));
+                return start_pipeline(candidate_index + 1, true);
+            }
+            set_status("GStreamer could not start the recording pipeline.");
             return false;
         }
         started_at_ = std::chrono::steady_clock::now();
@@ -891,11 +913,11 @@ private:
         recording_ = true;
         muted_ = false;
         active_profile_ = active_profile;
-        active_encoder_ = *encoder;
+        active_encoder_ = encoder;
         active_audio_ = with_system_audio || with_microphone;
         active_camera_ = with_camera;
-        write_diagnostics("START", active_profile, *encoder, with_system_audio || with_microphone, with_camera);
-        set_status(std::format("Recording to {} ({})", std::filesystem::path(final_path_for(partial_path_)).filename().string(), encoder->name));
+        write_diagnostics("START", active_profile, encoder, with_system_audio || with_microphone, with_camera);
+        set_status(std::format("Recording to {} ({})", std::filesystem::path(final_path_for(partial_path_)).filename().string(), encoder.name));
         timer_ = g_timeout_add(250, update_timer, this);
         disk_check_ = g_timeout_add_seconds(10, check_disk_space, this);
         power_check_ = g_timeout_add_seconds(10, check_power_state, this);
