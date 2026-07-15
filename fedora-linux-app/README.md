@@ -106,6 +106,14 @@ checks the RPM helper syntax, and produces a native RPM. The repository-owned
 Fedora and Windows GitHub Actions workflows are intentionally disabled; checks
 are performed on the Fedora development laptop instead.
 
+After a window-shell change, also run this graphical-session smoke test. It
+starts the real application for four seconds with preview disabled, and fails
+if GTK rejects the window configuration:
+
+```bash
+./verify-ui-runtime.sh
+```
+
 For this Intel Iris Xe Fedora laptop, run the optional hardware-path gate after
 the portable check:
 

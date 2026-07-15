@@ -210,7 +210,10 @@ class RecorderWindow {
 public:
     explicit RecorderWindow(AdwApplication* application)
         : portal_(xdp_portal_new()), settings_(load_settings()) {
-        window_ = GTK_WINDOW(adw_application_window_new(GTK_APPLICATION(application)));
+        // AdwApplicationWindow intentionally owns its title bar. A GTK
+        // application window is required here because this app supplies a
+        // draggable header with explicit window controls.
+        window_ = GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
         gtk_window_set_title(window_, "Fedora Screen Recorder");
         gtk_window_set_default_size(window_, 560, 620);
         g_signal_connect(window_, "close-request", G_CALLBACK(on_close), this);
@@ -541,7 +544,7 @@ private:
         append(GTK_BOX(controls), GTK_WIDGET(mute_button_));
         append(GTK_BOX(controls), GTK_WIDGET(stop_button_));
         append(GTK_BOX(content), controls);
-        adw_application_window_set_content(ADW_APPLICATION_WINDOW(window_), content);
+        gtk_window_set_child(window_, content);
         report_orphaned_recordings();
     }
 
