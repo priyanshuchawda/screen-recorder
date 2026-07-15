@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.screenrecorder.Fedora</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Fedora Screen Recorder</name>
+  <summary>A simple Wayland-safe screen recorder</summary>
+  <description>
+    <p>Records a selected screen or window to MP4 using the GNOME ScreenCast portal, PipeWire, and GStreamer.</p>
+  </description>
+  <launchable type="desktop-id">io.github.screenrecorder.Fedora.desktop</launchable>
+  <provides><binary>fedora-screen-recorder</binary></provides>
+  <url type="homepage">https://screen-recorder-windows.netlify.app</url>
+  <developer_name>ScreenRecorder</developer_name>
+  <content_rating type="oars-1.1"/>
+</component>

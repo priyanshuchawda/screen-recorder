@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Fedora Screen Recorder
+Comment=Record a screen or window through the GNOME portal
+Exec=fedora-screen-recorder
+Icon=io.github.screenrecorder.Fedora
+Terminal=false
+Categories=AudioVideo;Recorder;GTK;
+Keywords=screen;record;video;screencast;pipewire;
+StartupNotify=true
