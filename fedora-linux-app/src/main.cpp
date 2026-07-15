@@ -13,6 +13,7 @@
 #include "camera_preview_policy.h"
 #include "recording_faults.h"
 #include "encoder_policy.h"
+#include "recording_clock.h"
 
 #include <chrono>
 #include <algorithm>
@@ -236,9 +237,7 @@ private:
     guint power_check_{};
     int remote_fd_{-1};
     std::string partial_path_;
-    std::chrono::steady_clock::time_point started_at_;
-    std::optional<std::chrono::steady_clock::time_point> paused_at_;
-    std::chrono::seconds paused_for_{};
+    sr::fedora::RecordingClock recording_clock_;
     bool recording_{};
     bool stopping_{};
     bool muted_{};
@@ -907,9 +906,7 @@ private:
             set_status("GStreamer could not start the recording pipeline.");
             return false;
         }
-        started_at_ = std::chrono::steady_clock::now();
-        paused_for_ = std::chrono::seconds::zero();
-        paused_at_.reset();
+        recording_clock_.start(std::chrono::steady_clock::now());
         recording_ = true;
         muted_ = false;
         active_profile_ = active_profile;
@@ -1033,8 +1030,8 @@ private:
     static gboolean update_timer(gpointer data) {
         auto* self = static_cast<RecorderWindow*>(data);
         if (!self->recording_) return G_SOURCE_REMOVE;
-        const auto now = self->paused_at_.value_or(std::chrono::steady_clock::now());
-        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now - self->started_at_) - self->paused_for_;
+        const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+            self->recording_clock_.elapsed(std::chrono::steady_clock::now()));
         gtk_label_set_text(self->time_label_, std::format("{:02}:{:02}:{:02}", seconds.count() / 3600, (seconds.count() / 60) % 60, seconds.count() % 60).c_str());
         gtk_label_set_text(self->telemetry_label_, sr::fedora::format_telemetry(self->telemetry_snapshot()).c_str());
         return G_SOURCE_CONTINUE;
@@ -1062,14 +1059,13 @@ private:
     static void on_pause(GtkButton*, gpointer data) {
         auto* self = static_cast<RecorderWindow*>(data);
         if (!self->pipeline_) return;
-        if (!self->paused_at_) {
+        if (!self->recording_clock_.paused()) {
             gst_element_set_state(self->pipeline_, GST_STATE_PAUSED);
-            self->paused_at_ = std::chrono::steady_clock::now();
+            self->recording_clock_.pause(std::chrono::steady_clock::now());
             gtk_button_set_label(self->pause_button_, "Resume");
             self->set_status("Recording paused");
         } else {
-            self->paused_for_ += std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - *self->paused_at_);
-            self->paused_at_.reset();
+            self->recording_clock_.resume(std::chrono::steady_clock::now());
             gst_element_set_state(self->pipeline_, GST_STATE_PLAYING);
             gtk_button_set_label(self->pause_button_, "Pause");
             self->set_status("Recording resumed");
