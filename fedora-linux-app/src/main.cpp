@@ -10,6 +10,7 @@
 #include "camera_devices.h"
 #include "telemetry.h"
 #include "recovery_actions.h"
+#include "camera_preview_policy.h"
 
 #include <chrono>
 #include <algorithm>
@@ -200,6 +201,7 @@ public:
     }
 
     ~RecorderWindow() {
+        stop_camera_preview();
         cleanup_pipeline();
         if (session_) {
             xdp_session_close(session_);
@@ -215,6 +217,8 @@ private:
     XdpPortal* portal_{};
     XdpSession* session_{};
     GstElement* pipeline_{};
+    GstElement* camera_preview_pipeline_{};
+    GtkWindow* camera_preview_window_{};
     guint bus_watch_{};
     guint timer_{};
     guint disk_check_{};
@@ -253,6 +257,7 @@ private:
     GtkLabel* output_label_{};
     GtkLabel* telemetry_label_{};
     GtkButton* recovery_button_{};
+    GtkButton* preview_camera_button_{};
     std::vector<std::filesystem::path> orphaned_recordings_;
     std::vector<std::string> camera_devices_;
 
@@ -403,6 +408,12 @@ private:
         append(GTK_BOX(camera_device_row), GTK_WIDGET(camera_device_dropdown_));
         append(GTK_BOX(content), camera_device_row);
 
+        preview_camera_button_ = GTK_BUTTON(gtk_button_new_with_label("Preview selected camera"));
+        gtk_widget_set_halign(GTK_WIDGET(preview_camera_button_), GTK_ALIGN_START);
+        gtk_widget_set_sensitive(GTK_WIDGET(preview_camera_button_), !camera_devices_.empty());
+        g_signal_connect(preview_camera_button_, "clicked", G_CALLBACK(on_preview_camera), this);
+        append(GTK_BOX(content), GTK_WIDGET(preview_camera_button_));
+
         auto* output_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         auto* output_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
         auto* output_title = gtk_label_new("Recording folder");
@@ -511,6 +522,7 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(battery_saver_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), !is_recording && !camera_devices_.empty());
+        gtk_widget_set_sensitive(GTK_WIDGET(preview_camera_button_), !is_recording && !camera_devices_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(recovery_button_), !is_recording && !orphaned_recordings_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(fps_dropdown_), !is_recording);
     }
@@ -565,6 +577,82 @@ private:
         static_cast<RecorderWindow*>(data)->sync_settings();
     }
 
+    static void on_preview_camera(GtkButton*, gpointer data) {
+        static_cast<RecorderWindow*>(data)->start_camera_preview();
+    }
+
+    void start_camera_preview() {
+        stop_camera_preview();
+        const auto device = selected_camera_device();
+        if (device.empty() || !std::filesystem::exists(device)) {
+            set_status("Select an available V4L2 camera before opening preview.");
+            return;
+        }
+        if (!has_element("gtk4paintablesink")) {
+            set_status("GStreamer GTK4 video sink is unavailable; install gstreamer1-plugin-gtk4.");
+            return;
+        }
+        const auto preview = sr::fedora::camera_preview_for(profile());
+        gchar* escaped_device = g_strescape(device.c_str(), nullptr);
+        const auto description = std::format(
+            "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
+            "! videoconvert ! videoscale ! videorate ! video/x-raw,format=BGRA,width={},height={},framerate={}/1 "
+            "! gtk4paintablesink name=camera_preview_sink sync=false", escaped_device, preview.width, preview.height, preview.fps);
+        g_free(escaped_device);
+        GError* error = nullptr;
+        camera_preview_pipeline_ = gst_parse_launch(description.c_str(), &error);
+        if (!camera_preview_pipeline_) {
+            set_status(std::format("Could not start camera preview: {}", error ? error->message : "unknown error"));
+            g_clear_error(&error);
+            return;
+        }
+        GstElement* sink = gst_bin_get_by_name(GST_BIN(camera_preview_pipeline_), "camera_preview_sink");
+        GdkPaintable* paintable = nullptr;
+        if (sink) g_object_get(sink, "paintable", &paintable, nullptr);
+        if (sink) gst_object_unref(sink);
+        if (!paintable) {
+            set_status("GStreamer could not create the GTK4 camera preview.");
+            stop_camera_preview();
+            return;
+        }
+        GtkWidget* widget = gtk_picture_new_for_paintable(paintable);
+        g_object_unref(paintable);
+        gtk_picture_set_can_shrink(GTK_PICTURE(widget), TRUE);
+        camera_preview_window_ = GTK_WINDOW(gtk_window_new());
+        gtk_window_set_title(camera_preview_window_, "Camera Preview");
+        gtk_window_set_default_size(camera_preview_window_, preview.width, preview.height);
+        gtk_window_set_transient_for(camera_preview_window_, window_);
+        gtk_window_set_child(camera_preview_window_, widget);
+        g_signal_connect(camera_preview_window_, "close-request", G_CALLBACK(on_preview_close), this);
+        gtk_window_present(camera_preview_window_);
+        if (gst_element_set_state(camera_preview_pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+            set_status("Camera preview could not acquire the selected device.");
+            stop_camera_preview();
+            return;
+        }
+        set_status(std::format("Camera preview: {}×{} at {} FPS", preview.width, preview.height, preview.fps));
+    }
+
+    static gboolean on_preview_close(GtkWindow* preview_window, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (self->camera_preview_window_ == preview_window) self->camera_preview_window_ = nullptr;
+        self->stop_camera_preview();
+        return FALSE;
+    }
+
+    void stop_camera_preview() {
+        if (camera_preview_pipeline_) {
+            gst_element_set_state(camera_preview_pipeline_, GST_STATE_NULL);
+            gst_object_unref(camera_preview_pipeline_);
+            camera_preview_pipeline_ = nullptr;
+        }
+        if (camera_preview_window_) {
+            auto* preview_window = camera_preview_window_;
+            camera_preview_window_ = nullptr;
+            gtk_window_destroy(preview_window);
+        }
+    }
+
     static void on_choose_folder(GtkButton*, gpointer data) {
         auto* self = static_cast<RecorderWindow*>(data);
         auto* dialog = gtk_file_dialog_new();
@@ -604,6 +692,7 @@ private:
             self->set_status("No H.264 encoder found. Install gstreamer1-plugin-openh264.");
             return;
         }
+        self->stop_camera_preview();
         self->set_controls(true);
         self->set_status("Choose a display or window in the GNOME dialog…");
         xdp_portal_create_screencast_session(
