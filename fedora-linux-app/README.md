@@ -93,9 +93,11 @@ For this Intel Iris Xe laptop, the RPM Fusion packages `intel-media-driver` and 
 ## Validation
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
-ctest --test-dir build --output-on-failure
-desktop-file-validate io.github.screenrecorder.Fedora.desktop
-appstreamcli validate io.github.screenrecorder.Fedora.metainfo.xml
+./verify-local.sh
 ```
+
+This is the required local gate before merging Fedora app changes: it builds the
+app, runs every GoogleTest, verifies the GTK4 preview sink and desktop metadata,
+checks the RPM helper syntax, and produces a native RPM. The repository-owned
+Fedora and Windows GitHub Actions workflows are intentionally disabled; checks
+are performed on the Fedora development laptop instead.
