@@ -7,14 +7,17 @@
 #include <libportal-gtk4/portal-gtk4.h>
 
 #include "profile_policy.h"
+#include "camera_devices.h"
 
 #include <chrono>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <format>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <unistd.h>
 
@@ -27,6 +30,7 @@ struct AppSettings {
     bool microphone{};
     bool high_quality{};
     bool camera{};
+    std::string camera_device;
     int fps{30};
     std::string output_dir;
 };
@@ -45,6 +49,9 @@ AppSettings load_settings() {
         settings.microphone = g_key_file_get_boolean(key_file, "Recording", "microphone", nullptr);
         settings.high_quality = g_key_file_get_boolean(key_file, "Video", "high_quality", nullptr);
         settings.camera = g_key_file_get_boolean(key_file, "Camera", "enabled", nullptr);
+        gchar* camera_device = g_key_file_get_string(key_file, "Camera", "device", nullptr);
+        if (camera_device) settings.camera_device = camera_device;
+        g_free(camera_device);
         settings.fps = g_key_file_get_integer(key_file, "Video", "fps", nullptr);
         gchar* output = g_key_file_get_string(key_file, "Storage", "output_dir", nullptr);
         if (output) settings.output_dir = output;
@@ -64,6 +71,7 @@ void save_settings(const AppSettings& settings) {
     g_key_file_set_boolean(key_file, "Recording", "microphone", settings.microphone);
     g_key_file_set_boolean(key_file, "Video", "high_quality", settings.high_quality);
     g_key_file_set_boolean(key_file, "Camera", "enabled", settings.camera);
+    g_key_file_set_string(key_file, "Camera", "device", settings.camera_device.c_str());
     g_key_file_set_integer(key_file, "Video", "fps", settings.fps);
     g_key_file_set_string(key_file, "Storage", "output_dir", settings.output_dir.c_str());
     gsize length = 0;
@@ -229,9 +237,11 @@ private:
     GtkSwitch* microphone_switch_{};
     GtkSwitch* high_quality_switch_{};
     GtkSwitch* camera_switch_{};
+    GtkDropDown* camera_device_dropdown_{};
     GtkDropDown* fps_dropdown_{};
     GtkLabel* profile_label_{};
     GtkLabel* output_label_{};
+    std::vector<std::string> camera_devices_;
 
     static void append(GtkBox* box, GtkWidget* child) { gtk_box_append(box, child); }
 
@@ -342,6 +352,27 @@ private:
         append(GTK_BOX(camera_row), GTK_WIDGET(camera_switch_));
         append(GTK_BOX(content), camera_row);
 
+        auto* camera_device_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+        auto* camera_device_title = gtk_label_new("Camera device");
+        gtk_label_set_xalign(GTK_LABEL(camera_device_title), 0.0F);
+        gtk_widget_set_hexpand(camera_device_title, TRUE);
+        camera_devices_ = sr::fedora::discover_camera_device_paths();
+        auto* camera_device_model = gtk_string_list_new(nullptr);
+        for (const auto& device : camera_devices_) gtk_string_list_append(camera_device_model, device.c_str());
+        camera_device_dropdown_ = GTK_DROP_DOWN(gtk_drop_down_new(G_LIST_MODEL(camera_device_model), nullptr));
+        g_object_unref(camera_device_model);
+        if (!camera_devices_.empty()) {
+            const auto saved = std::find(camera_devices_.begin(), camera_devices_.end(), settings_.camera_device);
+            gtk_drop_down_set_selected(camera_device_dropdown_, static_cast<guint>(saved == camera_devices_.end() ? 0 : saved - camera_devices_.begin()));
+        } else {
+            gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), FALSE);
+            gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), FALSE);
+        }
+        g_signal_connect(camera_device_dropdown_, "notify::selected", G_CALLBACK(on_camera_device_changed), this);
+        append(GTK_BOX(camera_device_row), camera_device_title);
+        append(GTK_BOX(camera_device_row), GTK_WIDGET(camera_device_dropdown_));
+        append(GTK_BOX(content), camera_device_row);
+
         auto* output_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
         auto* output_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
         auto* output_title = gtk_label_new("Recording folder");
@@ -421,11 +452,17 @@ private:
         gtk_widget_set_sensitive(GTK_WIDGET(microphone_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(high_quality_switch_), !is_recording);
         gtk_widget_set_sensitive(GTK_WIDGET(camera_switch_), !is_recording);
+        gtk_widget_set_sensitive(GTK_WIDGET(camera_device_dropdown_), !is_recording && !camera_devices_.empty());
         gtk_widget_set_sensitive(GTK_WIDGET(fps_dropdown_), !is_recording);
     }
 
     std::string output_directory() const {
         return settings_.output_dir.empty() ? default_output_directory() : settings_.output_dir;
+    }
+
+    std::string selected_camera_device() const {
+        const auto index = gtk_drop_down_get_selected(camera_device_dropdown_);
+        return index < camera_devices_.size() ? camera_devices_[index] : "";
     }
 
     RecordingProfile profile() const {
@@ -446,6 +483,7 @@ private:
         settings_.microphone = gtk_switch_get_active(microphone_switch_);
         settings_.high_quality = gtk_switch_get_active(high_quality_switch_);
         settings_.camera = gtk_switch_get_active(camera_switch_);
+        settings_.camera_device = selected_camera_device();
         settings_.fps = gtk_drop_down_get_selected(fps_dropdown_) == 1 ? 60 : 30;
         save_settings(settings_);
     }
@@ -460,6 +498,10 @@ private:
         auto* self = static_cast<RecorderWindow*>(data);
         self->sync_settings();
         self->refresh_profile_label();
+    }
+
+    static void on_camera_device_changed(GtkDropDown*, GParamSpec*, gpointer data) {
+        static_cast<RecorderWindow*>(data)->sync_settings();
     }
 
     static void on_choose_folder(GtkButton*, gpointer data) {
@@ -569,8 +611,9 @@ private:
         const bool with_system_audio = gtk_switch_get_active(audio_switch_);
         const bool with_microphone = gtk_switch_get_active(microphone_switch_);
         const bool with_camera = gtk_switch_get_active(camera_switch_);
-        if (with_camera && !std::filesystem::exists("/dev/video0")) {
-            set_status("Camera overlay is enabled but no V4L2 camera was found.");
+        const auto camera_device = selected_camera_device();
+        if (with_camera && (camera_device.empty() || !std::filesystem::exists(camera_device))) {
+            set_status("Camera overlay is enabled but the selected V4L2 camera is unavailable.");
             return false;
         }
         gchar* escaped_path = g_strescape(partial_path_.c_str(), nullptr);
@@ -587,18 +630,18 @@ private:
                 "! {} ! h264parse config-interval=-1 ! queue max-size-buffers=3 leaky=downstream ! mux. ",
                 source, active_profile.width, active_profile.height, active_profile.fps, encoder_element);
         } else if (with_camera) {
-            const int camera_width = active_profile.high_quality ? 640 : 320;
-            const int camera_height = active_profile.high_quality ? 360 : 180;
+            const int camera_width = active_profile.high_quality ? 1280 : 320;
+            const int camera_height = active_profile.high_quality ? 720 : 180;
             const int camera_fps = active_profile.high_quality ? 30 : 10;
             video = std::format(
                 "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=3 leaky=downstream ! compositor name=mix sink_1::xpos=24 sink_1::ypos=24 "
                 "! videoconvert ! {} ! h264parse config-interval=-1 ! queue ! mux. "
-                "v4l2src device=/dev/video0 do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
+                "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
                 "! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=2 leaky=downstream ! mix. ",
                 source, active_profile.width, active_profile.height, active_profile.fps, encoder_element,
-                camera_width, camera_height, camera_fps);
+                camera_device, camera_width, camera_height, camera_fps);
         } else {
             // Software fallback retains the same bounded, scaled pipeline.
             video = std::format(
@@ -669,6 +712,7 @@ private:
              << "video=" << active_profile.width << 'x' << active_profile.height << '@' << active_profile.fps
              << " bitrate_kbps=" << active_profile.bitrate_kbps << '\n'
              << "system_audio=" << (with_audio ? "on" : "off") << " camera_overlay=" << (with_camera ? "on" : "off") << '\n';
+        if (with_camera) file << "camera_device=" << selected_camera_device() << '\n';
     }
 
     void write_stop_diagnostics(bool completed) const {
