@@ -11,7 +11,10 @@ struct CameraPreviewProfile {
 };
 
 constexpr int kCameraPreviewQueueBuffers = 1;
-constexpr int kCameraPreviewDefaultWindowSize = 360;
+// Compact 16:10 framing with a 16:9 camera crop, matching the approved
+// movable preview shape while leaving the window freely resizable.
+constexpr int kCameraPreviewDefaultWindowWidth = 304;
+constexpr int kCameraPreviewDefaultWindowHeight = 192;
 
 // The preview is useful while composing a recording, but it must never hold
 // the camera while the recording pipeline needs it for a PiP track.
