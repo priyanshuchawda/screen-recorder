@@ -90,7 +90,7 @@ machine with the dependencies below, run:
 cd fedora-linux-app
 sudo dnf install rpm-build
 ./packaging/build-rpm.sh
-sudo dnf install packaging/rpmbuild/RPMS/$(uname -m)/fedora-screen-recorder-0.1.1-1.*.rpm
+sudo dnf install packaging/rpmbuild/RPMS/$(uname -m)/fedora-screen-recorder-*.rpm
 ```
 
 This packages the executable, GNOME desktop entry, AppStream metadata, and
