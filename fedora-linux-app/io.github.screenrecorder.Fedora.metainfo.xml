@@ -14,6 +14,11 @@
   <developer_name>ScreenRecorder</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.3" date="2026-07-16">
+      <description>
+        <p>Uses the compact movable camera preview as the default.</p>
+      </description>
+    </release>
     <release version="0.1.2" date="2026-07-16">
       <description>
         <p>Improves Fedora installation, GNOME launcher integration, and taskbar pinning guidance.</p>
