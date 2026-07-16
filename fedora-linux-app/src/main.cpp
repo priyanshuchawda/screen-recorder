@@ -669,9 +669,10 @@ private:
         const auto preview = sr::fedora::camera_preview_for(profile());
         gchar* escaped_device = g_strescape(device.c_str(), nullptr);
         const auto description = std::format(
-            "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
-            "! videoconvert ! videoscale ! videorate ! video/x-raw,format=BGRA,width={},height={},framerate={}/1 "
-            "! gtk4paintablesink name=camera_preview_sink sync=false", escaped_device, preview.width, preview.height, preview.fps);
+            "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers={} max-size-bytes=0 max-size-time=0 leaky=downstream "
+            "! videoconvert ! videoscale ! videorate drop-only=true ! video/x-raw,format=BGRA,width={},height={},framerate={}/1 "
+            "! gtk4paintablesink name=camera_preview_sink sync=false", escaped_device, sr::fedora::kCameraPreviewQueueBuffers,
+            preview.width, preview.height, preview.fps);
         g_free(escaped_device);
         GError* error = nullptr;
         camera_preview_pipeline_ = gst_parse_launch(description.c_str(), &error);
