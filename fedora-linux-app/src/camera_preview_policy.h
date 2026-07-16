@@ -11,6 +11,7 @@ struct CameraPreviewProfile {
 };
 
 constexpr int kCameraPreviewQueueBuffers = 1;
+constexpr int kCameraPreviewDefaultWindowSize = 360;
 
 // The preview is useful while composing a recording, but it must never hold
 // the camera while the recording pipeline needs it for a PiP track.
