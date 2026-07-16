@@ -290,6 +290,7 @@ private:
     GtkButton* preview_camera_button_{};
     GtkButton* choose_folder_button_{};
     GtkButton* maximize_window_button_{};
+    GtkButton* camera_preview_maximize_button_{};
     AdwPreferencesDialog* settings_dialog_{};
     AdwActionRow* settings_output_row_{};
     std::vector<std::filesystem::path> orphaned_recordings_;
@@ -696,10 +697,17 @@ private:
         GtkWidget* widget = gtk_picture_new_for_paintable(paintable);
         g_object_unref(paintable);
         gtk_picture_set_can_shrink(GTK_PICTURE(widget), TRUE);
+        // A floating preview should stay useful at any user-selected size.
+        // Cover avoids the large letterbox bands produced by contain fitting.
+        gtk_picture_set_content_fit(GTK_PICTURE(widget), GTK_CONTENT_FIT_COVER);
         camera_preview_window_ = GTK_WINDOW(gtk_window_new());
         gtk_window_set_title(camera_preview_window_, "Camera Preview");
-        gtk_window_set_default_size(camera_preview_window_, preview.width, preview.height);
-        gtk_window_set_transient_for(camera_preview_window_, window_);
+        const int default_width = std::clamp(preview.width, 360, 480);
+        const int default_height = default_width * preview.height / preview.width;
+        gtk_window_set_default_size(camera_preview_window_, default_width, default_height);
+        gtk_window_set_resizable(camera_preview_window_, TRUE);
+        gtk_window_set_modal(camera_preview_window_, FALSE);
+        install_camera_preview_chrome();
         gtk_window_set_child(camera_preview_window_, widget);
         g_signal_connect(camera_preview_window_, "close-request", G_CALLBACK(on_preview_close), this);
         gtk_window_present(camera_preview_window_);
@@ -709,6 +717,30 @@ private:
             return;
         }
         set_status(std::format("Camera preview: {}×{} at {} FPS", preview.width, preview.height, preview.fps));
+    }
+
+    void install_camera_preview_chrome() {
+        auto* header = GTK_HEADER_BAR(gtk_header_bar_new());
+        gtk_header_bar_set_show_title_buttons(header, FALSE);
+        auto* title = adw_window_title_new("Camera Preview", "Movable and resizable live view");
+        gtk_header_bar_set_title_widget(header, title);
+
+        auto* minimize = gtk_button_new_from_icon_name("window-minimize-symbolic");
+        gtk_widget_set_tooltip_text(minimize, "Minimize preview");
+        g_signal_connect(minimize, "clicked", G_CALLBACK(on_minimize_preview_window), this);
+        gtk_header_bar_pack_end(header, minimize);
+
+        camera_preview_maximize_button_ = GTK_BUTTON(gtk_button_new_from_icon_name("window-maximize-symbolic"));
+        gtk_widget_set_tooltip_text(GTK_WIDGET(camera_preview_maximize_button_), "Maximize preview");
+        g_signal_connect(camera_preview_maximize_button_, "clicked", G_CALLBACK(on_toggle_maximize_preview_window), this);
+        gtk_header_bar_pack_end(header, GTK_WIDGET(camera_preview_maximize_button_));
+
+        auto* close = gtk_button_new_from_icon_name("window-close-symbolic");
+        gtk_widget_set_tooltip_text(close, "Close preview");
+        g_signal_connect(close, "clicked", G_CALLBACK(on_close_preview_window), this);
+        gtk_header_bar_pack_end(header, close);
+        gtk_window_set_titlebar(camera_preview_window_, GTK_WIDGET(header));
+        g_signal_connect(camera_preview_window_, "notify::maximized", G_CALLBACK(on_preview_window_maximized_changed), this);
     }
 
     static gboolean on_preview_close(GtkWindow* preview_window, gpointer data) {
@@ -751,14 +783,31 @@ private:
         gtk_window_minimize(static_cast<RecorderWindow*>(data)->window_);
     }
 
+    static void on_minimize_preview_window(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (self->camera_preview_window_) gtk_window_minimize(self->camera_preview_window_);
+    }
+
     static void on_toggle_maximize_window(GtkButton*, gpointer data) {
         auto* self = static_cast<RecorderWindow*>(data);
         if (gtk_window_is_maximized(self->window_)) gtk_window_unmaximize(self->window_);
         else gtk_window_maximize(self->window_);
     }
 
+    static void on_toggle_maximize_preview_window(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (!self->camera_preview_window_) return;
+        if (gtk_window_is_maximized(self->camera_preview_window_)) gtk_window_unmaximize(self->camera_preview_window_);
+        else gtk_window_maximize(self->camera_preview_window_);
+    }
+
     static void on_close_window_button(GtkButton*, gpointer data) {
         gtk_window_close(static_cast<RecorderWindow*>(data)->window_);
+    }
+
+    static void on_close_preview_window(GtkButton*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        if (self->camera_preview_window_) gtk_window_close(self->camera_preview_window_);
     }
 
     static void on_window_maximized_changed(GtkWindow* window, GParamSpec*, gpointer data) {
@@ -766,6 +815,13 @@ private:
         const bool maximized = gtk_window_is_maximized(window);
         gtk_button_set_icon_name(self->maximize_window_button_, maximized ? "window-restore-symbolic" : "window-maximize-symbolic");
         gtk_widget_set_tooltip_text(GTK_WIDGET(self->maximize_window_button_), maximized ? "Restore" : "Maximize");
+    }
+
+    static void on_preview_window_maximized_changed(GtkWindow* window, GParamSpec*, gpointer data) {
+        auto* self = static_cast<RecorderWindow*>(data);
+        const bool maximized = gtk_window_is_maximized(window);
+        gtk_button_set_icon_name(self->camera_preview_maximize_button_, maximized ? "window-restore-symbolic" : "window-maximize-symbolic");
+        gtk_widget_set_tooltip_text(GTK_WIDGET(self->camera_preview_maximize_button_), maximized ? "Restore preview" : "Maximize preview");
     }
 
     void stop_camera_preview() {
