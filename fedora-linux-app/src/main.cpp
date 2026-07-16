@@ -702,9 +702,8 @@ private:
         gtk_picture_set_content_fit(GTK_PICTURE(widget), GTK_CONTENT_FIT_COVER);
         camera_preview_window_ = GTK_WINDOW(gtk_window_new());
         gtk_window_set_title(camera_preview_window_, "Camera Preview");
-        const int default_width = std::clamp(preview.width, 360, 480);
-        const int default_height = default_width * preview.height / preview.width;
-        gtk_window_set_default_size(camera_preview_window_, default_width, default_height);
+        gtk_window_set_default_size(camera_preview_window_, sr::fedora::kCameraPreviewDefaultWindowSize,
+                                    sr::fedora::kCameraPreviewDefaultWindowSize);
         gtk_window_set_resizable(camera_preview_window_, TRUE);
         gtk_window_set_modal(camera_preview_window_, FALSE);
         install_camera_preview_chrome();
