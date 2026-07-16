@@ -22,7 +22,7 @@ trap 'rm -rf "$stage"' EXIT HUP INT TERM
 source_root="$stage/fedora-screen-recorder-$version"
 mkdir -p "$source_root" "$topdir/SOURCES" "$topdir/SPECS"
 
-cp -a "$app_root/CMakeLists.txt" "$app_root/README.md" "$app_root/install.sh" \
+cp -a "$app_root/CMakeLists.txt" "$app_root/README.md" "$app_root/install.sh" "$app_root/install-rpm.sh" \
     "$app_root/io.github.screenrecorder.Fedora.desktop" \
     "$app_root/io.github.screenrecorder.Fedora.metainfo.xml" \
     "$app_root/io.github.screenrecorder.Fedora.svg" \
