@@ -8,3 +8,4 @@ Terminal=false
 Categories=AudioVideo;Recorder;GTK;
 Keywords=screen;record;video;screencast;pipewire;
 StartupNotify=true
+StartupWMClass=io.github.screenrecorder.Fedora

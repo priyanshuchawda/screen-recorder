@@ -29,12 +29,46 @@ UPower is checked every ten seconds during a recording. A transition to battery 
 
 ## Install and run
 
-This laptop already has the required runtime packages. Install the app for the current user:
+### Install from a release RPM (recommended)
+
+Download the RPM matching your Fedora machine architecture from the repository
+release, then install it with DNF. DNF resolves the supported runtime
+dependencies automatically and registers the app, launcher, and scalable icon
+system-wide:
+
+```bash
+cd ~/Downloads
+sudo dnf install ./fedora-screen-recorder-*.rpm
+```
+
+After installation, press the Super key, search for **Fedora Screen Recorder**,
+and open it. While it is running, right-click its taskbar icon and choose **Pin
+to Dash** to keep it on the taskbar. The installed desktop ID can also be
+launched from a terminal:
+
+```bash
+gtk-launch io.github.screenrecorder.Fedora
+```
+
+If the RPM was built from this checkout, the helper finds it automatically; a
+downloaded RPM can be passed explicitly:
+
+```bash
+cd fedora-linux-app
+./install-rpm.sh
+./install-rpm.sh ~/Downloads/fedora-screen-recorder-*.rpm
+```
+
+### Install from source for the current user
+
+This development route needs the build dependencies listed below, but does not
+need root access. It installs the same app-grid launcher and icon to
+`~/.local/share`:
 
 ```bash
 cd fedora-linux-app
 ./install.sh
-fedora-screen-recorder
+gtk-launch io.github.screenrecorder.Fedora
 ```
 
 Or build and run it directly during development:
@@ -60,7 +94,8 @@ sudo dnf install packaging/rpmbuild/RPMS/$(uname -m)/fedora-screen-recorder-0.1.
 ```
 
 This packages the executable, GNOME desktop entry, AppStream metadata, and
-icon. The generated RPMs are intentionally ignored by Git.
+scalable icon. Install the resulting RPM with `./install-rpm.sh` or `sudo dnf
+install ./…rpm`. The generated RPMs are intentionally ignored by Git.
 
 ## Fedora dependencies
 

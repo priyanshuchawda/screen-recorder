@@ -14,5 +14,7 @@ gst-inspect-1.0 gtk4paintablesink >/dev/null
 desktop-file-validate "$root/io.github.screenrecorder.Fedora.desktop"
 appstreamcli validate --no-net "$root/io.github.screenrecorder.Fedora.metainfo.xml"
 sh -n "$root/packaging/build-rpm.sh"
+sh -n "$root/install.sh"
+sh -n "$root/install-rpm.sh"
 sh -n "$root/verify-ui-runtime.sh"
 "$root/packaging/build-rpm.sh"
