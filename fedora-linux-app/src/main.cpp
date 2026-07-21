@@ -1021,9 +1021,9 @@ private:
                 "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=3 leaky=downstream ! compositor name=mix sink_1::xpos=24 sink_1::ypos=24 "
                 "! videoconvert ! {} ! identity name=encoded_counter signal-handoffs=true ! h264parse config-interval=-1 ! queue ! mux. "
-                "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
+                "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream "
                 "! videoconvert ! tee name=camera_tee "
-                "camera_tee. ! queue max-size-buffers=2 leaky=downstream "
+                "camera_tee. ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream "
                 "! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! mix. {}",
                 source, active_profile.width, active_profile.height, active_profile.fps, encoder_element,

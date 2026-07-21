@@ -2,13 +2,19 @@
 
 #include <gtest/gtest.h>
 
-TEST(CameraPreviewPolicy, AppliesEfficiencySaverAndHighQualityLimits) {
+TEST(CameraPreviewPolicy, AlwaysUsesAHighQualitySmoothLivePreview) {
     const auto ac = sr::fedora::camera_preview_for(sr::fedora::profile_for(false, false, true, 30));
-    EXPECT_EQ(ac.width, 640);
-    EXPECT_EQ(ac.height, 360);
-    EXPECT_EQ(ac.fps, 20);
-    EXPECT_EQ(sr::fedora::camera_preview_for(sr::fedora::profile_for(false, false, false, 30)).fps, 15);
-    EXPECT_EQ(sr::fedora::camera_preview_for(sr::fedora::profile_for(false, true, true, 30)).width, 160);
+    EXPECT_EQ(ac.width, 1280);
+    EXPECT_EQ(ac.height, 720);
+    EXPECT_EQ(ac.fps, 30);
+    const auto battery = sr::fedora::camera_preview_for(sr::fedora::profile_for(false, false, false, 30));
+    EXPECT_EQ(battery.width, 1280);
+    EXPECT_EQ(battery.height, 720);
+    EXPECT_EQ(battery.fps, 30);
+    const auto battery_saver = sr::fedora::camera_preview_for(sr::fedora::profile_for(false, true, true, 30));
+    EXPECT_EQ(battery_saver.width, 1280);
+    EXPECT_EQ(battery_saver.height, 720);
+    EXPECT_EQ(battery_saver.fps, 30);
     EXPECT_EQ(sr::fedora::camera_preview_for(sr::fedora::profile_for(true, false, true, 30)).height, 720);
     EXPECT_EQ(sr::fedora::kCameraPreviewQueueBuffers, 1);
     EXPECT_EQ(sr::fedora::kCameraPreviewDefaultWindowWidth, 304);

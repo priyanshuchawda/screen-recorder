@@ -25,13 +25,11 @@ constexpr bool should_run_camera_preview(bool enabled, bool recording, bool came
 }
 
 constexpr CameraPreviewProfile camera_preview_for(const RecordingProfile& recording) {
-    if (recording.high_quality) return {1280, 720, 30};
-    if (recording.battery_saver) return {160, 90, 5};
-    // Match the Windows efficiency preview on AC: smooth enough for framing
-    // without turning the preview into a second high-resolution workload.
-    if (recording.on_ac) return {640, 360, 20};
-    // Fedora remains power-aware when unplugged, but still feels responsive.
-    return {320, 180, 15};
+    // The live view is a user-facing PiP, so keep it sharp and responsive on
+    // every power profile. Battery Saver continues to limit the recording,
+    // encoder, and recorded camera-PiP settings independently.
+    (void)recording;
+    return {1280, 720, 30};
 }
 
 }  // namespace sr::fedora
