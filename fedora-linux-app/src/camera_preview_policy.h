@@ -16,10 +16,12 @@ constexpr int kCameraPreviewQueueBuffers = 1;
 constexpr int kCameraPreviewDefaultWindowWidth = 304;
 constexpr int kCameraPreviewDefaultWindowHeight = 192;
 
-// The preview is useful while composing a recording, but it must never hold
-// the camera while the recording pipeline needs it for a PiP track.
+// A live preview remains available while recording. When the camera PiP is
+// enabled, the recording pipeline tees its single V4L2 source to both the MP4
+// compositor and the preview sink, so the device is never opened twice.
 constexpr bool should_run_camera_preview(bool enabled, bool recording, bool camera_available) {
-    return enabled && !recording && camera_available;
+    (void)recording;
+    return enabled && camera_available;
 }
 
 constexpr CameraPreviewProfile camera_preview_for(const RecordingProfile& recording) {

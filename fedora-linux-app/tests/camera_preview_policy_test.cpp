@@ -15,9 +15,9 @@ TEST(CameraPreviewPolicy, AppliesEfficiencySaverAndHighQualityLimits) {
     EXPECT_EQ(sr::fedora::kCameraPreviewDefaultWindowHeight, 192);
 }
 
-TEST(CameraPreviewPolicy, RunsOnlyWhenEnabledIdleAndCameraIsAvailable) {
+TEST(CameraPreviewPolicy, RunsWhenEnabledAndCameraIsAvailable) {
     EXPECT_TRUE(sr::fedora::should_run_camera_preview(true, false, true));
+    EXPECT_TRUE(sr::fedora::should_run_camera_preview(true, true, true));
     EXPECT_FALSE(sr::fedora::should_run_camera_preview(false, false, true));
-    EXPECT_FALSE(sr::fedora::should_run_camera_preview(true, true, true));
     EXPECT_FALSE(sr::fedora::should_run_camera_preview(true, false, false));
 }
