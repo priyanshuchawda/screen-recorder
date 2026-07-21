@@ -256,6 +256,9 @@ private:
     bool recording_{};
     bool stopping_{};
     bool muted_{};
+    // True when the visible preview is a branch of pipeline_ rather than its
+    // own V4L2 pipeline. Closing that window must not stop the recording.
+    bool camera_preview_from_recording_{};
     AppSettings settings_;
     RecordingProfile active_profile_{848, 480, 30, 4000, false, false, true};
     std::optional<EncoderChoice> active_encoder_;
@@ -488,7 +491,7 @@ private:
         adw_action_row_add_suffix(camera_device_row, GTK_WIDGET(camera_device_dropdown_));
         adw_action_row_set_activatable_widget(camera_device_row, GTK_WIDGET(camera_device_dropdown_));
         adw_preferences_group_add(camera_group, GTK_WIDGET(camera_device_row));
-        camera_preview_switch_ = add_switch_row(camera_group, "Live camera preview", "Opens by default and pauses while recording.", settings_.camera_preview);
+        camera_preview_switch_ = add_switch_row(camera_group, "Live camera preview", "Opens by default and stays visible while recording.", settings_.camera_preview);
         auto* preview_row = make_action_row("Open live preview", "Show the selected camera now.");
         preview_camera_button_ = GTK_BUTTON(gtk_button_new_with_label("Open"));
         adw_action_row_add_suffix(preview_row, GTK_WIDGET(preview_camera_button_));
@@ -686,14 +689,26 @@ private:
         camera_preview_bus_watch_ = gst_bus_add_watch(preview_bus, on_camera_preview_bus_message, this);
         gst_object_unref(preview_bus);
         GstElement* sink = gst_bin_get_by_name(GST_BIN(camera_preview_pipeline_), "camera_preview_sink");
-        GdkPaintable* paintable = nullptr;
-        if (sink) g_object_get(sink, "paintable", &paintable, nullptr);
+        const bool preview_opened = sink && open_camera_preview_window(sink, false);
         if (sink) gst_object_unref(sink);
-        if (!paintable) {
+        if (!preview_opened) {
             set_status("GStreamer could not create the GTK4 camera preview.");
             stop_camera_preview();
             return;
         }
+        if (gst_element_set_state(camera_preview_pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+            set_status("Camera preview could not acquire the selected device.");
+            stop_camera_preview();
+            return;
+        }
+        set_status(std::format("Camera preview: {}×{} at {} FPS", preview.width, preview.height, preview.fps));
+    }
+
+    bool open_camera_preview_window(GstElement* sink, bool from_recording) {
+        GdkPaintable* paintable = nullptr;
+        g_object_get(sink, "paintable", &paintable, nullptr);
+        if (!paintable) return false;
+
         GtkWidget* widget = gtk_picture_new_for_paintable(paintable);
         g_object_unref(paintable);
         gtk_picture_set_can_shrink(GTK_PICTURE(widget), TRUE);
@@ -701,6 +716,7 @@ private:
         // Cover avoids the large letterbox bands produced by contain fitting.
         gtk_picture_set_content_fit(GTK_PICTURE(widget), GTK_CONTENT_FIT_COVER);
         camera_preview_window_ = GTK_WINDOW(gtk_window_new());
+        camera_preview_from_recording_ = from_recording;
         gtk_window_set_title(camera_preview_window_, "Camera Preview");
         gtk_window_set_default_size(camera_preview_window_, sr::fedora::kCameraPreviewDefaultWindowWidth,
                                     sr::fedora::kCameraPreviewDefaultWindowHeight);
@@ -710,12 +726,7 @@ private:
         gtk_window_set_child(camera_preview_window_, widget);
         g_signal_connect(camera_preview_window_, "close-request", G_CALLBACK(on_preview_close), this);
         gtk_window_present(camera_preview_window_);
-        if (gst_element_set_state(camera_preview_pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
-            set_status("Camera preview could not acquire the selected device.");
-            stop_camera_preview();
-            return;
-        }
-        set_status(std::format("Camera preview: {}×{} at {} FPS", preview.width, preview.height, preview.fps));
+        return true;
     }
 
     void install_camera_preview_chrome() {
@@ -746,6 +757,15 @@ private:
         auto* self = static_cast<RecorderWindow*>(data);
         if (self->camera_preview_window_ != preview_window) return FALSE;
         self->camera_preview_window_ = nullptr;
+        const bool from_recording = self->camera_preview_from_recording_;
+        self->camera_preview_from_recording_ = false;
+        if (from_recording) {
+            // The preview is only one tee branch of the recording pipeline.
+            // Let the window close without interrupting the MP4 capture.
+            gtk_switch_set_active(self->camera_preview_switch_, FALSE);
+            self->set_status("Live camera preview closed; recording continues.");
+            return FALSE;
+        }
         self->stop_camera_preview();
         gtk_switch_set_active(self->camera_preview_switch_, FALSE);
         self->set_status("Live camera preview closed.");
@@ -838,6 +858,17 @@ private:
             camera_preview_window_ = nullptr;
             gtk_window_destroy(preview_window);
         }
+        camera_preview_from_recording_ = false;
+    }
+
+    void close_recording_camera_preview() {
+        if (!camera_preview_from_recording_) return;
+        camera_preview_from_recording_ = false;
+        if (camera_preview_window_) {
+            auto* preview_window = camera_preview_window_;
+            camera_preview_window_ = nullptr;
+            gtk_window_destroy(preview_window);
+        }
     }
 
     static void on_choose_folder(GtkButton*, gpointer data) {
@@ -880,7 +911,10 @@ private:
             self->set_status("No H.264 encoder found. Install gstreamer1-plugin-openh264.");
             return;
         }
-        self->stop_camera_preview();
+        // If the recording includes a camera PiP, replace the standalone
+        // preview with a tee branch from that same capture source. Otherwise
+        // the standalone preview can keep running alongside screen capture.
+        if (gtk_switch_get_active(self->camera_switch_)) self->stop_camera_preview();
         adw_dialog_close(ADW_DIALOG(self->settings_dialog_));
         self->set_controls(true);
         self->set_status("Choose a display or window in the GNOME dialog…");
@@ -951,6 +985,7 @@ private:
         const bool with_system_audio = gtk_switch_get_active(audio_switch_);
         const bool with_microphone = gtk_switch_get_active(microphone_switch_);
         const bool with_camera = gtk_switch_get_active(camera_switch_);
+        const bool with_live_camera_preview = with_camera && settings_.camera_preview && has_element("gtk4paintablesink");
         const auto camera_device = selected_camera_device();
         if (with_camera && (camera_device.empty() || !std::filesystem::exists(camera_device))) {
             set_status("Camera overlay is enabled but the selected V4L2 camera is unavailable.");
@@ -974,15 +1009,25 @@ private:
             const int camera_width = active_profile.high_quality ? 1280 : active_profile.battery_saver ? 160 : 320;
             const int camera_height = active_profile.high_quality ? 720 : active_profile.battery_saver ? 90 : 180;
             const int camera_fps = active_profile.high_quality ? 30 : active_profile.battery_saver ? 5 : 10;
+            const auto live_preview = sr::fedora::camera_preview_for(active_profile);
+            const std::string preview_branch = with_live_camera_preview ? std::format(
+                "camera_tee. ! queue max-size-buffers={} max-size-bytes=0 max-size-time=0 leaky=downstream "
+                "! videoconvert ! videoscale ! videorate drop-only=true "
+                "! video/x-raw,format=BGRA,width={},height={},framerate={}/1 "
+                "! gtk4paintablesink name=recording_camera_preview_sink sync=false ",
+                sr::fedora::kCameraPreviewQueueBuffers,
+                live_preview.width, live_preview.height, live_preview.fps) : "";
             video = std::format(
                 "{}! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
                 "! queue max-size-buffers=3 leaky=downstream ! compositor name=mix sink_1::xpos=24 sink_1::ypos=24 "
                 "! videoconvert ! {} ! identity name=encoded_counter signal-handoffs=true ! h264parse config-interval=-1 ! queue ! mux. "
                 "v4l2src device=\"{}\" do-timestamp=true ! queue max-size-buffers=2 leaky=downstream "
-                "! videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
-                "! queue max-size-buffers=2 leaky=downstream ! mix. ",
+                "! videoconvert ! tee name=camera_tee "
+                "camera_tee. ! queue max-size-buffers=2 leaky=downstream "
+                "! videoscale ! videorate ! video/x-raw,format=I420,width={},height={},framerate={}/1 "
+                "! mix. {}",
                 source, active_profile.width, active_profile.height, active_profile.fps, encoder_element,
-                camera_device, camera_width, camera_height, camera_fps);
+                camera_device, camera_width, camera_height, camera_fps, preview_branch);
         } else {
             // Software fallback retains the same bounded, scaled pipeline.
             video = std::format(
@@ -1043,6 +1088,17 @@ private:
         GstBus* bus = gst_element_get_bus(pipeline_);
         bus_watch_ = gst_bus_add_watch(bus, on_bus_message, this);
         gst_object_unref(bus);
+        if (with_live_camera_preview) {
+            GstElement* preview_sink = gst_bin_get_by_name(
+                GST_BIN(pipeline_), "recording_camera_preview_sink");
+            const bool preview_opened = preview_sink && open_camera_preview_window(preview_sink, true);
+            if (preview_sink) gst_object_unref(preview_sink);
+            if (!preview_opened) {
+                // Recording is still valid without a GTK paintable. Keep the
+                // camera PiP path running and report the degraded UI state.
+                set_status("Camera preview is unavailable; recording will continue with camera PiP.");
+            }
+        }
         if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
             const auto failed_encoder = encoder.name;
             cleanup_pipeline();
@@ -1306,6 +1362,9 @@ private:
             g_source_remove(bus_watch_);
             bus_watch_ = 0;
         }
+        // The GTK paintable is owned by a sink in pipeline_. Destroy its
+        // window before releasing the pipeline at the end of a recording.
+        close_recording_camera_preview();
         if (pipeline_) {
             gst_element_set_state(pipeline_, GST_STATE_NULL);
             gst_object_unref(pipeline_);
