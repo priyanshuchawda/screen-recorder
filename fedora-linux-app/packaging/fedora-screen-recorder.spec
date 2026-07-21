@@ -1,5 +1,5 @@
 Name:           fedora-screen-recorder
-Version:        0.1.4
+Version:        0.1.5
 Release:        1%{?dist}
 Summary:        Power-aware GNOME screen recorder for Fedora
 License:        MIT
@@ -47,6 +47,9 @@ power-aware H.264/AAC MP4 recording.
 %{_metainfodir}/io.github.screenrecorder.Fedora.metainfo.xml
 
 %changelog
+* Tue Jul 21 2026 ScreenRecorder contributors <contributors@screenrecorder.invalid> - 0.1.5-1
+- Keep the live camera preview at 720p and 30 FPS on every power profile.
+
 * Tue Jul 21 2026 ScreenRecorder contributors <contributors@screenrecorder.invalid> - 0.1.4-1
 - Keep the live camera preview visible during a camera PiP recording.
 

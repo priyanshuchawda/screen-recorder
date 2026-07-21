@@ -14,6 +14,11 @@
   <developer_name>ScreenRecorder</developer_name>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.5" date="2026-07-21">
+      <description>
+        <p>Keeps the live camera preview at 720p and 30 FPS independently of Battery Saver.</p>
+      </description>
+    </release>
     <release version="0.1.4" date="2026-07-21">
       <description>
         <p>Keeps the live camera preview visible while recording, sharing one camera capture with picture-in-picture.</p>
