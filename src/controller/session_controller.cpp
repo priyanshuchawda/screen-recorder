@@ -578,10 +578,7 @@ void SessionController::encode_loop() {
                                 const float* src = reinterpret_cast<const float*>(it->buffer.data());
                                 const size_t count = audio_pkt.buffer.size() / sizeof(float);
                                 for (size_t s = 0; s < count; ++s) {
-                                    float mixed = dst[s] + src[s];
-                                    if (mixed > 1.0f) mixed = 1.0f;
-                                    if (mixed < -1.0f) mixed = -1.0f;
-                                    dst[s] = mixed;
+                                    dst[s] = limit_audio_peak(dst[s] + src[s]);
                                 }
                             } else {
                                 // 16-bit PCM mix
@@ -590,9 +587,9 @@ void SessionController::encode_loop() {
                                 const size_t count = audio_pkt.buffer.size() / sizeof(int16_t);
                                 for (size_t s = 0; s < count; ++s) {
                                     int32_t mixed = static_cast<int32_t>(dst[s]) + static_cast<int32_t>(src[s]);
-                                    if (mixed > 32767) mixed = 32767;
-                                    if (mixed < -32768) mixed = -32768;
-                                    dst[s] = static_cast<int16_t>(mixed);
+                                    const float normalized = static_cast<float>(mixed) / 32768.0f;
+                                    const long limited = std::lround(limit_audio_peak(normalized) * 32767.0f);
+                                    dst[s] = static_cast<int16_t>(std::clamp(limited, -32768L, 32767L));
                                 }
                             }
                             audio_pkt.is_silence = false;

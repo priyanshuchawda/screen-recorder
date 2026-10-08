@@ -4,11 +4,23 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cmath>
 #include <limits>
 #include <optional>
 #include <vector>
 
 namespace sr {
+
+// Smoothly limit mixed audio peaks to about -1 dBFS instead of hard clipping.
+inline float limit_audio_peak(float sample) noexcept {
+    constexpr float start = 0.80f;
+    constexpr float knee = 0.09f;
+    const float magnitude = std::fabs(sample);
+    if (magnitude <= start) return sample;
+    const float limited = start + knee *
+        (1.0f - std::exp(-(magnitude - start) / knee));
+    return std::copysign((limited > 0.89f) ? 0.89f : limited, sample);
+}
 
 inline std::optional<size_t> find_loopback_mix_candidate(
     const AudioPacket& mic,

@@ -9,6 +9,7 @@
 
 #include <avrt.h>
 #include <audiopolicy.h>
+#include <algorithm>
 #include <cstring>
 #include <cmath>
 #pragma comment(lib, "avrt.lib")
@@ -147,6 +148,8 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
 
 bool AudioEngine::start() {
     sample_count_ = 0;
+    mic_level_envelope_ = 0.0f;
+    mic_gain_linear_ = 1.0f;
     running_.store(true, std::memory_order_release);
 
     HRESULT hr = audio_client_->Start();
@@ -194,13 +197,17 @@ void AudioEngine::capture_loop() {
         SR_LOG_WARN(L"AvSetMmThreadCharacteristics failed (non-fatal)");
     }
 
-    // Noise gate: for microphone mode, zero audio blocks whose RMS
-    // is below this threshold. This eliminates constant mic hiss/static.
-    // Threshold is tuned for typical laptop/USB mics.
+    // Gate only near the noise floor, then apply slow automatic mic leveling.
+    // This keeps quiet speech while lifting low-level microphone input.
     const bool apply_noise_gate = (mode_ == AudioCaptureMode::Microphone);
-    // For 32-bit float: ~0.003 (-50 dBFS). For 16-bit int: ~100/32768.
-    constexpr float kNoiseGateThresholdFloat = 0.003f;
-    constexpr int32_t kNoiseGateThresholdInt16 = 100; // ~-50 dBFS
+    constexpr float kNoiseGateThresholdFloat = 0.001f; // -60 dBFS
+    constexpr int32_t kNoiseGateThresholdInt16 = 33;   // about -60 dBFS
+    constexpr float kMicTargetRms = 0.126f;            // about -18 dBFS
+    constexpr float kMicMinGain = 0.25f;
+    constexpr float kMicMaxGain = 4.0f;                // +12 dB maximum boost
+    if (apply_noise_gate) {
+        SR_LOG_INFO(L"Microphone auto-level active: target -18 dBFS, max boost +12 dB");
+    }
 
     std::vector<uint8_t> resampled_buf;
     while (running_.load(std::memory_order_acquire)) {
@@ -227,6 +234,7 @@ void AudioEngine::capture_loop() {
 
             bool silence = muted_.load(std::memory_order_relaxed)
                           || (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
+            float mic_rms = 0.0f;
 
             // Noise gate for microphone: compute RMS and gate if below threshold
             if (apply_noise_gate && !silence && data && byte_count > 0) {
@@ -237,8 +245,8 @@ void AudioEngine::capture_loop() {
                     for (size_t i = 0; i < count; ++i) {
                         sum_sq += static_cast<double>(samples[i]) * static_cast<double>(samples[i]);
                     }
-                    float rms = count > 0 ? static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count))) : 0.0f;
-                    if (rms < kNoiseGateThresholdFloat) {
+                    mic_rms = count > 0 ? static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count))) : 0.0f;
+                    if (mic_rms < kNoiseGateThresholdFloat) {
                         silence = true;
                     }
                 } else if (bits_per_sample_ == 16) {
@@ -249,10 +257,27 @@ void AudioEngine::capture_loop() {
                         sum_sq += static_cast<int64_t>(samples[i]) * static_cast<int64_t>(samples[i]);
                     }
                     double rms = count > 0 ? std::sqrt(static_cast<double>(sum_sq) / static_cast<double>(count)) : 0.0;
+                    mic_rms = static_cast<float>(rms / 32768.0);
                     if (rms < static_cast<double>(kNoiseGateThresholdInt16)) {
                         silence = true;
                     }
                 }
+            }
+
+            float packet_mic_gain = 1.0f;
+            if (apply_noise_gate && !silence && mic_rms > 0.0f) {
+                // Smooth the level estimate to prevent gain pumping between
+                // individual 10 ms WASAPI packets. Reduce gain quickly to
+                // protect loud speech; restore it more gradually.
+                const float level_alpha = mic_rms > mic_level_envelope_ ? 0.25f : 0.06f;
+                mic_level_envelope_ += level_alpha * (mic_rms - mic_level_envelope_);
+                const float safe_level = (mic_level_envelope_ > 0.0001f)
+                    ? mic_level_envelope_ : 0.0001f;
+                const float target_gain = std::clamp(
+                    kMicTargetRms / safe_level, kMicMinGain, kMicMaxGain);
+                const float gain_alpha = target_gain < mic_gain_linear_ ? 0.5f : 0.04f;
+                mic_gain_linear_ += gain_alpha * (target_gain - mic_gain_linear_);
+                packet_mic_gain = mic_gain_linear_;
             }
 
             // T032: resample if native rate != 48 kHz
@@ -285,6 +310,37 @@ void AudioEngine::capture_loop() {
             } else {
                 std::memcpy(pkt.buffer.data(), pkt_data, pkt_bytes);
                 pkt.is_silence = false;
+
+                // Apply microphone-only automatic level control after any
+                // resampling. A soft peak limiter avoids hard clipping when
+                // the adaptive gain raises a transient.
+                if (apply_noise_gate) {
+                    auto limit_sample = [](float value) {
+                        constexpr float limit_start = 0.80f;
+                        constexpr float limit_knee = 0.09f; // ceiling about -1 dBFS
+                        const float magnitude = std::fabs(value);
+                        if (magnitude <= limit_start) return value;
+                        const float limited = limit_start + limit_knee *
+                            (1.0f - std::exp(-(magnitude - limit_start) / limit_knee));
+                        return std::copysign((limited > 0.999f) ? 0.999f : limited, value);
+                    };
+                    if (bits_per_sample_ == 32) {
+                        auto* samples = reinterpret_cast<float*>(pkt.buffer.data());
+                        const size_t count = pkt.buffer.size() / sizeof(float);
+                        for (size_t i = 0; i < count; ++i) {
+                            samples[i] = limit_sample(samples[i] * packet_mic_gain);
+                        }
+                    } else if (bits_per_sample_ == 16) {
+                        auto* samples = reinterpret_cast<int16_t*>(pkt.buffer.data());
+                        const size_t count = pkt.buffer.size() / sizeof(int16_t);
+                        for (size_t i = 0; i < count; ++i) {
+                            const float normalized = static_cast<float>(samples[i]) / 32768.0f;
+                            const float limited = limit_sample(normalized * packet_mic_gain);
+                            const long scaled = std::lround(limited * 32767.0f);
+                            samples[i] = static_cast<int16_t>(std::clamp(scaled, -32768L, 32767L));
+                        }
+                    }
+                }
             }
 
             capture_client_->ReleaseBuffer(frames_available);

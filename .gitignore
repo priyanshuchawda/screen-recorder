@@ -1,6 +1,7 @@
 # Build outputs
 build/
 build-rel/
+build_local_audio/
 out/
 x64/
 Debug/

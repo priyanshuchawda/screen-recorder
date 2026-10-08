@@ -155,6 +155,8 @@ private:
 
     int64_t  pts_anchor_100ns_ = 0;   // 100ns epoch offset
     int64_t  sample_count_     = 0;   // monotonic sample counter for PTS
+    float    mic_level_envelope_ = 0.0f; // smoothed microphone RMS for automatic level
+    float    mic_gain_linear_ = 1.0f;    // adaptive gain, capped to avoid runaway noise
 };
 
 } // namespace sr

@@ -18,7 +18,7 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 - Hardware-first H.264 video + AAC audio muxed to MP4 using Media Foundation
 - Intel GPU / Quick Sync preference when available, with graceful software fallback
 - **System Audio Capture**: Record desktop/YouTube audio via WASAPI Loopback
-- **Microphone Noise Gate**: RMS-based gating to eliminate background hiss
+- **Microphone Auto-Level**: Smooth automatic speech gain with a soft peak limiter
 - **Camera Overlay**: Throttled efficient default preview with an HQ 720p-capable profile
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
 - **High Quality Mode**: Optional 1080p-capable hardware profile with higher bitrate recording (8/10 Mbps) on AC or battery
@@ -74,16 +74,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.10-windows-x64.zip`
+- `ScreenRecorder-0.3.11-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.10
-git push origin v0.3.10
-gh release create v0.3.10 ScreenRecorder-0.3.10-windows-x64.zip --title "v0.3.10" --notes "Release v0.3.10: verified orphan recovery, responsive stop/finalize handling, and stability updates."
+git tag v0.3.11
+git push origin v0.3.11
+gh release create v0.3.11 ScreenRecorder-0.3.11-windows-x64.zip --title "Screen Recorder v0.3.11" --notes "Improves microphone audibility with smooth automatic level control and soft peak limiting."
 ```
 
 ## Project Layout
