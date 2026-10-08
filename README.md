@@ -21,7 +21,7 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 - **Microphone Auto-Level**: Smooth automatic speech gain with a soft peak limiter
 - **Camera Overlay**: Throttled efficient default preview with an HQ 720p-capable profile
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
-- **High Quality Mode**: Optional 1080p-capable hardware profile with higher bitrate recording (8/10 Mbps) on AC or battery
+- **Resolution choices**: 360p, 480p, 720p, and 1080p output profiles with frame-rate-aware bitrates
 - **Recording Diagnostics**: Per-session local `.diagnostics.txt` files show adapter, encoder mode, power state, profile, and completion counters
 - Embedded app icon for the main and settings windows
 - Pause/resume with monotonic timestamp rebasing
@@ -31,8 +31,8 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 
 ## Performance Profiles
 
-- **Default mode** targets low RAM and battery use: fixed 848x480 recording target, bounded frame queues, hardware-first encoding, and battery-aware throttling.
-- **High Quality mode** is opt-in: 1080p-capable recording with higher bitrate and HQ camera preview on AC or battery.
+- **Resolution presets** use 640x360, 848x480, 1280x720, or 1920x1080 output targets. The main-window resolution button cycles through presets; Settings offers the full selector.
+- On battery, 360p and 480p use the existing power-saving encoder caps. 720p and 1080p preserve the selected quality profile, which can use more battery and storage.
 - **Camera preview** intentionally uses a throttled RGB32/GDI overlay path today. It avoids adding a second GPU composition pipeline, keeps fallback simple across webcams, and is rate-limited to reduce CPU/battery cost. Screen capture and video encoding still use the D3D11/Media Foundation hardware path when available.
 - Every recording writes a small diagnostics file beside the MP4 so the selected adapter, encoder mode (`HW`, `SW`, or fallback), power state, profile, and completion status can be verified after the run.
 
@@ -74,16 +74,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.11-windows-x64.zip`
+- `ScreenRecorder-0.3.12-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.11
-git push origin v0.3.11
-gh release create v0.3.11 ScreenRecorder-0.3.11-windows-x64.zip --title "Screen Recorder v0.3.11" --notes "Improves microphone audibility with smooth automatic level control and soft peak limiting."
+git tag v0.3.12
+git push origin v0.3.12
+gh release create v0.3.12 ScreenRecorder-0.3.12-windows-x64.zip --title "Screen Recorder v0.3.12" --notes "Adds selectable 360p, 480p, 720p, and 1080p recording resolutions."
 ```
 
 ## Project Layout

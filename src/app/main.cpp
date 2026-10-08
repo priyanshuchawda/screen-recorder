@@ -9,6 +9,7 @@
 #include <dwmapi.h>
 #include <string>
 #include <cstdio>
+#include <iterator>
 #include <thread>
 #include "utils/logging.h"
 #include "utils/qpc_clock.h"
@@ -40,7 +41,7 @@
 #define ID_LABEL_DROPPED 1009
 #define ID_BTN_SETTINGS  1010
 #define ID_LABEL_PROFILE 1011
-#define ID_BTN_HQ        1012
+#define ID_BTN_RESOLUTION 1012
 #define ID_TIMER_UPDATE  1
 
 // Custom messages for marshalling background thread callbacks to UI thread
@@ -62,7 +63,7 @@ static HWND g_btn_stop      = nullptr;
 static HWND g_btn_pause     = nullptr;
 static HWND g_btn_mute      = nullptr;
 static HWND g_btn_settings  = nullptr;
-static HWND g_btn_hq        = nullptr;
+static HWND g_btn_resolution = nullptr;
 static HWND g_lbl_status    = nullptr;
 static HWND g_lbl_time      = nullptr;
 static HWND g_lbl_fps       = nullptr;
@@ -140,28 +141,28 @@ static void ApplyEncoderProfileFromSettings()
     sr::EncoderProfile profile;
     profile.fps         = g_settings.fps;
     profile.bitrate_bps = g_settings.bitrate_bps;
-    const auto resolution = sr::recording_resolution_for_quality(g_settings.high_quality);
+    const auto resolution = sr::recording_resolution_for_height(g_settings.resolution_height);
     profile.width       = resolution.width;
     profile.height      = resolution.height;
-    g_controller.set_encoder_profile(profile, g_settings.high_quality);
+    g_controller.set_encoder_profile(profile, g_settings.is_high_quality());
 }
 
 static void ApplyCameraProfileFromSettings()
 {
-    g_camera_overlay.set_high_quality(g_settings.high_quality);
+    g_camera_overlay.set_high_quality(g_settings.is_high_quality());
 }
 
 static void UpdateProfileLabel()
 {
     if (!g_lbl_profile) return;
-    const auto resolution = sr::recording_resolution_for_quality(g_settings.high_quality);
+    const auto resolution = sr::recording_resolution_for_height(g_settings.resolution_height);
     wchar_t prof_buf[96];
     _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
         L"%ufps | %ux%u | %uMbps%s",
         g_settings.fps,
         resolution.width, resolution.height,
         g_settings.bitrate_bps / 1'000'000,
-        g_settings.high_quality ? L" | HQ" : L"");
+        g_settings.is_high_quality() ? L" | HQ" : L"");
     SetWindowTextW(g_lbl_profile, prof_buf);
 }
 
@@ -244,11 +245,14 @@ void UpdateUI()
     EnableWindow(g_btn_stop,  can_stop  ? TRUE : FALSE);
     EnableWindow(g_btn_pause, can_stop  ? TRUE : FALSE);
     EnableWindow(g_btn_mute,  can_stop  ? TRUE : FALSE);
-    EnableWindow(g_btn_hq,    can_start ? TRUE : FALSE);
+    EnableWindow(g_btn_resolution, can_start ? TRUE : FALSE);
 
     SetWindowTextW(g_btn_pause, (state == sr::SessionState::Paused) ? L"Resume" : L"Pause");
     SetWindowTextW(g_btn_mute,  g_controller.is_muted() ? L"Unmute" : L"Mute");
-    SetWindowTextW(g_btn_hq,    g_settings.high_quality ? L"HQ On" : L"HQ Off");
+    wchar_t resolution_label[16]{};
+    _snwprintf_s(resolution_label, _countof(resolution_label), _TRUNCATE,
+                 L"%up", g_settings.resolution_height);
+    SetWindowTextW(g_btn_resolution, resolution_label);
 
     // Elapsed time
     if (display_state == sr::SessionState::Recording ||
@@ -316,7 +320,7 @@ static void ApplyUIFont(HWND hwnd) {
     if (g_btn_pause)    SendMessageW(g_btn_pause,    WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
     if (g_btn_mute)     SendMessageW(g_btn_mute,     WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
     if (g_btn_settings) SendMessageW(g_btn_settings, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
-    if (g_btn_hq)       SendMessageW(g_btn_hq,       WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
+    if (g_btn_resolution) SendMessageW(g_btn_resolution, WM_SETFONT, reinterpret_cast<WPARAM>(g_font_ui), TRUE);
     if (g_lbl_status)   SendMessageW(g_lbl_status,   WM_SETFONT, reinterpret_cast<WPARAM>(g_font_bold), TRUE);
     if (g_lbl_time)     SendMessageW(g_lbl_time,     WM_SETFONT, reinterpret_cast<WPARAM>(metric_font), TRUE);
     if (g_lbl_fps)      SendMessageW(g_lbl_fps,      WM_SETFONT, reinterpret_cast<WPARAM>(metric_font), TRUE);
@@ -556,16 +560,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         g_btn_settings = CreateWindowW(L"BUTTON", L"Settings",
                          WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                          12, y, 132, 28, hwnd, (HMENU)ID_BTN_SETTINGS, nullptr, nullptr);
-        g_btn_hq = CreateWindowW(L"BUTTON", L"HQ Off",
+        g_btn_resolution = CreateWindowW(L"BUTTON", L"480p",
                    WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                   156, y, 92, 28, hwnd, (HMENU)ID_BTN_HQ, nullptr, nullptr);
+                         156, y, 92, 28, hwnd, (HMENU)ID_BTN_RESOLUTION, nullptr, nullptr);
 
         InstallButtonHover(g_btn_start);
         InstallButtonHover(g_btn_stop);
         InstallButtonHover(g_btn_pause);
         InstallButtonHover(g_btn_mute);
         InstallButtonHover(g_btn_settings);
-        InstallButtonHover(g_btn_hq);
+        InstallButtonHover(g_btn_resolution);
 
         // Profile label: e.g. "30fps | 848x480 | 4Mbps"
         g_lbl_profile = CreateWindowW(L"STATIC", L"30fps | 848x480 | 4Mbps",
@@ -780,21 +784,31 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 UpdateProfileLabel();
                 // Refresh path display
                 SetWindowTextW(g_lbl_path, g_storage.outputDirectory().c_str());
-                SR_LOG_INFO(L"Settings applied: %u fps, high_quality=%s, dir=%s",
+                SR_LOG_INFO(L"Settings applied: %u fps, resolution=%up, dir=%s",
                             g_settings.fps,
-                            g_settings.high_quality ? L"on" : L"off",
+                            g_settings.resolution_height,
                             g_settings.output_dir.empty() ? L"(default)" : g_settings.output_dir.c_str());
             }
             break;
 
-        case ID_BTN_HQ:
+        case ID_BTN_RESOLUTION:
             if (!g_controller.state_is_idle()) {
                 MessageBoxW(hwnd,
-                    L"Please stop the recording before changing High Quality mode.",
-                    L"High Quality", MB_ICONINFORMATION | MB_OK);
+                    L"Please stop the recording before changing resolution.",
+                    L"Resolution", MB_ICONINFORMATION | MB_OK);
                 break;
             }
-            g_settings.set_high_quality(!g_settings.high_quality);
+            constexpr uint32_t resolutions[] = {360, 480, 720, 1080};
+            uint32_t next = resolutions[0];
+            {
+                for (size_t i = 0; i < std::size(resolutions); ++i) {
+                    if (resolutions[i] == g_settings.resolution_height) {
+                        next = resolutions[(i + 1) % std::size(resolutions)];
+                        break;
+                    }
+                }
+                g_settings.set_resolution(next);
+            }
             ApplyEncoderProfileFromSettings();
             if (g_settings.camera_overlay_enabled && g_camera_overlay.is_running()) {
                 g_camera_overlay.stop();
@@ -805,9 +819,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             g_settings.save();
             UpdateProfileLabel();
-            SR_LOG_INFO(L"High Quality toggled: %s (%u bps)",
-                        g_settings.high_quality ? L"on" : L"off",
-                        g_settings.bitrate_bps);
+            SR_LOG_INFO(L"Resolution changed: %up (%u bps)",
+                        g_settings.resolution_height, g_settings.bitrate_bps);
             UpdateUI();
             break;
         }

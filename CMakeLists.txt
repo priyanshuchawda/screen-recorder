@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ScreenRecorder VERSION 0.3.11 LANGUAGES CXX)
+project(ScreenRecorder VERSION 0.3.12 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

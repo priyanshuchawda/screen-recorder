@@ -29,7 +29,7 @@ constexpr int IDC_BTN_CANCEL = 2006;
 constexpr int IDC_LBL_FPS    = 2007;
 constexpr int IDC_LBL_DIR    = 2008;
 constexpr int IDC_CHK_CAMERA = 2009;
-constexpr int IDC_CHK_HQ     = 2010;
+constexpr int IDC_COMBO_RES  = 2010;
 
 // ============================================================================
 // Dialog internal state (per-instance, allocated on the stack of the caller)
@@ -142,11 +142,11 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         EnableDarkTitleBar(hwnd);
 
-        // ---------- FPS group ----------
+        // ---------- Frame rate and resolution ----------
         int y = 16;
         CreateWindowW(L"BUTTON", L"Video Quality",
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-            14, y, 690, 82, hwnd, ControlId(IDC_LBL_FPS), nullptr, nullptr);
+            14, y, 690, 150, hwnd, ControlId(IDC_LBL_FPS), nullptr, nullptr);
 
         CreateWindowW(L"BUTTON", L"30 fps  (4 Mbps \u2014 recommended for battery)",
             WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON | WS_GROUP,
@@ -163,16 +163,30 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
             CheckRadioButton(hwnd, IDC_RADIO_30, IDC_RADIO_60, IDC_RADIO_30);
         }
 
-        // ---------- High Quality checkbox ----------
-        y += 96;
-        CreateWindowW(L"BUTTON", L"High Quality (8/10 Mbps \u2014 larger files, sharper video)",
-            WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-            18, y, 680, 22, hwnd, ControlId(IDC_CHK_HQ), nullptr, nullptr);
-        CheckDlgButton(hwnd, IDC_CHK_HQ,
-            state->settings->high_quality ? BST_CHECKED : BST_UNCHECKED);
+        CreateWindowW(L"STATIC", L"Resolution:", WS_CHILD | WS_VISIBLE | SS_LEFT,
+            28, y + 88, 100, 24, hwnd, nullptr, nullptr, nullptr);
+        HWND resolution_combo = CreateWindowW(WC_COMBOBOXW, L"",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+            130, y + 84, 250, 140, hwnd, ControlId(IDC_COMBO_RES), nullptr, nullptr);
+        constexpr uint32_t heights[] = {360, 480, 720, 1080};
+        for (const uint32_t height : heights) {
+            wchar_t label[80]{};
+            const auto resolution = recording_resolution_for_height(height);
+            _snwprintf_s(label, _countof(label), _TRUNCATE, L"%up  (%u x %u)",
+                         height, resolution.width, resolution.height);
+            const LRESULT index = SendMessageW(resolution_combo, CB_ADDSTRING, 0,
+                                                reinterpret_cast<LPARAM>(label));
+            SendMessageW(resolution_combo, CB_SETITEMDATA, index, height);
+            if (height == state->settings->resolution_height) {
+                SendMessageW(resolution_combo, CB_SETCURSEL, index, 0);
+            }
+        }
+        CreateWindowW(L"STATIC", L"Higher resolutions use more battery and storage.",
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            390, y + 88, 300, 24, hwnd, nullptr, nullptr, nullptr);
 
         // ---------- Output directory group ----------
-        y += 34;
+        y += 162;
         CreateWindowW(L"BUTTON", L"Output Directory",
             WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
             14, y, 690, 72, hwnd, ControlId(IDC_LBL_DIR), nullptr, nullptr);
@@ -265,8 +279,17 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
                 state->settings->fps = IsDlgButtonChecked(hwnd, IDC_RADIO_60)
                     ? 60u : 30u;
 
-                state->settings->set_high_quality(
-                    IsDlgButtonChecked(hwnd, IDC_CHK_HQ) == BST_CHECKED);
+                {
+                    HWND resolution_combo = GetDlgItem(hwnd, IDC_COMBO_RES);
+                    const LRESULT selected = SendMessageW(resolution_combo, CB_GETCURSEL, 0, 0);
+                    if (selected != CB_ERR) {
+                        const auto height = static_cast<uint32_t>(
+                            SendMessageW(resolution_combo, CB_GETITEMDATA, selected, 0));
+                        state->settings->set_resolution(height);
+                    }
+                }
+                state->settings->bitrate_bps = AppSettings::compute_bitrate(
+                    state->settings->fps, state->settings->resolution_height);
 
                 // Read output dir
                 wchar_t dir[MAX_PATH]{};

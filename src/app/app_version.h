@@ -2,7 +2,7 @@
 
 namespace sr {
 
-inline constexpr wchar_t kAppDisplayVersion[] = L"0.3.11";
-inline constexpr wchar_t kAppWindowTitle[]    = L"Screen Recorder v0.3.11";
+inline constexpr wchar_t kAppDisplayVersion[] = L"0.3.12";
+inline constexpr wchar_t kAppWindowTitle[]    = L"Screen Recorder v0.3.12";
 
 }  // namespace sr

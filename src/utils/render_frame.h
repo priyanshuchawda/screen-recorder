@@ -77,8 +77,14 @@ struct RecordingResolution {
 inline constexpr RecordingResolution kEfficiencyRecordingResolution{848, 480};
 inline constexpr RecordingResolution kHighQualityRecordingResolution{1920, 1080};
 
-constexpr RecordingResolution recording_resolution_for_quality(bool high_quality) noexcept {
-    return high_quality ? kHighQualityRecordingResolution : kEfficiencyRecordingResolution;
+constexpr RecordingResolution recording_resolution_for_height(uint32_t height) noexcept {
+    switch (height) {
+        case 360: return {640, 360};
+        case 720: return {1280, 720};
+        case 1080: return kHighQualityRecordingResolution;
+        case 480:
+        default: return kEfficiencyRecordingResolution;
+    }
 }
 
 constexpr RecordingResolution clamp_recording_resolution(

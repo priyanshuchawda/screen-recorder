@@ -29,8 +29,8 @@ import { initSimulator } from './modules/simulator.js';
         if (node && text !== undefined) node.textContent = text;
       };
       setDownload("https://github.com/priyanshuchawda/screen-recorder/releases/latest");
-      setText("release-version", "v0.3.11");
-      setText("release-asset", "ScreenRecorder-0.3.11-windows-x64.zip");
+      setText("release-version", "v0.3.12");
+      setText("release-asset", "ScreenRecorder-0.3.12-windows-x64.zip");
       setText("release-meta", "Open the latest release and choose the Windows x64 ZIP asset.");
     });
 

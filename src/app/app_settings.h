@@ -1,121 +1,112 @@
 #pragma once
-// app_settings.h — Application-level settings with INI file persistence
-// T025/T026/T027: FPS preset (30/60), output directory, persisted across restarts
-// Stored at: %APPDATA%\ScreenRecorder\settings.ini
+// Application settings stored at %APPDATA%\ScreenRecorder\settings.ini.
 
 #include <windows.h>
 #include <shlobj.h>
-#include <string>
+#include <cstdint>
 #include <filesystem>
+#include <string>
+
 #include "utils/logging.h"
+#include "utils/render_frame.h"
 
 namespace sr {
 
 struct AppSettings {
-    // Video settings (T026)
-    uint32_t     fps         = 30;           // 30 or 60
-    uint32_t     bitrate_bps = 4'000'000;    // auto-selected based on fps + high_quality
-    bool         high_quality = false;       // when true, uses higher bitrate for better quality
+    uint32_t fps = 30;
+    uint32_t resolution_height = 480;
+    uint32_t bitrate_bps = 4'000'000;
+    std::wstring output_dir;
+    bool camera_overlay_enabled = false;
 
-    // Storage settings (T025)
-    std::wstring output_dir;                 // empty = use Videos\Recordings default
+    bool is_high_quality() const noexcept { return resolution_height >= 720; }
 
-    // Camera overlay settings
-    bool         camera_overlay_enabled = false;
-
-    // --------------------------------------------------------------------------
-    // Load from %APPDATA%\ScreenRecorder\settings.ini
-    // Returns false only on hard failure; missing file is treated as "use defaults"
     bool load() {
-        std::wstring ini = ini_path();
+        const std::wstring ini = ini_path();
         if (ini.empty()) return false;
 
-        // FPS
-        fps = static_cast<uint32_t>(
-            GetPrivateProfileIntW(L"Video", L"fps", 30, ini.c_str()));
-        if (fps != 30 && fps != 60) fps = 30;  // enforce valid values
+        fps = static_cast<uint32_t>(GetPrivateProfileIntW(L"Video", L"fps", 30, ini.c_str()));
+        if (fps != 30 && fps != 60) fps = 30;
 
-        // High quality mode
-        high_quality =
-            GetPrivateProfileIntW(L"Video", L"high_quality", 0, ini.c_str()) != 0;
+        const uint32_t stored_height = static_cast<uint32_t>(
+            GetPrivateProfileIntW(L"Video", L"resolution_height", 0, ini.c_str()));
+        if (is_supported_resolution(stored_height)) {
+            resolution_height = stored_height;
+        } else {
+            // Migrate settings from releases that stored only a High Quality flag.
+            resolution_height = GetPrivateProfileIntW(
+                L"Video", L"high_quality", 0, ini.c_str()) != 0 ? 1080u : 480u;
+        }
+        bitrate_bps = compute_bitrate(fps, resolution_height);
 
-        // Auto-assign bitrate based on fps + high_quality
-        bitrate_bps = compute_bitrate(fps, high_quality);
-
-        // Output directory
         wchar_t buf[MAX_PATH]{};
-        GetPrivateProfileStringW(L"Storage", L"output_dir", L"",
-                                 buf, MAX_PATH, ini.c_str());
+        GetPrivateProfileStringW(L"Storage", L"output_dir", L"", buf, MAX_PATH, ini.c_str());
         output_dir = buf;
+        camera_overlay_enabled = GetPrivateProfileIntW(
+            L"Camera", L"overlay_enabled", 0, ini.c_str()) != 0;
 
-        camera_overlay_enabled =
-            GetPrivateProfileIntW(L"Camera", L"overlay_enabled", 0, ini.c_str()) != 0;
-
-        SR_LOG_INFO(L"Settings loaded: fps=%u, high_quality=%s, output_dir=%s, camera_overlay=%s",
-                    fps,
-                    high_quality ? L"on" : L"off",
+        SR_LOG_INFO(L"Settings loaded: fps=%u, resolution=%up, bitrate=%u, output_dir=%s, camera_overlay=%s",
+                    fps, resolution_height, bitrate_bps,
                     output_dir.empty() ? L"(default)" : output_dir.c_str(),
                     camera_overlay_enabled ? L"on" : L"off");
         return true;
     }
 
-    // --------------------------------------------------------------------------
-    // Save to INI
     bool save() const {
-        std::wstring ini = ini_path();
+        const std::wstring ini = ini_path();
         if (ini.empty()) return false;
 
-        // Ensure parent directory exists
         std::error_code ec;
-        std::filesystem::create_directories(
-            std::filesystem::path(ini).parent_path(), ec);
+        std::filesystem::create_directories(std::filesystem::path(ini).parent_path(), ec);
         if (ec) {
             SR_LOG_ERROR(L"Cannot create settings directory");
             return false;
         }
 
-        wchar_t buf[16];
+        wchar_t buf[16]{};
         _snwprintf_s(buf, _countof(buf), _TRUNCATE, L"%u", fps);
-        WritePrivateProfileStringW(L"Video",   L"fps",        buf,             ini.c_str());
-        WritePrivateProfileStringW(L"Video",   L"high_quality",
-                                   high_quality ? L"1" : L"0", ini.c_str());
+        WritePrivateProfileStringW(L"Video", L"fps", buf, ini.c_str());
+        _snwprintf_s(buf, _countof(buf), _TRUNCATE, L"%u", resolution_height);
+        WritePrivateProfileStringW(L"Video", L"resolution_height", buf, ini.c_str());
         WritePrivateProfileStringW(L"Storage", L"output_dir", output_dir.c_str(), ini.c_str());
-        WritePrivateProfileStringW(L"Camera",  L"overlay_enabled",
+        WritePrivateProfileStringW(L"Camera", L"overlay_enabled",
                                    camera_overlay_enabled ? L"1" : L"0", ini.c_str());
 
-        SR_LOG_INFO(L"Settings saved: fps=%u, high_quality=%s, output_dir=%s, camera_overlay=%s",
-                    fps,
-                    high_quality ? L"on" : L"off",
+        SR_LOG_INFO(L"Settings saved: fps=%u, resolution=%up, output_dir=%s, camera_overlay=%s",
+                    fps, resolution_height,
                     output_dir.empty() ? L"(default)" : output_dir.c_str(),
                     camera_overlay_enabled ? L"on" : L"off");
         return true;
     }
 
-    // --------------------------------------------------------------------------
-    // Path to INI file: %APPDATA%\ScreenRecorder\settings.ini
     static std::wstring ini_path() {
         wchar_t appdata[MAX_PATH]{};
         if (!SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appdata))) {
-            // Fallback
             GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH);
         }
         if (appdata[0] == L'\0') return {};
-        std::wstring path = std::wstring(appdata) + L"\\ScreenRecorder\\settings.ini";
-        return path;
+        return std::wstring(appdata) + L"\\ScreenRecorder\\settings.ini";
     }
 
-    // Compute bitrate based on fps and high-quality flag.
-    // Defaults target the fixed 848x480 laptop profile; HQ remains opt-in.
-    static uint32_t compute_bitrate(uint32_t fps, bool hq) {
-        if (hq) {
-            return (fps == 60) ? 10'000'000 : 8'000'000;
+    static bool is_supported_resolution(uint32_t height) noexcept {
+        return height == 360 || height == 480 || height == 720 || height == 1080;
+    }
+
+    static uint32_t compute_bitrate(uint32_t fps, uint32_t height) noexcept {
+        const bool sixty_fps = fps == 60;
+        switch (height) {
+            case 360: return sixty_fps ? 2'500'000 : 1'500'000;
+            case 720: return sixty_fps ? 8'000'000 : 5'000'000;
+            case 1080: return sixty_fps ? 10'000'000 : 8'000'000;
+            case 480:
+            default: return sixty_fps ? 6'000'000 : 4'000'000;
         }
-        return (fps == 60) ? 6'000'000 : 4'000'000;
     }
 
-    void set_high_quality(bool enabled) {
-        high_quality = enabled;
-        bitrate_bps = compute_bitrate(fps, high_quality);
+    void set_resolution(uint32_t height) noexcept {
+        if (!is_supported_resolution(height)) return;
+        resolution_height = height;
+        bitrate_bps = compute_bitrate(fps, resolution_height);
     }
 };
 

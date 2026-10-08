@@ -38,10 +38,13 @@ protected:
             GetPrivateProfileIntW(L"Video", L"fps", 30, test_ini_.c_str()));
         if (s.fps != 30 && s.fps != 60) s.fps = 30;
 
-        s.high_quality =
-            GetPrivateProfileIntW(L"Video", L"high_quality", 0, test_ini_.c_str()) != 0;
-
-        s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, s.high_quality);
+        s.resolution_height = static_cast<uint32_t>(GetPrivateProfileIntW(
+            L"Video", L"resolution_height", 0, test_ini_.c_str()));
+        if (!sr::AppSettings::is_supported_resolution(s.resolution_height)) {
+            s.resolution_height = GetPrivateProfileIntW(
+                L"Video", L"high_quality", 0, test_ini_.c_str()) != 0 ? 1080u : 480u;
+        }
+        s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, s.resolution_height);
 
         wchar_t buf[MAX_PATH]{};
         GetPrivateProfileStringW(L"Storage", L"output_dir", L"",
@@ -55,8 +58,8 @@ protected:
         wchar_t buf[16];
         _snwprintf_s(buf, _countof(buf), _TRUNCATE, L"%u", s.fps);
         WritePrivateProfileStringW(L"Video",   L"fps",          buf,                test_ini_.c_str());
-        WritePrivateProfileStringW(L"Video",   L"high_quality",
-                                   s.high_quality ? L"1" : L"0", test_ini_.c_str());
+        _snwprintf_s(buf, _countof(buf), _TRUNCATE, L"%u", s.resolution_height);
+        WritePrivateProfileStringW(L"Video",   L"resolution_height", buf, test_ini_.c_str());
         WritePrivateProfileStringW(L"Storage", L"output_dir",   s.output_dir.c_str(), test_ini_.c_str());
     }
 };
@@ -65,7 +68,7 @@ protected:
 TEST_F(AppSettingsTest, DefaultsAre30FpsAndEmptyDir) {
     auto s = LoadFromIni();  // no file exists → defaults
     EXPECT_EQ(s.fps, 30u);
-    EXPECT_FALSE(s.high_quality);
+    EXPECT_EQ(s.resolution_height, 480u);
     EXPECT_TRUE(s.output_dir.empty());
 }
 
@@ -117,14 +120,14 @@ TEST_F(AppSettingsTest, InvalidFpsDefaultsTo30) {
 TEST_F(AppSettingsTest, BitrateAutoSelectsFor60fps) {
     sr::AppSettings s;
     s.fps = 60;
-    s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, false);
+    s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, 480);
     EXPECT_EQ(s.bitrate_bps, 6'000'000u);
 }
 
 TEST_F(AppSettingsTest, BitrateAutoSelectsFor30fps) {
     sr::AppSettings s;
     s.fps = 30;
-    s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, false);
+    s.bitrate_bps = sr::AppSettings::compute_bitrate(s.fps, 480);
     EXPECT_EQ(s.bitrate_bps, 4'000'000u);
 }
 
@@ -170,91 +173,93 @@ TEST(EncoderProfileTest, Fps30ProfileValues) {
 }
 
 // ============================================================================
-// High Quality feature tests
+// Resolution quality profile tests
 // ============================================================================
 
-// Default: high_quality is off
-TEST_F(AppSettingsTest, HighQualityDefaultIsOff) {
+// Default resolution remains 480p
+TEST_F(AppSettingsTest, DefaultResolutionIs480p) {
     auto s = LoadFromIni();
-    EXPECT_FALSE(s.high_quality);
+    EXPECT_EQ(s.resolution_height, 480u);
     EXPECT_EQ(s.bitrate_bps, 4'000'000u);
 }
 
-// Round-trip: save high_quality=true, reload
-TEST_F(AppSettingsTest, SaveAndLoadHighQualityOn) {
+// Round-trip: save 1080p, reload
+TEST_F(AppSettingsTest, SaveAndLoad1080p) {
     sr::AppSettings s;
     s.fps          = 30;
-    s.high_quality = true;
-    s.bitrate_bps  = sr::AppSettings::compute_bitrate(s.fps, s.high_quality);
+    s.set_resolution(1080);
     SaveToIni(s);
 
     auto loaded = LoadFromIni();
-    EXPECT_TRUE(loaded.high_quality);
+    EXPECT_EQ(loaded.resolution_height, 1080u);
     EXPECT_EQ(loaded.bitrate_bps, 8'000'000u);
 }
 
-// Round-trip: save high_quality=false, reload — should keep normal bitrate
-TEST_F(AppSettingsTest, SaveAndLoadHighQualityOff) {
+// Round-trip: save 480p, reload
+TEST_F(AppSettingsTest, SaveAndLoad480p) {
     sr::AppSettings s;
     s.fps          = 30;
-    s.high_quality = false;
-    s.bitrate_bps  = sr::AppSettings::compute_bitrate(s.fps, s.high_quality);
+    s.set_resolution(480);
     SaveToIni(s);
 
     auto loaded = LoadFromIni();
-    EXPECT_FALSE(loaded.high_quality);
+    EXPECT_EQ(loaded.resolution_height, 480u);
     EXPECT_EQ(loaded.bitrate_bps, 4'000'000u);
 }
 
-// 60fps + high_quality = 10 Mbps
-TEST_F(AppSettingsTest, HighQuality60FpsBitrate) {
+// 60fps + 1080p = 10 Mbps
+TEST_F(AppSettingsTest, Resolution1080p60FpsBitrate) {
     sr::AppSettings s;
     s.fps          = 60;
-    s.high_quality = true;
-    s.bitrate_bps  = sr::AppSettings::compute_bitrate(s.fps, s.high_quality);
+    s.set_resolution(1080);
     SaveToIni(s);
 
     auto loaded = LoadFromIni();
-    EXPECT_TRUE(loaded.high_quality);
+    EXPECT_EQ(loaded.resolution_height, 1080u);
     EXPECT_EQ(loaded.fps, 60u);
     EXPECT_EQ(loaded.bitrate_bps, 10'000'000u);
 }
 
-// compute_bitrate static function covers all 4 cases
-TEST(AppSettingsStaticTest, ComputeBitrateAllCombinations) {
-    // Normal quality
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, false), 4'000'000u);
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(60, false), 6'000'000u);
-    // High quality
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, true),  8'000'000u);
-    EXPECT_EQ(sr::AppSettings::compute_bitrate(60, true),  10'000'000u);
+// Bitrate presets scale with both resolution and frame rate.
+TEST(AppSettingsStaticTest, ComputeBitrateForResolutionPresets) {
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, 360), 1'500'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, 480), 4'000'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, 720), 5'000'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(30, 1080), 8'000'000u);
+    EXPECT_EQ(sr::AppSettings::compute_bitrate(60, 1080), 10'000'000u);
 }
 
-TEST(AppSettingsStaticTest, SetHighQualityRecomputesBitrate) {
+TEST(AppSettingsStaticTest, SetResolutionRecomputesBitrate) {
     sr::AppSettings s;
     s.fps = 30;
-    s.set_high_quality(true);
-    EXPECT_TRUE(s.high_quality);
+    s.set_resolution(1080);
     EXPECT_EQ(s.bitrate_bps, 8'000'000u);
 
     s.fps = 60;
-    s.set_high_quality(false);
-    EXPECT_FALSE(s.high_quality);
+    s.set_resolution(480);
     EXPECT_EQ(s.bitrate_bps, 6'000'000u);
 }
 
-TEST(AppSettingsStaticTest, RecordingResolutionMatchesQualityMode) {
-    const auto normal = sr::recording_resolution_for_quality(false);
+TEST(AppSettingsStaticTest, RecordingResolutionMatchesSelectedHeight) {
+    const auto normal = sr::recording_resolution_for_height(480);
     EXPECT_EQ(normal.width, 848u);
     EXPECT_EQ(normal.height, 480u);
 
-    const auto hq = sr::recording_resolution_for_quality(true);
+    const auto low = sr::recording_resolution_for_height(360);
+    EXPECT_EQ(low.width, 640u);
+    EXPECT_EQ(low.height, 360u);
+
+    const auto hd = sr::recording_resolution_for_height(720);
+    EXPECT_EQ(hd.width, 1280u);
+    EXPECT_EQ(hd.height, 720u);
+
+    const auto hq = sr::recording_resolution_for_height(1080);
     EXPECT_EQ(hq.width, 1920u);
     EXPECT_EQ(hq.height, 1080u);
 }
 
 TEST(AppSettingsStaticTest, RecordingResolutionClampsToSourceDimensions) {
-    const auto hq = sr::recording_resolution_for_quality(true);
+    const auto hq = sr::recording_resolution_for_height(1080);
     const auto clamped = sr::clamp_recording_resolution(1366, 768, hq);
 
     EXPECT_EQ(clamped.width, 1366u);
