@@ -27,7 +27,8 @@ struct MuxConfig {
     // Audio stream
     uint32_t audio_sample_rate    = 48000;
     uint16_t audio_channels       = 2;
-    uint32_t audio_bitrate        = 128'000;
+    // 192 kbps AAC-LC gives speech and desktop audio more encoding headroom.
+    uint32_t audio_bitrate        = 192'000;
     uint32_t audio_bits_per_sample= 16;   // 16 = PCM int, 32 = IEEE float
     bool     audio_is_float       = false;
 };

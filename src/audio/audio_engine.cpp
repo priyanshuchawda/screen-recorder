@@ -197,16 +197,14 @@ void AudioEngine::capture_loop() {
         SR_LOG_WARN(L"AvSetMmThreadCharacteristics failed (non-fatal)");
     }
 
-    // Gate only near the noise floor, then apply slow automatic mic leveling.
-    // This keeps quiet speech while lifting low-level microphone input.
-    const bool apply_noise_gate = (mode_ == AudioCaptureMode::Microphone);
-    constexpr float kNoiseGateThresholdFloat = 0.001f; // -60 dBFS
-    constexpr int32_t kNoiseGateThresholdInt16 = 33;   // about -60 dBFS
+    // Level the microphone gently, but never gate by amplitude: quiet words,
+    // breaths and word beginnings must survive even when the room is quiet.
+    const bool apply_mic_leveling = (mode_ == AudioCaptureMode::Microphone);
     constexpr float kMicTargetRms = 0.126f;            // about -18 dBFS
     constexpr float kMicMinGain = 0.25f;
     constexpr float kMicMaxGain = 4.0f;                // +12 dB maximum boost
-    if (apply_noise_gate) {
-        SR_LOG_INFO(L"Microphone auto-level active: target -18 dBFS, max boost +12 dB");
+    if (apply_mic_leveling) {
+        SR_LOG_INFO(L"Microphone auto-level active (no hard gate): target -18 dBFS, max boost +12 dB");
     }
 
     std::vector<uint8_t> resampled_buf;
@@ -236,8 +234,10 @@ void AudioEngine::capture_loop() {
                           || (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0;
             float mic_rms = 0.0f;
 
-            // Noise gate for microphone: compute RMS and gate if below threshold
-            if (apply_noise_gate && !silence && data && byte_count > 0) {
+            // Measure microphone level for automatic gain control. Do not
+            // replace low-level input with silence; this used to clip quiet
+            // speech and word onsets at the noise-gate threshold.
+            if (apply_mic_leveling && !silence && data && byte_count > 0) {
                 if (bits_per_sample_ == 32) {
                     const float* samples = reinterpret_cast<const float*>(data);
                     const size_t count = byte_count / sizeof(float);
@@ -246,9 +246,6 @@ void AudioEngine::capture_loop() {
                         sum_sq += static_cast<double>(samples[i]) * static_cast<double>(samples[i]);
                     }
                     mic_rms = count > 0 ? static_cast<float>(std::sqrt(sum_sq / static_cast<double>(count))) : 0.0f;
-                    if (mic_rms < kNoiseGateThresholdFloat) {
-                        silence = true;
-                    }
                 } else if (bits_per_sample_ == 16) {
                     const int16_t* samples = reinterpret_cast<const int16_t*>(data);
                     const size_t count = byte_count / sizeof(int16_t);
@@ -258,14 +255,11 @@ void AudioEngine::capture_loop() {
                     }
                     double rms = count > 0 ? std::sqrt(static_cast<double>(sum_sq) / static_cast<double>(count)) : 0.0;
                     mic_rms = static_cast<float>(rms / 32768.0);
-                    if (rms < static_cast<double>(kNoiseGateThresholdInt16)) {
-                        silence = true;
-                    }
                 }
             }
 
             float packet_mic_gain = 1.0f;
-            if (apply_noise_gate && !silence && mic_rms > 0.0f) {
+            if (apply_mic_leveling && !silence && mic_rms > 0.0f) {
                 // Smooth the level estimate to prevent gain pumping between
                 // individual 10 ms WASAPI packets. Reduce gain quickly to
                 // protect loud speech; restore it more gradually.
@@ -314,7 +308,7 @@ void AudioEngine::capture_loop() {
                 // Apply microphone-only automatic level control after any
                 // resampling. A soft peak limiter avoids hard clipping when
                 // the adaptive gain raises a transient.
-                if (apply_noise_gate) {
+                if (apply_mic_leveling) {
                     auto limit_sample = [](float value) {
                         constexpr float limit_start = 0.80f;
                         constexpr float limit_knee = 0.09f; // ceiling about -1 dBFS
