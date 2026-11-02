@@ -132,6 +132,7 @@ bool SessionController::start() {
     last_power_ac_ = PowerModeDetector::is_on_ac_power();
     enc_prof = PowerModeDetector::clamp_for_quality_and_power_state(
         enc_prof, last_power_ac_, high_quality_profile);
+    active_high_quality_ = high_quality_profile;
 
     // ---------------------------------------------------------------
     // Initialize CaptureEngine
@@ -675,8 +676,10 @@ void SessionController::encode_loop() {
                 // encoder's sample timestamps remain on the source clock.
                 const uint32_t new_fps = on_ac
                     ? encoder_->output_fps()
-                    : (std::min)(encoder_->output_fps(),
-                                 PowerModeDetector::kBatteryMaxFps);
+                    : (active_high_quality_
+                        ? encoder_->output_fps()
+                        : (std::min)(encoder_->output_fps(),
+                                     PowerModeDetector::kBatteryMaxFps));
                 capture_->set_target_fps(new_fps);
                 SR_LOG_INFO(L"[Power] Capture cadence changed to %u fps", new_fps);
             }

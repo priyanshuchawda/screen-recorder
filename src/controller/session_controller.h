@@ -99,6 +99,7 @@ private:
     FramePacer      pacer_;      // T038: frame pacing
     TelemetryStore  telemetry_;  // T037: live counters
     bool            last_power_ac_ = true; // T042: last known power state
+    bool            active_high_quality_ = false;
 
     // Engines
     std::unique_ptr<CaptureEngine> capture_;
