@@ -1,7 +1,8 @@
 #pragma once
 // power_mode.h — T042: Dynamic power-mode encoder adjustment
 // Reads GetSystemPowerStatus; base mode on battery clamps to 15fps/1.5Mbps/480p.
-// High Quality mode keeps the requested profile unchanged on AC and battery.
+// High Quality keeps resolution/bitrate on battery but caps FPS to protect
+// sustained real-time encoding on low-power hardware.
 
 #include <windows.h>
 #include <algorithm>
@@ -59,12 +60,17 @@ public:
                                                             bool on_ac,
                                                             bool high_quality) {
         if (high_quality) {
+            EncoderProfile effective = requested;
+            if (!on_ac) {
+                effective.fps = (std::min)(effective.fps, kBatteryMaxFps);
+            }
             SR_LOG_INFO(L"[PowerMode] HQ — profile: %u fps / %u bps / %ux%u "
-                        L"(%s power)",
-                        requested.fps, requested.bitrate_bps,
-                        requested.width, requested.height,
-                        on_ac ? L"AC" : L"Battery");
-            return requested;
+                        L"(%s power%s)",
+                        effective.fps, effective.bitrate_bps,
+                        effective.width, effective.height,
+                        on_ac ? L"AC" : L"Battery",
+                        on_ac ? L"" : L", battery FPS cap");
+            return effective;
         }
 
         return clamp_for_power_state(requested, on_ac);

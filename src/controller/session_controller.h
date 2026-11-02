@@ -81,6 +81,7 @@ public:
     uint32_t frames_dropped()   const;
     uint32_t frames_encoded()   const;
     uint32_t audio_packets_written() const;
+    uint32_t active_fps() const;
 
     // T037: Rich telemetry snapshot for debug overlay
     TelemetrySnapshot telemetry_snapshot() const;

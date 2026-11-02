@@ -48,9 +48,12 @@ struct CaptureEngineImpl {
     winrt::com_ptr<ID3D11VideoContext>             video_context;
     winrt::com_ptr<ID3D11VideoProcessorEnumerator> vp_enum;
     winrt::com_ptr<ID3D11VideoProcessor>           vp;
-    // Double-buffer NV12 output to reduce capture/encode contention.
-    std::array<winrt::com_ptr<ID3D11Texture2D>, 2>                nv12_tex{};
-    std::array<winrt::com_ptr<ID3D11VideoProcessorOutputView>, 2> vp_out_view{};
+    // Independent surfaces keep WGC from overwriting frames queued for or
+    // still being consumed by the asynchronous hardware encoder.
+    static constexpr size_t kNv12TextureCount = FrameQueue::capacity() + 5;
+    std::array<winrt::com_ptr<ID3D11Texture2D>, kNv12TextureCount> nv12_tex{};
+    std::array<winrt::com_ptr<ID3D11VideoProcessorOutputView>, kNv12TextureCount> vp_out_view{};
+    std::array<ULONG, kNv12TextureCount> nv12_base_refcounts{};
     uint32_t write_idx_ = 0;
 
     // Cache VP input views for rotating frame-pool textures (usually 2).
@@ -68,6 +71,8 @@ struct CaptureEngineImpl {
     FrameQueue*    queue           = nullptr;
     int64_t        start_100ns     = 0;   // absolute 100ns at session start
     LARGE_INTEGER  qpc_freq        = {};
+    std::atomic<int64_t> capture_interval_100ns{ 333'333 };
+    int64_t        last_capture_pts = -1;
 
     // -----------------------------------------------------------------------
     // setup_video_processor — create D3D11 VP from in_w x in_h (BGRA) to
@@ -78,6 +83,7 @@ struct CaptureEngineImpl {
         // Release old GPU objects so they can be recreated
         for (auto& view : vp_out_view) { view = nullptr; }
         for (auto& tex  : nv12_tex)    { tex  = nullptr; }
+        nv12_base_refcounts.fill(0);
         for (auto& tex  : cached_in_tex)  { tex  = nullptr; }
         for (auto& view : cached_in_view) { view = nullptr; }
         write_idx_ = 0;
@@ -133,14 +139,20 @@ struct CaptureEngineImpl {
                 SR_LOG_ERROR(L"CreateVideoProcessorOutputView[%zu] failed: 0x%08X", i, hr);
                 return false;
             }
+
+            // Remember the texture's baseline COM references (capture engine
+            // plus its output view) so in-flight samples can be detected.
+            const ULONG refs_with_probe = nv12_tex[i]->AddRef();
+            nv12_tex[i]->Release();
+            nv12_base_refcounts[i] = refs_with_probe - 1;
         }
 
         vp_width   = in_w;
         vp_height  = in_h;
         out_width_ = out_w;
         out_height_= out_h;
-        SR_LOG_INFO(L"D3D11 Video Processor ready: %ux%u -> %ux%u BGRA->NV12 (double-buffered)",
-                    in_w, in_h, out_w, out_h);
+        SR_LOG_INFO(L"D3D11 Video Processor ready: %ux%u -> %ux%u BGRA->NV12 (%zu surfaces)",
+                    in_w, in_h, out_w, out_h, kNv12TextureCount);
         return true;
     }
 
@@ -180,7 +192,19 @@ struct CaptureEngineImpl {
         auto in_view = get_or_create_input_view(bgra_tex);
         if (!in_view) return false;
 
-        out_idx = write_idx_;
+        bool found_free_surface = false;
+        for (size_t attempt = 0; attempt < nv12_tex.size(); ++attempt) {
+            const size_t idx = (write_idx_ + attempt) % nv12_tex.size();
+            const ULONG refs_with_probe = nv12_tex[idx]->AddRef();
+            nv12_tex[idx]->Release();
+            if (refs_with_probe <= nv12_base_refcounts[idx] + 1) {
+                out_idx = static_cast<uint32_t>(idx);
+                write_idx_ = static_cast<uint32_t>((idx + 1) % nv12_tex.size());
+                found_free_surface = true;
+                break;
+            }
+        }
+        if (!found_free_surface) return false;
         auto out_view = vp_out_view[out_idx];
         if (!out_view) return false;
 
@@ -200,7 +224,6 @@ struct CaptureEngineImpl {
             }
             return false;
         }
-        write_idx_ ^= 1u;
         return true;
     }
 
@@ -224,6 +247,18 @@ struct CaptureEngineImpl {
         uint32_t frame_w = static_cast<uint32_t>(content_size.Width);
         uint32_t frame_h = static_cast<uint32_t>(content_size.Height);
 
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        const int64_t capture_pts = static_cast<int64_t>(
+            static_cast<double>(now.QuadPart) * 10'000'000.0 /
+            static_cast<double>(qpc_freq.QuadPart)) - start_100ns;
+        if (last_capture_pts >= 0 &&
+            capture_pts - last_capture_pts <
+                capture_interval_100ns.load(std::memory_order_relaxed)) {
+            return;
+        }
+        last_capture_pts = capture_pts;
+
         if (frame_w != vp_width || frame_h != vp_height) {
             SR_LOG_INFO(L"WGC resolution changed: %ux%u -> %ux%u — recreating VP",
                         vp_width, vp_height, frame_w, frame_h);
@@ -245,22 +280,21 @@ struct CaptureEngineImpl {
         }
 
         uint32_t out_idx = 0;
-        if (!convert_bgra_to_nv12(bgra_tex.get(), out_idx)) return;
+        if (!convert_bgra_to_nv12(bgra_tex.get(), out_idx)) {
+            parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
 
         // Build RenderFrame
         RenderFrame rf;
-        // ComPtr copy AddRefs the selected ping-pong texture.
+        // ComPtr copy keeps this independent output surface leased until the
+        // encoder and queue have released their references.
         rf.texture = nv12_tex[out_idx].get();
         rf.width   = out_width_;   // T034: always report fixed output dimensions
         rf.height  = out_height_;
 
         // PTS: relative to session start in 100ns units
-        LARGE_INTEGER now{};
-        QueryPerformanceCounter(&now);
-        int64_t now_100ns = static_cast<int64_t>(
-            static_cast<double>(now.QuadPart) * 10'000'000.0 /
-            static_cast<double>(qpc_freq.QuadPart));
-        rf.pts = now_100ns - start_100ns;
+        rf.pts = capture_pts;
         if (rf.pts < 0) rf.pts = 0;
 
         parent->frames_captured_.fetch_add(1, std::memory_order_relaxed);
@@ -294,7 +328,8 @@ CaptureEngine::~CaptureEngine() { stop(); }
 bool CaptureEngine::initialize(ID3D11Device* device,
                                 ID3D11DeviceContext* context,
                                 FrameQueue* queue,
-                                RecordingResolution max_resolution)
+                                RecordingResolution max_resolution,
+                                uint32_t target_fps)
 {
     // WinRT apartment: multi-threaded (matches COM init in wWinMain)
     try { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
@@ -308,6 +343,11 @@ bool CaptureEngine::initialize(ID3D11Device* device,
     impl_->d3d_context = context;
     impl_->queue       = queue;
     impl_->parent      = this;
+    target_fps = (std::max)(1u, target_fps);
+    target_fps_.store(target_fps, std::memory_order_relaxed);
+    impl_->capture_interval_100ns.store(
+        10'000'000LL / static_cast<int64_t>(target_fps),
+        std::memory_order_relaxed);
     QueryPerformanceFrequency(&impl_->qpc_freq);
 
     // --- Build WinRT IDirect3DDevice wrapper from DXGI device ---
@@ -400,6 +440,16 @@ bool CaptureEngine::initialize(ID3D11Device* device,
     return true;
 }
 
+void CaptureEngine::set_target_fps(uint32_t fps) {
+    fps = (std::max)(1u, fps);
+    target_fps_.store(fps, std::memory_order_relaxed);
+    if (impl_) {
+        impl_->capture_interval_100ns.store(
+            10'000'000LL / static_cast<int64_t>(fps),
+            std::memory_order_relaxed);
+    }
+}
+
 bool CaptureEngine::start() {
     if (!impl_) return false;
 
@@ -409,6 +459,7 @@ bool CaptureEngine::start() {
     impl_->start_100ns = static_cast<int64_t>(
         static_cast<double>(now.QuadPart) * 10'000'000.0 /
         static_cast<double>(impl_->qpc_freq.QuadPart));
+    impl_->last_capture_pts = -1;
 
     running_.store(true, std::memory_order_release);
     impl_->session.StartCapture();

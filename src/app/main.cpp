@@ -156,10 +156,13 @@ static void UpdateProfileLabel()
 {
     if (!g_lbl_profile) return;
     const auto resolution = sr::recording_resolution_for_height(g_settings.resolution_height);
+    const uint32_t active_fps = g_controller.state() == sr::SessionState::Idle
+        ? g_settings.fps
+        : g_controller.active_fps();
     wchar_t prof_buf[96];
     _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
         L"%ufps | %ux%u | %uMbps%s",
-        g_settings.fps,
+        active_fps ? active_fps : g_settings.fps,
         resolution.width, resolution.height,
         g_settings.bitrate_bps / 1'000'000,
         g_settings.is_high_quality() ? L" | HQ" : L"");
@@ -225,6 +228,7 @@ static void BeginStopAsync(HWND hwnd, bool exit_after_stop)
 void UpdateUI()
 {
     const auto state = g_controller.state();
+    UpdateProfileLabel();
     const bool stop_in_progress = g_stop_flow.stop_in_progress();
     const auto display_state = stop_in_progress ? sr::SessionState::Stopping : state;
     const bool state_changed = (display_state != g_last_ui_state);

@@ -44,7 +44,10 @@ public:
     bool initialize(ID3D11Device* device,
                     ID3D11DeviceContext* context,
                     FrameQueue* queue,
-                    RecordingResolution max_resolution = kEfficiencyRecordingResolution);
+                    RecordingResolution max_resolution = kEfficiencyRecordingResolution,
+                    uint32_t target_fps = 30);
+    void set_target_fps(uint32_t fps);
+    uint32_t target_fps() const { return target_fps_.load(std::memory_order_relaxed); }
 
     bool start();
     void stop();
@@ -71,6 +74,7 @@ private:
     std::atomic<bool>     device_lost_      { false }; // T039: set when DXGI device removed
     std::atomic<uint32_t> frames_captured_  { 0 };
     std::atomic<uint32_t> frames_dropped_   { 0 };
+    std::atomic<uint32_t> target_fps_       { 30 };
     int64_t               pts_anchor_100ns_ = 0;
     uint32_t              capture_width_    = 0;
     uint32_t              capture_height_   = 0;

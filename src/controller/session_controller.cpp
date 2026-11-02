@@ -139,7 +139,8 @@ bool SessionController::start() {
     if (!capture_->initialize(probe_.d3d_device.Get(),
                                probe_.d3d_context.Get(),
                                frame_queue_.get(),
-                               {enc_prof.width, enc_prof.height}))
+                               {enc_prof.width, enc_prof.height},
+                               enc_prof.fps))
     {
         diagnostics_.write_failure(L"capture_engine_initialization_failed");
         notify_error(L"Capture engine initialization failed");
@@ -355,6 +356,10 @@ uint32_t SessionController::frames_captured()       const { return capture_->fra
 uint32_t SessionController::frames_dropped()        const { return capture_->frames_dropped(); }
 uint32_t SessionController::frames_encoded()        const { return frames_encoded_.load(); }
 uint32_t SessionController::audio_packets_written() const { return audio_written_.load(); }
+uint32_t SessionController::active_fps() const {
+    return capture_ ? capture_->target_fps()
+                    : (encoder_ ? encoder_->output_fps() : 0);
+}
 
 // T037: Build a full telemetry snapshot for the debug overlay
 TelemetrySnapshot SessionController::telemetry_snapshot() const {
@@ -666,9 +671,14 @@ void SessionController::encode_loop() {
             if (on_ac != last_power_ac_) {
                 last_power_ac_ = on_ac;
                 SR_LOG_INFO(L"[Power] Switched to %s power", on_ac ? L"AC" : L"Battery");
-                // Adjust pacing with power mode changes.
-                uint32_t new_fps = on_ac ? encoder_->output_fps() : 15;
-                pacer_.initialize(new_fps);
+                // Keep capture work within the active power budget. The
+                // encoder's sample timestamps remain on the source clock.
+                const uint32_t new_fps = on_ac
+                    ? encoder_->output_fps()
+                    : (std::min)(encoder_->output_fps(),
+                                 PowerModeDetector::kBatteryMaxFps);
+                capture_->set_target_fps(new_fps);
+                SR_LOG_INFO(L"[Power] Capture cadence changed to %u fps", new_fps);
             }
             last_power_check_ms = now_ms;
         }
