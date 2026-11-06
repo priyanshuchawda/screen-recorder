@@ -58,6 +58,9 @@ public:
 
     // QPC ticks at anchor (recording start)
     int64_t anchor_qpc() const { return anchor_qpc_; }
+    int64_t anchor_100ns() const {
+        return ticks_to_100ns(anchor_qpc_);
+    }
 
 private:
     int64_t anchor_qpc_        = 0;

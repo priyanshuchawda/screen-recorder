@@ -17,6 +17,7 @@ struct TelemetrySnapshot {
     uint32_t frames_captured   = 0;  // total frames received from WGC
     uint32_t frames_encoded    = 0;  // total frames written to encoder
     uint32_t frames_dropped    = 0;  // frames lost (queue full at push)
+    uint32_t queue_drops       = 0;  // frames rejected because capture backlog is full
     uint32_t frames_backlogged = 0;  // frames currently sitting in the queue
     uint32_t audio_packets     = 0;  // audio packets muxed
     uint32_t dup_frames        = 0;  // synthetic duplicates inserted by FramePacer
@@ -43,6 +44,7 @@ public:
     // Called from capture thread
     void on_frame_captured()               { frames_captured_.fetch_add(1, std::memory_order_relaxed); }
     void on_frame_dropped()                { frames_dropped_.fetch_add(1, std::memory_order_relaxed); }
+    void on_queue_drop()                   { queue_drops_.fetch_add(1, std::memory_order_relaxed); }
 
     // Called from encode thread
     void on_frame_encoded()                { frames_encoded_.fetch_add(1, std::memory_order_relaxed); }
@@ -56,6 +58,7 @@ public:
         frames_captured_.store(0,   std::memory_order_relaxed);
         frames_encoded_.store(0,    std::memory_order_relaxed);
         frames_dropped_.store(0,    std::memory_order_relaxed);
+        queue_drops_.store(0,       std::memory_order_relaxed);
         frames_backlogged_.store(0, std::memory_order_relaxed);
         audio_written_.store(0,     std::memory_order_relaxed);
         dup_frames_.store(0,        std::memory_order_relaxed);
@@ -66,6 +69,7 @@ public:
         s.frames_captured   = frames_captured_.load(std::memory_order_relaxed);
         s.frames_encoded    = frames_encoded_.load(std::memory_order_relaxed);
         s.frames_dropped    = frames_dropped_.load(std::memory_order_relaxed);
+        s.queue_drops       = queue_drops_.load(std::memory_order_relaxed);
         s.frames_backlogged = frames_backlogged_.load(std::memory_order_relaxed);
         s.audio_packets     = audio_written_.load(std::memory_order_relaxed);
         s.dup_frames        = dup_frames_.load(std::memory_order_relaxed);
@@ -78,6 +82,7 @@ private:
     std::atomic<uint32_t> frames_captured_  { 0 };
     std::atomic<uint32_t> frames_encoded_   { 0 };
     std::atomic<uint32_t> frames_dropped_   { 0 };
+    std::atomic<uint32_t> queue_drops_      { 0 };
     std::atomic<uint32_t> frames_backlogged_{ 0 };
     std::atomic<uint32_t> audio_written_    { 0 };
     std::atomic<uint32_t> dup_frames_       { 0 };

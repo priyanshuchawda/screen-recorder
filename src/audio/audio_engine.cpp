@@ -9,6 +9,8 @@
 
 #include <avrt.h>
 #include <audiopolicy.h>
+#include <ks.h>
+#include <ksmedia.h>
 #include <algorithm>
 #include <cstring>
 #include <cmath>
@@ -65,6 +67,18 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
     sample_rate_     = mix_fmt->nSamplesPerSec;
     channels_        = mix_fmt->nChannels;
     bits_per_sample_ = mix_fmt->wBitsPerSample;
+    is_float_ = mix_fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT;
+    if (mix_fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE &&
+        mix_fmt->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+        const auto* extensible = reinterpret_cast<const WAVEFORMATEXTENSIBLE*>(mix_fmt);
+        is_float_ = IsEqualGUID(extensible->SubFormat, KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) != FALSE;
+    }
+    if (bits_per_sample_ != 16 && !(bits_per_sample_ == 32 && is_float_)) {
+        SR_LOG_ERROR(L"[%s] Unsupported WASAPI format: %u-bit %s", mode_name,
+                     bits_per_sample_, is_float_ ? L"float" : L"integer");
+        CoTaskMemFree(mix_fmt);
+        return false;
+    }
     block_align_     = mix_fmt->nBlockAlign;
     SR_LOG_INFO(L"[%s] Audio device: %u Hz, %u ch, %u-bit", mode_name,
                 sample_rate_, channels_, bits_per_sample_);
@@ -72,7 +86,9 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
     // T032: Initialize MF Resampler if device rate differs from 48 kHz
     if (!resampler_.initialize(sample_rate_, static_cast<uint16_t>(channels_),
                                 bits_per_sample_, 48000)) {
-        SR_LOG_WARN(L"AudioResampler init failed — continuing at native rate %u Hz", sample_rate_);
+        SR_LOG_ERROR(L"[%s] AudioResampler failed; cannot maintain synchronized 48 kHz mix", mode_name);
+        CoTaskMemFree(mix_fmt);
+        return false;
     } else if (!resampler_.is_passthrough()) {
         SR_LOG_INFO(L"AudioResampler active: %u Hz -> 48000 Hz", sample_rate_);
     }
@@ -148,8 +164,18 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
 
 bool AudioEngine::start() {
     sample_count_ = 0;
+    queue_drops_.store(0, std::memory_order_relaxed);
     mic_level_envelope_ = 0.0f;
     mic_gain_linear_ = 1.0f;
+    LARGE_INTEGER qpc_now{}, qpc_frequency{};
+    QueryPerformanceCounter(&qpc_now);
+    QueryPerformanceFrequency(&qpc_frequency);
+    if (qpc_frequency.QuadPart > 0) {
+        const int64_t absolute_100ns = static_cast<int64_t>(
+            static_cast<double>(qpc_now.QuadPart) * 10'000'000.0 /
+            static_cast<double>(qpc_frequency.QuadPart));
+        start_pts_100ns_ = (std::max)(int64_t{0}, absolute_100ns - pts_anchor_100ns_);
+    }
     running_.store(true, std::memory_order_release);
 
     HRESULT hr = audio_client_->Start();
@@ -208,6 +234,9 @@ void AudioEngine::capture_loop() {
     }
 
     std::vector<uint8_t> resampled_buf;
+    bool logged_discontinuity = false;
+    bool logged_timestamp_error = false;
+    int64_t last_packet_end_pts = -1;
     while (running_.load(std::memory_order_acquire)) {
         DWORD wait_result = WaitForSingleObject(event_handle_, 200 /*ms timeout*/);
         if (wait_result != WAIT_OBJECT_0) {
@@ -220,13 +249,30 @@ void AudioEngine::capture_loop() {
         BYTE*  data             = nullptr;
         DWORD  flags            = 0;
 
+        UINT64 qpc_position = 0;
         while (SUCCEEDED(capture_client_->GetBuffer(
-                &data, &frames_available, &flags, nullptr, nullptr))
+                &data, &frames_available, &flags, nullptr, &qpc_position))
                && frames_available > 0)
         {
-            int64_t pts = pts_anchor_100ns_ +
-                static_cast<int64_t>(sample_count_) * 10'000'000LL /
-                static_cast<int64_t>(sample_rate_);
+            if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) && !logged_discontinuity) {
+                logged_discontinuity = true;
+                SR_LOG_WARN(L"[%s] WASAPI reported an audio data discontinuity",
+                            mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone");
+            }
+            int64_t pts = last_packet_end_pts >= 0
+                ? last_packet_end_pts
+                : start_pts_100ns_ + static_cast<int64_t>(sample_count_) *
+                    10'000'000LL / static_cast<int64_t>(sample_rate_);
+            if (qpc_position != 0 && !(flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR)) {
+                pts = static_cast<int64_t>(qpc_position) - pts_anchor_100ns_;
+            } else if ((flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) && !logged_timestamp_error) {
+                logged_timestamp_error = true;
+                SR_LOG_WARN(L"[%s] WASAPI timestamp uncertain; using sample clock",
+                            mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone");
+            }
+            pts = (std::max)(int64_t{0}, pts);
+            last_packet_end_pts = pts + static_cast<int64_t>(frames_available) *
+                10'000'000LL / static_cast<int64_t>(sample_rate_);
 
             uint32_t byte_count = frames_available * block_align_;
 
@@ -238,7 +284,7 @@ void AudioEngine::capture_loop() {
             // replace low-level input with silence; this used to clip quiet
             // speech and word onsets at the noise-gate threshold.
             if (apply_mic_leveling && !silence && data && byte_count > 0) {
-                if (bits_per_sample_ == 32) {
+                if (is_float_) {
                     const float* samples = reinterpret_cast<const float*>(data);
                     const size_t count = byte_count / sizeof(float);
                     double sum_sq = 0.0;
@@ -296,6 +342,8 @@ void AudioEngine::capture_loop() {
             pkt.pts          = pts;
             pkt.sample_rate  = sample_rate();
             pkt.channels     = channels_;
+            pkt.bits_per_sample = static_cast<uint16_t>(bits_per_sample_);
+            pkt.is_float = is_float_;
 
             pkt.buffer.resize(pkt_bytes);
             if (silence) {
@@ -318,7 +366,7 @@ void AudioEngine::capture_loop() {
                             (1.0f - std::exp(-(magnitude - limit_start) / limit_knee));
                         return std::copysign((limited > 0.999f) ? 0.999f : limited, value);
                     };
-                    if (bits_per_sample_ == 32) {
+                    if (is_float_) {
                         auto* samples = reinterpret_cast<float*>(pkt.buffer.data());
                         const size_t count = pkt.buffer.size() / sizeof(float);
                         for (size_t i = 0; i < count; ++i) {
@@ -341,7 +389,11 @@ void AudioEngine::capture_loop() {
             sample_count_ += static_cast<int64_t>(frames_available);
 
             if (queue_) {
-                queue_->try_push(std::move(pkt));
+                if (!queue_->try_push(std::move(pkt))) {
+                    queue_drops_.fetch_add(1, std::memory_order_relaxed);
+                    SR_LOG_WARN(L"[%s] Audio packet queue full; packet dropped",
+                                mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone");
+                }
             }
         }
     }

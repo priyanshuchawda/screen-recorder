@@ -35,6 +35,8 @@ struct AudioPacket {
     bool                 is_silence = false;
     uint32_t             sample_rate = 48000;
     uint16_t             channels = 2;
+    uint16_t             bits_per_sample = 16;
+    bool                 is_float = false;
 
     AudioPacket() = default;
     AudioPacket(AudioPacket&&) noexcept = default;

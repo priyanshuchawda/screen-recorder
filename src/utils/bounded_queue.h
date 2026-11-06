@@ -5,8 +5,8 @@
 // Max depth is statically bounded by Capacity — queues NEVER grow unboundedly.
 //
 // T036 Memory Stability Review:
-//   - Video queue:  Capacity=3  → max 3 queued D3D11 texture refs = bounded
-//   - Audio queue:  Capacity=16 → max 16 packets * ~10ms PCM ≈ bounded
+//   - Video queue:  Capacity=8  → max 8 queued D3D11 texture refs = bounded
+//   - Audio queue:  Capacity=64 → max 64 packets * ~10ms PCM ≈ bounded
 //   - All queues use std::array<T, Capacity+1> — FIXED stack/BSS allocation at startup
 //   - try_push returns false (caller drops) when full — NO dynamic growth
 //   - COM texture pointers in RenderFrame use WRL ComPtr — Released in destructor
@@ -15,7 +15,7 @@
 //   - No global statics with COM objects (COM uninit-safe)
 //
 // Architectural constraint check:
-//   BoundedQueue<RenderFrame, 3>  ← keep intentionally small for laptop RAM/latency
+//   BoundedQueue<RenderFrame, 8>  ← short fixed backlog for transient encoder stalls
 
 #include <atomic>
 #include <optional>

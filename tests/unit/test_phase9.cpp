@@ -43,6 +43,7 @@ TEST(T037_Telemetry, CountersIncrementCorrectly) {
     ts.on_frame_captured();
     ts.on_frame_encoded();
     ts.on_frame_dropped();
+    ts.on_queue_drop();
     ts.on_audio_written();
     ts.on_audio_written();
     ts.on_audio_written();
@@ -52,6 +53,7 @@ TEST(T037_Telemetry, CountersIncrementCorrectly) {
     EXPECT_EQ(snap.frames_captured, 2u);
     EXPECT_EQ(snap.frames_encoded,  1u);
     EXPECT_EQ(snap.frames_dropped,  1u);
+    EXPECT_EQ(snap.queue_drops,     1u);
     EXPECT_EQ(snap.audio_packets,   3u);
     EXPECT_EQ(snap.dup_frames,      1u);
     EXPECT_EQ(snap.encoder_mode,    1u);    // passed-in

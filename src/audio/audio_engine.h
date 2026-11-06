@@ -26,8 +26,9 @@ enum class AudioCaptureMode {
     Loopback     // eRender + AUDCLNT_STREAMFLAGS_LOOPBACK — system audio
 };
 
-// 16-slot audio queue (audio runs at ~10ms packets, needs more headroom than video)
-using AudioQueue = BoundedQueue<AudioPacket, 16>;
+// Audio packets run about every 10 ms; buffer brief encoder/muxer stalls without
+// unbounded growth (64 slots provide about 640 ms at the common 48 kHz rate).
+using AudioQueue = BoundedQueue<AudioPacket, 64>;
 
 // Device-invalidation callback type — called when the audio device is removed
 // or invalidated (e.g., USB mic unplugged). If set, engine signals the caller
@@ -118,7 +119,9 @@ public:
         return resampler_.is_passthrough() ? sample_rate_ : resampler_.output_rate();
     }
     uint16_t channels()        const { return channels_; }
-    uint32_t bits_per_sample() const { return bits_per_sample_; }
+    uint32_t bits_per_sample() const { return bits_per_sample_ == 32 ? 32u : 16u; }
+    bool is_float() const { return is_float_; }
+    uint32_t queue_drops() const { return queue_drops_.load(std::memory_order_relaxed); }
 
     // Native device rate (before resampling) — for diagnostics
     uint32_t native_sample_rate() const { return sample_rate_; }
@@ -139,6 +142,7 @@ private:
     uint32_t    sample_rate_    = 48000;  // native device rate
     uint16_t    channels_       = 2;
     uint32_t    bits_per_sample_= 16;
+    bool        is_float_       = false;
     uint32_t    block_align_    = 4;
 
     // T032: MF Resampler for native-rate → 48 kHz conversion
@@ -151,9 +155,11 @@ private:
     AudioCaptureMode           mode_ = AudioCaptureMode::Microphone;
     std::atomic<bool> running_{ false };
     std::atomic<bool> muted_  { false };
+    std::atomic<uint32_t> queue_drops_{ 0 };
     std::thread       thread_;
 
     int64_t  pts_anchor_100ns_ = 0;   // 100ns epoch offset
+    int64_t  start_pts_100ns_  = 0;   // stream start on the shared QPC timeline
     int64_t  sample_count_     = 0;   // monotonic sample counter for PTS
     float    mic_level_envelope_ = 0.0f; // smoothed microphone RMS for automatic level
     float    mic_gain_linear_ = 1.0f;    // adaptive gain, capped to avoid runaway noise

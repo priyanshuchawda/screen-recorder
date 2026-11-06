@@ -301,6 +301,8 @@ struct CaptureEngineImpl {
 
         if (queue && !queue->try_push(std::move(rf))) {
             parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+            parent->queue_drops_.fetch_add(1, std::memory_order_relaxed);
+            SR_LOG_WARN(L"Capture backlog full (%zu frames); dropping captured frame", FrameQueue::capacity());
         }
     }
 };
@@ -456,9 +458,11 @@ bool CaptureEngine::start() {
     // Record absolute start time for PTS calculation
     LARGE_INTEGER now{};
     QueryPerformanceCounter(&now);
-    impl_->start_100ns = static_cast<int64_t>(
-        static_cast<double>(now.QuadPart) * 10'000'000.0 /
-        static_cast<double>(impl_->qpc_freq.QuadPart));
+    impl_->start_100ns = pts_anchor_100ns_ > 0
+        ? pts_anchor_100ns_
+        : static_cast<int64_t>(
+              static_cast<double>(now.QuadPart) * 10'000'000.0 /
+              static_cast<double>(impl_->qpc_freq.QuadPart));
     impl_->last_capture_pts = -1;
 
     running_.store(true, std::memory_order_release);

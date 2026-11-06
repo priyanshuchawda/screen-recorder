@@ -26,13 +26,12 @@ namespace sr {
 // =============================================================================
 // T036 — Queue Stability Tests
 // =============================================================================
-TEST(T036_QueueStability, VideoQueueCapacityIsThree) {
-    EXPECT_EQ(FrameQueue::capacity(), 3u);
+TEST(T036_QueueStability, VideoQueueCapacityIsEight) {
+    EXPECT_EQ(FrameQueue::capacity(), 8u);
 }
 
-TEST(T036_QueueStability, AudioQueueCapacityIs16) {
-    using AQ = BoundedQueue<int, 16>;
-    EXPECT_EQ(AQ::capacity(), 16u);
+TEST(T036_QueueStability, AudioQueueCapacityIs64) {
+    EXPECT_EQ(AudioQueue::capacity(), 64u);
 }
 
 TEST(T036_QueueStability, QueueNeverExceedsCapacity) {
@@ -53,6 +52,17 @@ TEST(T036_QueueStability, PushFullRejectsMidStream) {
     EXPECT_TRUE(q.try_push(3));
     EXPECT_FALSE(q.try_push(4));  // queue full
     EXPECT_EQ(q.size(), 3u);
+}
+
+TEST(T036_QueueStability, VideoQueueBuffersEightFramesAndStaysBounded) {
+    FrameQueue q;
+    for (size_t i = 0; i < FrameQueue::capacity(); ++i) {
+        RenderFrame frame;
+        EXPECT_TRUE(q.try_push(std::move(frame)));
+    }
+    RenderFrame overflow;
+    EXPECT_FALSE(q.try_push(std::move(overflow)));
+    EXPECT_EQ(q.size(), FrameQueue::capacity());
 }
 
 TEST(T036_QueueStability, ConcurrentProducersNeverExceedCapacity) {
@@ -201,7 +211,7 @@ TEST(T033_ThreadPriority, SetThreadPriorityAboveNormalWorks) {
 // T034 — Resolution Change Detection (structural test)
 // =============================================================================
 TEST(T034_ResolutionChange, BoundedQueueCapacityMatchesSpec) {
-    EXPECT_EQ(FrameQueue::capacity(), static_cast<size_t>(3));
+    EXPECT_EQ(FrameQueue::capacity(), static_cast<size_t>(8));
 }
 
 // =============================================================================

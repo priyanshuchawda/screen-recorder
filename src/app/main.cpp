@@ -285,9 +285,9 @@ void UpdateUI()
         auto ts = g_controller.telemetry_snapshot();
         wchar_t fps_buf[120];
         _snwprintf_s(fps_buf, _countof(fps_buf), _TRUNCATE,
-            L"Cap:%u  Enc:%u  Drop:%u  Queue:%u  Enc:%s%s",
+            L"Cap:%u  Enc:%u  Drop:%u (Q:%u)  Queue:%u  Enc:%s%s",
             ts.frames_captured, ts.frames_encoded, ts.frames_dropped,
-            ts.frames_backlogged,
+            ts.queue_drops, ts.frames_backlogged,
             ts.encoder_mode_label(),
             ts.is_on_ac ? L"" : L"  Battery");
         SetWindowTextW(g_lbl_fps, fps_buf);

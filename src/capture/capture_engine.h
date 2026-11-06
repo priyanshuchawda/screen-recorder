@@ -18,8 +18,9 @@ namespace sr {
 
 using Microsoft::WRL::ComPtr;
 
-// Video frame queue — intentionally small for laptop RAM and latency
-using FrameQueue = BoundedQueue<RenderFrame, 3>;
+// Short bounded backlog absorbs brief encoder scheduling stalls.
+// At 30 fps, eight frames represent about 267 ms without unbounded latency.
+using FrameQueue = BoundedQueue<RenderFrame, 8>;
 
 // Forward declare the PIMPL impl class (defined in capture_engine.cpp)
 struct CaptureEngineImpl;
@@ -59,6 +60,12 @@ public:
     // Live counters (thread-safe reads)
     uint32_t frames_captured() const { return frames_captured_.load(std::memory_order_relaxed); }
     uint32_t frames_dropped()  const { return frames_dropped_.load(std::memory_order_relaxed); }
+    uint32_t queue_drops()     const { return queue_drops_.load(std::memory_order_relaxed); }
+    void reset_counters() {
+        frames_captured_.store(0, std::memory_order_relaxed);
+        frames_dropped_.store(0, std::memory_order_relaxed);
+        queue_drops_.store(0, std::memory_order_relaxed);
+    }
 
     // Set QPC-based PTS anchor (call between initialize and start)
     void set_sync_anchor_100ns(int64_t anchor) { pts_anchor_100ns_ = anchor; }
@@ -74,6 +81,7 @@ private:
     std::atomic<bool>     device_lost_      { false }; // T039: set when DXGI device removed
     std::atomic<uint32_t> frames_captured_  { 0 };
     std::atomic<uint32_t> frames_dropped_   { 0 };
+    std::atomic<uint32_t> queue_drops_      { 0 };
     std::atomic<uint32_t> target_fps_       { 30 };
     int64_t               pts_anchor_100ns_ = 0;
     uint32_t              capture_width_    = 0;
