@@ -1,49 +1,27 @@
-# Build Notes
+# Windows Build Notes
 
-> Quick reference for building this project. For full details see `specs/001-screen-recorder/quickstart.md`.
-
-## ⚠️ CMake Generator: Use Visual Studio, NOT Ninja
-
-Ninja generator fails on this system due to `rc.exe` (manifest.rc) path resolution issues during CMake's ABI detection. **Always use the Visual Studio generator:**
+The supported Windows build uses the Visual Studio 18 2026 x64 generator and CMake. See the [README build section](README.md#build--run) for prerequisites and the full build/package workflow.
 
 ```powershell
-# ✅ CORRECT
 cmake -B build -G "Visual Studio 18 2026" -A x64
-cmake --build build --config Debug
-
-# ❌ BROKEN — manifest.rc failure
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Release --target ScreenRecorder
+cpack --config build\CPackConfig.cmake -C Release
 ```
 
-## Build Commands
+The ZIP is generated in the repository root as `ScreenRecorder-<version>-windows-x64.zip`.
+
+## Output paths
+
+| Artifact | Path |
+|---|---|
+| App (Debug) | `build\Debug\ScreenRecorder.exe` |
+| App (Release) | `build\Release\ScreenRecorder.exe` |
+| Unit tests | `build\tests\Debug\unit_tests.exe` |
+
+Run unit and integration tests with:
 
 ```powershell
-# Configure (first time)
-cmake -B build -G "Visual Studio 18 2026" -A x64
-
-# Debug build
-cmake --build build --config Debug
-
-# Release build
-cmake --build build --config Release
-
-# Run tests
-.\build\tests\Debug\unit_tests.exe
-
-# Or via CTest
 ctest --test-dir build -C Debug --output-on-failure
 ```
 
-## Output Paths (VS Generator)
-
-| Binary | Path |
-|--------|------|
-| App (Debug) | `build\Debug\ScreenRecorder.exe` |
-| App (Release) | `build\Release\ScreenRecorder.exe` |
-| Unit Tests | `build\tests\Debug\unit_tests.exe` |
-
-## Google Test
-
-- Uses `FetchContent` (auto-downloads v1.15.2)
-- `gtest_force_shared_crt ON` is mandatory for MSVC
-- First build takes ~20s for GTest compilation
+Google Test is fetched by CMake `FetchContent` during configuration.

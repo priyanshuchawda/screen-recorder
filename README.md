@@ -8,9 +8,13 @@ Lightweight native Windows screen recorder built with C++20, Win32, Windows Grap
 ![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Stable-green)
-![Tests](https://img.shields.io/badge/Tests-156%20passing-brightgreen)
 
 Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.netlify.app)
+
+## Download
+
+The latest Windows x64 release is [Screen Recorder v0.3.13](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.13).
+Download [ScreenRecorder-0.3.13-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.13/ScreenRecorder-0.3.13-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
 
 ## Features
 
@@ -18,7 +22,8 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 - Hardware-first H.264 video + AAC audio muxed to MP4 using Media Foundation
 - Intel GPU / Quick Sync preference when available, with graceful software fallback
 - **System Audio Capture**: Record desktop/YouTube audio via WASAPI Loopback
-- **Microphone Auto-Level**: Smooth automatic speech gain with a soft peak limiter
+- **Audio synchronization**: Microphone and desktop audio are aligned by capture timestamps before mixing
+- **Microphone Auto-Level**: Smooth automatic gain with a soft peak limiter; no hard noise gate
 - **Camera Overlay**: Throttled efficient default preview with an HQ 720p-capable profile
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
 - **Resolution choices**: 360p, 480p, 720p, and 1080p output profiles with frame-rate-aware bitrates
@@ -28,6 +33,15 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 - Mute/unmute with silence injection
 - Recovery flow for orphaned `.partial.mp4` files
 - Low-disk auto-stop and output directory management
+
+## Audio behavior
+
+- Captures the Windows default microphone and desktop output through WASAPI.
+- Aligns both sources by capture timestamps, then mixes them into one stereo track.
+- Writes 48 kHz AAC-LC audio at 192 kbps. Desktop audio is mixed below the microphone to keep speech foregrounded.
+- Microphone auto-leveling and a soft limiter help control level changes and peaks. The recorder does not currently include voice noise suppression or a compressor, and the MP4 does not contain separate microphone and desktop tracks.
+
+Because the sources are combined in the recording, you cannot change their relative levels afterward in a standard player. For clearer speech, use a close microphone and set its input level in Windows before recording.
 
 ## Performance Profiles
 
@@ -39,8 +53,8 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 ## Build Requirements
 
 - Windows 10/11 (x64)
-- Visual Studio Build Tools / VS 2022 with C++ workload
-- Windows SDK 10.0.26100+
+- Visual Studio 2026 (Visual Studio 18) or Build Tools 18 with the C++ workload
+- Windows SDK 10.0.26100 or later
 - CMake 3.20+
 
 ## Build & Run
@@ -101,8 +115,9 @@ GitHub Actions workflow: `.github/workflows/windows-ci.yml`
 
 ## Notes
 
-- Use Visual Studio generator for reliable Windows builds.
-- Each completed recording has a matching `.diagnostics.txt` file beside the MP4.
+- The supported build commands use the Visual Studio 18 2026 generator.
+- Each recording writes a `.diagnostics.txt` sidecar beside the MP4. If the optional upload watcher is installed, it moves sidecars into `_diagnostics`.
+- Diagnostics identify the selected adapter and encoder mode and report queue drop counters.
 - If finalize fails, output remains `.partial.mp4` and is not renamed to `.mp4`.
 
 ## License

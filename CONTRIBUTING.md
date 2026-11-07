@@ -4,7 +4,7 @@ Thanks for contributing to ScreenRecorder.
 
 ## Development Setup
 
-1. Install Visual Studio Build Tools/VS 2022 with C++ workload.
+1. Install Visual Studio 2026 / Build Tools 18 with the C++ workload and Windows SDK 10.0.26100 or later.
 2. Configure:
    ```powershell
    cmake -B build -G "Visual Studio 18 2026" -A x64
