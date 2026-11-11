@@ -22,10 +22,12 @@ public:
 
     struct StopInfo {
         std::wstring status;
+        std::wstring encoder_mode;
         uint32_t frames_captured = 0;
         uint32_t frames_encoded = 0;
         uint32_t frames_dropped = 0;
         uint32_t queue_drops = 0;
+        uint32_t video_write_failures = 0;
         uint32_t audio_queue_drops = 0;
         uint32_t audio_packets = 0;
     };

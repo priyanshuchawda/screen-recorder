@@ -13,8 +13,8 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 
 ## Download
 
-The latest Windows x64 release is [Screen Recorder v0.3.13](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.13).
-Download [ScreenRecorder-0.3.13-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.13/ScreenRecorder-0.3.13-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
+The latest Windows x64 release is [Screen Recorder v0.3.14](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.14).
+Download [ScreenRecorder-0.3.14-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.14/ScreenRecorder-0.3.14-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
 
 ## Features
 
@@ -27,6 +27,7 @@ Download [ScreenRecorder-0.3.13-windows-x64.zip](https://github.com/priyanshucha
 - **Camera Overlay**: Throttled efficient default preview with an HQ 720p-capable profile
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
 - **Resolution choices**: 360p, 480p, 720p, and 1080p output profiles with frame-rate-aware bitrates
+- **Video continuity**: Keeps the newest frame under encoder pressure, preserves source timestamps, and falls back if hardware encoding stops producing frames
 - **Recording Diagnostics**: Per-session local `.diagnostics.txt` files show adapter, encoder mode, power state, profile, and completion counters
 - Embedded app icon for the main and settings windows
 - Pause/resume with monotonic timestamp rebasing
@@ -88,16 +89,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.13-windows-x64.zip`
+- `ScreenRecorder-0.3.14-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.13
-git push origin v0.3.13
-gh release create v0.3.13 ScreenRecorder-0.3.13-windows-x64.zip --title "Screen Recorder v0.3.13" --notes "Improves microphone and desktop audio synchronization, preserves quiet speech, and improves recording timing and battery behavior."
+git tag v0.3.14
+git push origin v0.3.14
+gh release create v0.3.14 ScreenRecorder-0.3.14-windows-x64.zip --title "Screen Recorder v0.3.14" --notes "Improves video continuity under encoder pressure, restores captured frame timestamps, and falls back when hardware encoding stalls."
 ```
 
 ## Project Layout
@@ -118,6 +119,7 @@ GitHub Actions workflow: `.github/workflows/windows-ci.yml`
 - The supported build commands use the Visual Studio 18 2026 generator.
 - Each recording writes a `.diagnostics.txt` sidecar beside the MP4. If the optional upload watcher is installed, it moves sidecars into `_diagnostics`.
 - Diagnostics identify the selected adapter and encoder mode and report queue drop counters.
+- Stop diagnostics record the final encoder mode and video mux write failures; hardware output stalls trigger a software fallback after five seconds.
 - If finalize fails, output remains `.partial.mp4` and is not renamed to `.mp4`.
 
 ## License

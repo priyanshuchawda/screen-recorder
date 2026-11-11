@@ -1,7 +1,7 @@
 #pragma once
 // bounded_queue.h — Bounded MPSC queue (multi-producer, single-consumer)
-// Push side is protected by a mutex to allow concurrent producers.
-// Pop side is lock-free (single consumer assumed).
+// Push and pop operations share a mutex so the real-time video producer can
+// safely discard the oldest queued frame when it needs to keep video current.
 // Max depth is statically bounded by Capacity — queues NEVER grow unboundedly.
 //
 // T036 Memory Stability Review:
@@ -53,8 +53,9 @@ public:
     }
 
     // Non-blocking pop. Returns nullopt if queue is empty.
-    // NOT thread-safe for multiple concurrent consumers — single consumer only.
+    // Safe against producers that use either push policy below.
     std::optional<T> try_pop() {
+        std::lock_guard<std::mutex> lock(push_mutex_);
         size_t tail = tail_.load(std::memory_order_relaxed);
         if (tail == head_.load(std::memory_order_acquire)) {
             return std::nullopt; // Empty
@@ -62,6 +63,27 @@ public:
         T item = std::move(buffer_[tail]);
         tail_.store((tail + 1) % (Capacity + 1), std::memory_order_release);
         return item;
+    }
+
+    // Keep the newest item when full by dropping the oldest queued item.
+    // Intended for real-time video, where a current frame is more useful than
+    // encoding a stale backlog. Reports whether an old item was discarded.
+    bool try_push_latest(T&& item, bool* dropped_oldest = nullptr) {
+        std::lock_guard<std::mutex> lock(push_mutex_);
+        size_t head = head_.load(std::memory_order_relaxed);
+        size_t next = (head + 1) % (Capacity + 1);
+        bool dropped = false;
+        if (next == tail_.load(std::memory_order_acquire)) {
+            size_t tail = tail_.load(std::memory_order_relaxed);
+            buffer_[tail] = T{};
+            tail_.store((tail + 1) % (Capacity + 1), std::memory_order_release);
+            dropped = true;
+        }
+        buffer_[head] = std::move(item);
+        head_.store(next, std::memory_order_release);
+        if (dropped_oldest) *dropped_oldest = dropped;
+        cv_.notify_one();
+        return true;
     }
 
     // Blocking pop with timeout. Returns nullopt on timeout.

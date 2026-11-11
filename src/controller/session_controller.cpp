@@ -228,6 +228,7 @@ bool SessionController::start() {
     // Start engines
     // ---------------------------------------------------------------
     frames_encoded_.store(0, std::memory_order_relaxed);
+    video_write_failures_.store(0, std::memory_order_relaxed);
     audio_written_.store(0,  std::memory_order_relaxed);
     capture_->reset_counters();
     telemetry_.reset(); // T037: clear counters for new session
@@ -299,6 +300,11 @@ bool SessionController::stop() {
             if (muxer_->write_video(s.Get())) {
                 frames_encoded_.fetch_add(1, std::memory_order_relaxed);
                 telemetry_.on_frame_encoded();
+            } else {
+                const uint32_t failures = video_write_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (failures == 1 || (failures % 120) == 0) {
+                    SR_LOG_ERROR(L"Muxer rejected encoded video sample (total failures=%u)", failures);
+                }
             }
         }
     }
@@ -317,10 +323,12 @@ bool SessionController::stop() {
 
     SessionDiagnostics::StopInfo diagnostics_stop;
     diagnostics_stop.status = finalized ? L"complete" : L"finalize_failed_partial_kept";
+    diagnostics_stop.encoder_mode = encoder_mode_label(encoder_->mode());
     diagnostics_stop.frames_captured = capture_->frames_captured();
     diagnostics_stop.frames_encoded = frames_encoded_.load();
     diagnostics_stop.frames_dropped = capture_->frames_dropped();
     diagnostics_stop.queue_drops = capture_->queue_drops();
+    diagnostics_stop.video_write_failures = video_write_failures_.load();
     diagnostics_stop.audio_queue_drops = audio_->queue_drops() + loopback_audio_->queue_drops();
     diagnostics_stop.audio_packets = audio_written_.load();
     diagnostics_.write_stop(diagnostics_stop);
@@ -534,10 +542,16 @@ void SessionController::encode_loop() {
                 int64_t dup_pts = last_paced_pts + (paced_pts - last_paced_pts) / 2;
                 ComPtr<IMFSample> dup_sample;
                 if (encoder_->encode_frame(last_texture.Get(), dup_pts, dup_sample)) {
-                    muxer_->write_video(dup_sample.Get());
-                    frames_encoded_.fetch_add(1, std::memory_order_relaxed);
-                    telemetry_.on_frame_encoded();
-                    telemetry_.on_duplicate_inserted();
+                    if (muxer_->write_video(dup_sample.Get())) {
+                        frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+                        telemetry_.on_frame_encoded();
+                        telemetry_.on_duplicate_inserted();
+                    } else {
+                        const uint32_t failures = video_write_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if (failures == 1 || (failures % 120) == 0) {
+                            SR_LOG_ERROR(L"Muxer rejected duplicate video sample (total failures=%u)", failures);
+                        }
+                    }
                 }
             }
 
@@ -547,9 +561,15 @@ void SessionController::encode_loop() {
             // Encode current frame
             ComPtr<IMFSample> encoded;
             if (encoder_->encode_frame(frame.texture.Get(), paced_pts, encoded)) {
-                muxer_->write_video(encoded.Get());
-                frames_encoded_.fetch_add(1, std::memory_order_relaxed);
-                telemetry_.on_frame_encoded();
+                if (muxer_->write_video(encoded.Get())) {
+                    frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+                    telemetry_.on_frame_encoded();
+                } else {
+                    const uint32_t failures = video_write_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (failures == 1 || (failures % 120) == 0) {
+                        SR_LOG_ERROR(L"Muxer rejected video sample (total failures=%u)", failures);
+                    }
+                }
             }
 
             have_last_frame = true;

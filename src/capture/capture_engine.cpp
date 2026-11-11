@@ -299,10 +299,17 @@ struct CaptureEngineImpl {
 
         parent->frames_captured_.fetch_add(1, std::memory_order_relaxed);
 
-        if (queue && !queue->try_push(std::move(rf))) {
-            parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
-            parent->queue_drops_.fetch_add(1, std::memory_order_relaxed);
-            SR_LOG_WARN(L"Capture backlog full (%zu frames); dropping captured frame", FrameQueue::capacity());
+        if (queue) {
+            bool dropped_oldest = false;
+            queue->try_push_latest(std::move(rf), &dropped_oldest);
+            if (dropped_oldest) {
+                parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
+                const uint32_t drops = parent->queue_drops_.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (drops == 1 || (drops % 120) == 0) {
+                    SR_LOG_WARN(L"Capture backlog full (%zu frames); discarding stale frame (total=%u)",
+                                FrameQueue::capacity(), drops);
+                }
+            }
         }
     }
 };

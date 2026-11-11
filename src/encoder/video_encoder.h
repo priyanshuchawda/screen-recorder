@@ -10,7 +10,9 @@
 #include <mftransform.h>
 #include <wrl/client.h>
 #include <atomic>
+#include <deque>
 #include <cstdint>
+#include <vector>
 #include "utils/render_frame.h"
 
 namespace sr {
@@ -61,6 +63,7 @@ private:
                            uint32_t fps, uint32_t bitrate_bps, bool use_hw);
     bool switch_to_software_fallback();
     bool pump_hw_events(uint32_t wait_ms);
+    void stamp_output_sample(IMFSample* sample, int64_t fallback_pts);
 
     ComPtr<IMFTransform>       mft_;
     ComPtr<IMFMediaEventGenerator> hw_events_;
@@ -85,6 +88,8 @@ private:
     uint32_t    hw_need_input_events_ = 0;
     uint32_t    hw_have_output_events_ = 0;
     bool        hw_drain_complete_ = false;
+    ULONGLONG   last_output_tick_ms_ = 0;
+    std::deque<int64_t> pending_video_pts_;
 
     // Pre-allocated staging texture for SW encoder path (avoids per-frame alloc)
     ComPtr<ID3D11Texture2D> staging_tex_;

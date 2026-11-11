@@ -212,6 +212,7 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
     hw_need_input_events_ = 0;
     hw_have_output_events_ = 0;
     hw_drain_complete_ = false;
+    pending_video_pts_.clear();
 
     MFT_REGISTER_TYPE_INFO out_info{ MFMediaType_Video, MFVideoFormat_H264 };
     IMFActivate** activates = nullptr;
@@ -300,6 +301,7 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
         if (hw_async_mft_) {
             pump_hw_events(50);
         }
+        last_output_tick_ms_ = GetTickCount64();
 
         SR_LOG_INFO(L"HW H.264 encoder active: %s (%ux%u @ %u fps, %u bps, async=%s)",
             name, profile.width, profile.height, profile.fps, profile.bitrate_bps,
@@ -326,6 +328,7 @@ bool VideoEncoder::try_init_sw(const EncoderProfile& profile,
     hw_need_input_events_ = 0;
     hw_have_output_events_ = 0;
     hw_drain_complete_ = false;
+    pending_video_pts_.clear();
 
     MFT_REGISTER_TYPE_INFO out_info{ MFMediaType_Video, MFVideoFormat_H264 };
     IMFActivate** activates = nullptr;
@@ -367,6 +370,7 @@ bool VideoEncoder::try_init_sw(const EncoderProfile& profile,
         out_height_ = height;
         out_fps_    = fps;
         hw_path_    = false;
+        last_output_tick_ms_ = GetTickCount64();
 
         MFT_OUTPUT_STREAM_INFO output_stream_info{};
         hr = mft_->GetOutputStreamInfo(0, &output_stream_info);
@@ -504,6 +508,18 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
 {
     if (!initialized_ || !mft_) return false;
 
+    auto recover_stalled_hardware = [&]() {
+        constexpr ULONGLONG kOutputStallLimitMs = 5'000;
+        if (!hw_path_ || switched_to_sw_due_to_hw_errors_ ||
+            last_output_tick_ms_ == 0 ||
+            GetTickCount64() - last_output_tick_ms_ < kOutputStallLimitMs) {
+            return false;
+        }
+        SR_LOG_ERROR(L"Hardware encoder produced no output for %llu ms; switching to software fallback",
+                     GetTickCount64() - last_output_tick_ms_);
+        return switch_to_software_fallback();
+    };
+
     // Create an IMFSample wrapping the NV12 texture
     ComPtr<IMFSample>      sample;
     ComPtr<IMFMediaBuffer> buffer;
@@ -521,6 +537,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             &buffer);
         if (FAILED(hr)) {
             SR_LOG_ERROR(L"MFCreateDXGISurfaceBuffer failed: 0x%08X", hr);
+            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
             return false;
         }
 
@@ -614,9 +631,14 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
         if (FAILED(hr) && hr != MF_E_NOTACCEPTING) {
             SR_LOG_ERROR(L"ProcessInput failed: 0x%08X", hr);
+            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
             return false;
         }
+        if (SUCCEEDED(hr)) {
+            pending_video_pts_.push_back(pts);
+        }
     } else if (hw_have_output_events_ == 0) {
+        if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
         return false;
     }
 
@@ -628,6 +650,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     // return a sample for every input frame.
     while (true) {
         if (hw_async_mft_ && hw_have_output_events_ == 0) {
+            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
             return false;
         }
 
@@ -650,6 +673,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
+            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
             return false; // normal: no encoded sample ready yet
         }
 
@@ -664,11 +688,15 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                     if (switch_to_software_fallback()) {
                         switched_to_sw_due_to_hw_errors_ = true;
                         SR_LOG_WARN(L"HW encoder became unstable (0x8000FFFF, 10 consecutive failures). Switched to SW fallback for this session.");
+                        if (out_buf.pSample) out_buf.pSample->Release();
+                        if (out_buf.pEvents) out_buf.pEvents->Release();
+                        return encode_frame(nv12_texture, pts, out_sample);
                     }
                 }
             }
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
+            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
             return false;
         }
 
@@ -677,6 +705,8 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
 
         if (out_buf.pSample) {
+            stamp_output_sample(out_buf.pSample, pts);
+            last_output_tick_ms_ = GetTickCount64();
             out_sample.Attach(out_buf.pSample);
             if (out_buf.pEvents) out_buf.pEvents->Release();
             return true;
@@ -710,7 +740,33 @@ bool VideoEncoder::switch_to_software_fallback() {
 
     hw_path_ = false;
     hw_output_fail_count_ = 0;
+    switched_to_sw_due_to_hw_errors_ = true;
+    last_output_tick_ms_ = GetTickCount64();
     return true;
+}
+
+void VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) {
+    if (!sample) return;
+
+    int64_t output_pts = fallback_pts;
+    if (!pending_video_pts_.empty()) {
+        output_pts = pending_video_pts_.front();
+        pending_video_pts_.pop_front();
+    } else {
+        LONGLONG mft_pts = 0;
+        if (SUCCEEDED(sample->GetSampleTime(&mft_pts))) {
+            output_pts = mft_pts;
+        }
+    }
+
+    const HRESULT time_hr = sample->SetSampleTime(output_pts);
+    const int64_t duration = 10'000'000LL /
+        static_cast<int64_t>((std::max)(1u, out_fps_));
+    const HRESULT duration_hr = sample->SetSampleDuration(duration);
+    if (FAILED(time_hr) || FAILED(duration_hr)) {
+        SR_LOG_WARN(L"Could not restore encoded video timestamps (time=0x%08X, duration=0x%08X)",
+                    time_hr, duration_hr);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -759,6 +815,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                 }
 
                 if (out_buf.pSample) {
+                    stamp_output_sample(out_buf.pSample, 0);
                     ComPtr<IMFSample> s;
                     s.Attach(out_buf.pSample);
                     out_samples.push_back(std::move(s));
@@ -795,6 +852,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
             break;
         }
         if (out_buf.pSample) {
+            stamp_output_sample(out_buf.pSample, 0);
             ComPtr<IMFSample> s;
             s.Attach(out_buf.pSample);
             out_samples.push_back(std::move(s));

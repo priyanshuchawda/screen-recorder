@@ -37,13 +37,16 @@ std::wstring SessionDiagnostics::format_start_summary(const StartInfo& info) {
 std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
     wchar_t buf[1024]{};
     _snwprintf_s(buf, _countof(buf), _TRUNCATE,
-                 L"event=session_stop status=%s frames_captured=%u frames_encoded=%u "
-                 L"frames_dropped=%u queue_drops=%u audio_queue_drops=%u audio_packets=%u",
+                 L"event=session_stop status=%s encoder_mode_end=%s "
+                 L"frames_captured=%u frames_encoded=%u frames_dropped=%u "
+                 L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u audio_packets=%u",
                  info.status.empty() ? L"unknown" : info.status.c_str(),
+                 info.encoder_mode.empty() ? L"unknown" : info.encoder_mode.c_str(),
                  info.frames_captured,
                  info.frames_encoded,
                  info.frames_dropped,
                  info.queue_drops,
+                 info.video_write_failures,
                  info.audio_queue_drops,
                  info.audio_packets);
     return buf;
