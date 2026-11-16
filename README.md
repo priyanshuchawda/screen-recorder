@@ -13,8 +13,8 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 
 ## Download
 
-The latest Windows x64 release is [Screen Recorder v0.3.14](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.14).
-Download [ScreenRecorder-0.3.14-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.14/ScreenRecorder-0.3.14-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
+The latest Windows x64 release is [Screen Recorder v0.3.15](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.15).
+Download [ScreenRecorder-0.3.15-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.15/ScreenRecorder-0.3.15-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
 
 ## Features
 
