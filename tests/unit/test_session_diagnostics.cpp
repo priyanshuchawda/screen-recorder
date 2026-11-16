@@ -6,16 +6,16 @@ TEST(SessionDiagnosticsTest, PathForOutputReplacesMp4Suffix) {
     EXPECT_EQ(
         sr::SessionDiagnostics::path_for_output(
             L"C:\\Recordings\\ScreenRec_2026-05-25_20-00-00.mp4"),
-        L"C:\\Recordings\\ScreenRec_2026-05-25_20-00-00.diagnostics.txt");
+        L"C:\\Recordings\\_diagnostics\\ScreenRec_2026-05-25_20-00-00.diagnostics.txt");
 }
 
 TEST(SessionDiagnosticsTest, PathForOutputAppendsWhenSuffixIsDifferent) {
     EXPECT_EQ(
         sr::SessionDiagnostics::path_for_output(L"C:\\Recordings\\ScreenRec.partial.mp4"),
-        L"C:\\Recordings\\ScreenRec.partial.diagnostics.txt");
+        L"C:\\Recordings\\_diagnostics\\ScreenRec.partial.diagnostics.txt");
     EXPECT_EQ(
         sr::SessionDiagnostics::path_for_output(L"C:\\Recordings\\ScreenRec"),
-        L"C:\\Recordings\\ScreenRec.diagnostics.txt");
+        L"C:\\Recordings\\_diagnostics\\ScreenRec.diagnostics.txt");
 }
 
 TEST(SessionDiagnosticsTest, StartSummaryIncludesHardwareProfileAndPowerState) {

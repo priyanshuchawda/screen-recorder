@@ -32,6 +32,15 @@ using DeviceLostCallback = std::function<void()>;
 class CaptureEngine {
     friend struct CaptureEngineImpl;  // allows PIMPL to access private counters
 public:
+    enum class FrameCallbackStage : uint32_t {
+        Idle,
+        GetFrame,
+        ReadFrameMetadata,
+        ReadSurface,
+        ConvertGpu,
+        QueueFrame
+    };
+
     CaptureEngine();
     ~CaptureEngine();
 
@@ -61,6 +70,13 @@ public:
     uint32_t frames_captured() const { return frames_captured_.load(std::memory_order_relaxed); }
     uint32_t frames_dropped()  const { return frames_dropped_.load(std::memory_order_relaxed); }
     uint32_t queue_drops()     const { return queue_drops_.load(std::memory_order_relaxed); }
+    FrameCallbackStage frame_callback_stage() const {
+        return frame_callback_stage_.load(std::memory_order_relaxed);
+    }
+    uint64_t frame_callback_age_ms() const {
+        const uint64_t started = frame_callback_started_ms_.load(std::memory_order_relaxed);
+        return started ? GetTickCount64() - started : 0;
+    }
     void reset_counters() {
         frames_captured_.store(0, std::memory_order_relaxed);
         frames_dropped_.store(0, std::memory_order_relaxed);
@@ -75,6 +91,15 @@ public:
     uint32_t height() const { return capture_height_; }
 
 private:
+    void set_frame_callback_stage(FrameCallbackStage stage) {
+        if (stage != FrameCallbackStage::Idle) {
+            frame_callback_started_ms_.store(GetTickCount64(), std::memory_order_relaxed);
+        } else {
+            frame_callback_started_ms_.store(0, std::memory_order_relaxed);
+        }
+        frame_callback_stage_.store(stage, std::memory_order_relaxed);
+    }
+
     std::unique_ptr<CaptureEngineImpl> impl_;
 
     std::atomic<bool>     running_          { false };
@@ -82,6 +107,8 @@ private:
     std::atomic<uint32_t> frames_captured_  { 0 };
     std::atomic<uint32_t> frames_dropped_   { 0 };
     std::atomic<uint32_t> queue_drops_      { 0 };
+    std::atomic<FrameCallbackStage> frame_callback_stage_{ FrameCallbackStage::Idle };
+    std::atomic<uint64_t> frame_callback_started_ms_{ 0 };
     std::atomic<uint32_t> target_fps_       { 30 };
     int64_t               pts_anchor_100ns_ = 0;
     uint32_t              capture_width_    = 0;

@@ -1,19 +1,18 @@
 #include "utils/session_diagnostics.h"
+#include "utils/logging.h"
 
 #include <cstdio>
+#include <filesystem>
+#include <system_error>
+
+#include <windows.h>
 
 namespace sr {
 
 std::wstring SessionDiagnostics::path_for_output(const std::wstring& output_path) {
-    const std::wstring mp4_suffix = L".mp4";
-    if (output_path.size() >= mp4_suffix.size() &&
-        output_path.compare(output_path.size() - mp4_suffix.size(),
-                            mp4_suffix.size(),
-                            mp4_suffix) == 0) {
-        return output_path.substr(0, output_path.size() - mp4_suffix.size()) +
-               L".diagnostics.txt";
-    }
-    return output_path + L".diagnostics.txt";
+    const std::filesystem::path output(output_path);
+    const std::wstring filename = output.stem().wstring() + L".diagnostics.txt";
+    return (output.parent_path() / L"_diagnostics" / filename).wstring();
 }
 
 std::wstring SessionDiagnostics::format_start_summary(const StartInfo& info) {
@@ -54,13 +53,22 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
 
 bool SessionDiagnostics::open_for_output(const std::wstring& output_path) {
     path_ = path_for_output(output_path);
-    FILE* file = nullptr;
-    if (_wfopen_s(&file, path_.c_str(), L"w, ccs=UTF-8") != 0 || !file) {
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path_).parent_path(), ec);
+    if (ec) {
         path_.clear();
         return false;
     }
-    fwprintf(file, L"ScreenRecorder diagnostics\n");
-    fclose(file);
+
+    HANDLE file = CreateFileW(path_.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        path_.clear();
+        return false;
+    }
+    CloseHandle(file);
+    set_persistent_log_path(path_);
+    append_line(L"event=diagnostics_open format=1");
     return true;
 }
 
@@ -76,15 +84,13 @@ void SessionDiagnostics::write_failure(const std::wstring& reason) {
     append_line(L"event=session_failure reason=" + (reason.empty() ? L"unknown" : reason));
 }
 
+void SessionDiagnostics::write_event(const std::wstring& event) {
+    append_line(event.empty() ? L"event=unknown" : event);
+}
+
 void SessionDiagnostics::append_line(const std::wstring& line) const {
     if (path_.empty()) return;
-
-    FILE* file = nullptr;
-    if (_wfopen_s(&file, path_.c_str(), L"a, ccs=UTF-8") != 0 || !file) {
-        return;
-    }
-    fwprintf(file, L"%s\n", line.c_str());
-    fclose(file);
+    append_persistent_log_line(path_, line);
 }
 
 } // namespace sr

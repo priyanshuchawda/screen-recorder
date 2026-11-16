@@ -239,10 +239,17 @@ struct CaptureEngineImpl {
     void on_frame_arrived(wgc::Direct3D11CaptureFramePool const& pool,
                           winrt::Windows::Foundation::IInspectable const&)
     {
+        parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::GetFrame);
+        auto reset_callback_stage = std::unique_ptr<void, std::function<void(void*)>>(
+            reinterpret_cast<void*>(1), [this](void*) {
+                parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::Idle);
+            });
+
         auto frame = pool.TryGetNextFrame();
         if (!frame) return;
 
         // T034: Detect resolution change — compare WGC content size to VP input
+        parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::ReadFrameMetadata);
         auto content_size = frame.ContentSize();
         uint32_t frame_w = static_cast<uint32_t>(content_size.Width);
         uint32_t frame_h = static_cast<uint32_t>(content_size.Height);
@@ -269,6 +276,7 @@ struct CaptureEngineImpl {
             }
         }
 
+        parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::ReadSurface);
         auto surface = frame.Surface();
         auto access  = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
 
@@ -280,6 +288,7 @@ struct CaptureEngineImpl {
         }
 
         uint32_t out_idx = 0;
+        parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::ConvertGpu);
         if (!convert_bgra_to_nv12(bgra_tex.get(), out_idx)) {
             parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
             return;
@@ -297,6 +306,7 @@ struct CaptureEngineImpl {
         rf.pts = capture_pts;
         if (rf.pts < 0) rf.pts = 0;
 
+        parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::QueueFrame);
         parent->frames_captured_.fetch_add(1, std::memory_order_relaxed);
 
         if (queue) {
@@ -481,11 +491,41 @@ bool CaptureEngine::start() {
 void CaptureEngine::stop() {
     if (!impl_) return;
     running_.store(false, std::memory_order_release);
+
+    SR_LOG_INFO(L"WGC stop: revoking FrameArrived handler");
     try {
         impl_->frame_pool.FrameArrived(impl_->frame_token);
-        impl_->session.Close();
+        SR_LOG_INFO(L"WGC stop: FrameArrived handler revoked");
+    } catch (const winrt::hresult_error& e) {
+        SR_LOG_ERROR(L"WGC stop: FrameArrived revoke failed: 0x%08X", e.code().value);
+    } catch (...) {
+        SR_LOG_ERROR(L"WGC stop: FrameArrived revoke failed with unknown exception");
+    }
+
+    // Close the frame pool before closing the session, matching OBS's WGC
+    // teardown order. Closing the pool first prevents new frame callbacks from
+    // entering while the session is shutting down.
+    SR_LOG_INFO(L"WGC stop: closing frame pool");
+    try {
         impl_->frame_pool.Close();
-    } catch (...) {}
+        SR_LOG_INFO(L"WGC stop: frame pool closed");
+    } catch (const winrt::hresult_error& e) {
+        SR_LOG_ERROR(L"WGC stop: frame pool close failed: 0x%08X", e.code().value);
+    } catch (...) {
+        SR_LOG_ERROR(L"WGC stop: frame pool close failed with unknown exception");
+    }
+
+    SR_LOG_INFO(L"WGC stop: closing capture session");
+    try {
+        impl_->session.Close();
+        SR_LOG_INFO(L"WGC stop: capture session closed");
+    } catch (const winrt::hresult_error& e) {
+        SR_LOG_ERROR(L"WGC stop: capture session close failed: 0x%08X", e.code().value);
+    } catch (...) {
+        SR_LOG_ERROR(L"WGC stop: capture session close failed with unknown exception");
+    }
+
+    SR_LOG_INFO(L"WGC stop: releasing capture resources");
     impl_.reset();
     SR_LOG_INFO(L"WGC capture stopped");
 }

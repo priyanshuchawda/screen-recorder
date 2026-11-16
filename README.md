@@ -28,7 +28,7 @@ Download [ScreenRecorder-0.3.14-windows-x64.zip](https://github.com/priyanshucha
 - **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
 - **Resolution choices**: 360p, 480p, 720p, and 1080p output profiles with frame-rate-aware bitrates
 - **Video continuity**: Keeps the newest frame under encoder pressure, preserves source timestamps, and falls back if hardware encoding stops producing frames
-- **Recording Diagnostics**: Per-session local `.diagnostics.txt` files show adapter, encoder mode, power state, profile, and completion counters
+- **Recording Diagnostics**: Timestamped per-session logs in `_diagnostics` record encoder/capture settings, 30-second pipeline heartbeats, errors, WGC callback stage, and each stop/finalize stage
 - Embedded app icon for the main and settings windows
 - Pause/resume with monotonic timestamp rebasing
 - Mute/unmute with silence injection
@@ -49,7 +49,7 @@ Because the sources are combined in the recording, you cannot change their relat
 - **Resolution presets** use 640x360, 848x480, 1280x720, or 1920x1080 output targets. The main-window resolution button cycles through presets; Settings offers the full selector.
 - On battery, 360p and 480p use the existing power-saving encoder caps. 720p and 1080p preserve the selected quality profile, which can use more battery and storage.
 - **Camera preview** intentionally uses a throttled RGB32/GDI overlay path today. It avoids adding a second GPU composition pipeline, keeps fallback simple across webcams, and is rate-limited to reduce CPU/battery cost. Screen capture and video encoding still use the D3D11/Media Foundation hardware path when available.
-- Every recording writes a small diagnostics file beside the MP4 so the selected adapter, encoder mode (`HW`, `SW`, or fallback), power state, profile, and completion status can be verified after the run.
+- Every recording writes a timestamped diagnostics sidecar to `<recording folder>\_diagnostics\<recording name>.diagnostics.txt`. It includes settings, app log messages, and a low-frequency pipeline heartbeat (frame/audio counters, queue depth, output file size, encoder stage, and WGC frame-callback stage/age). On stop, each shutdown stage records begin and completion, including WGC event revoke, frame-pool close, and capture-session close, so a later hang identifies the last operation reached. Heartbeats are written every 30 seconds to keep logging overhead low.
 
 ## Build Requirements
 
@@ -89,16 +89,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.14-windows-x64.zip`
+- `ScreenRecorder-0.3.15-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.14
-git push origin v0.3.14
-gh release create v0.3.14 ScreenRecorder-0.3.14-windows-x64.zip --title "Screen Recorder v0.3.14" --notes "Improves video continuity under encoder pressure, restores captured frame timestamps, and falls back when hardware encoding stalls."
+git tag v0.3.15
+git push origin v0.3.15
+gh release create v0.3.15 ScreenRecorder-0.3.15-windows-x64.zip --title "Screen Recorder v0.3.15" --notes "Adds persistent pipeline and WGC shutdown diagnostics, fixes stop dispatch from inside WGC callbacks, and aligns WGC teardown order with OBS."
 ```
 
 ## Project Layout
@@ -117,9 +117,9 @@ GitHub Actions workflow: `.github/workflows/windows-ci.yml`
 ## Notes
 
 - The supported build commands use the Visual Studio 18 2026 generator.
-- Each recording writes a `.diagnostics.txt` sidecar beside the MP4. If the optional upload watcher is installed, it moves sidecars into `_diagnostics`.
-- Diagnostics identify the selected adapter and encoder mode and report queue drop counters.
-- Stop diagnostics record the final encoder mode and video mux write failures; hardware output stalls trigger a software fallback after five seconds.
+- Each recording writes its `.diagnostics.txt` sidecar directly into `_diagnostics`, alongside the upload watcher's own `watcher.log` under `_uploader`.
+- Diagnostics identify the selected adapter, encoder mode, power, profile, queue drops, output file size, and low-frequency audio/video progress.
+- Stop diagnostics log the begin/completion state for capture stop, audio stop, encoder-thread join, encoder flush, and MP4 finalization. A missing completion entry identifies where shutdown stopped progressing. Hardware output stalls trigger a software fallback after five seconds.
 - If finalize fails, output remains `.partial.mp4` and is not renamed to `.mp4`.
 
 ## License

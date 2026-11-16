@@ -48,6 +48,7 @@
 #define WM_SR_STATUS  (WM_USER + 1)
 #define WM_SR_ERROR   (WM_USER + 2)
 #define WM_SR_STOP_COMPLETE (WM_USER + 3)
+#define WM_SR_STOP_REQUEST (WM_USER + 4)
 
 // Global state
 static sr::AppSettings       g_settings;
@@ -717,6 +718,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         }
         return 0;
     }
+    case WM_SR_STOP_REQUEST:
+        BeginStopAsync(hwnd, false);
+        return 0;
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -927,6 +931,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
             auto* copy = new wchar_t[error.size() + 1];
             wcscpy_s(copy, error.size() + 1, error.c_str());
             PostMessageW(g_hwnd, WM_SR_ERROR, 0, reinterpret_cast<LPARAM>(copy));
+        },
+        []() {
+            if (g_hwnd) PostMessageW(g_hwnd, WM_SR_STOP_REQUEST, 0, 0);
         }
     );
 

@@ -40,6 +40,7 @@ public:
     void write_start(const StartInfo& info);
     void write_stop(const StopInfo& info);
     void write_failure(const std::wstring& reason);
+    void write_event(const std::wstring& event);
 
     const std::wstring& path() const { return path_; }
 

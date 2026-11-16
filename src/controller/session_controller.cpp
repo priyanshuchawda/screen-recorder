@@ -31,6 +31,18 @@ const wchar_t* encoder_mode_label(EncoderMode mode) {
     }
 }
 
+const wchar_t* capture_stage_label(CaptureEngine::FrameCallbackStage stage) {
+    switch (stage) {
+        case CaptureEngine::FrameCallbackStage::Idle: return L"idle";
+        case CaptureEngine::FrameCallbackStage::GetFrame: return L"get_frame";
+        case CaptureEngine::FrameCallbackStage::ReadFrameMetadata: return L"frame_metadata";
+        case CaptureEngine::FrameCallbackStage::ReadSurface: return L"frame_surface";
+        case CaptureEngine::FrameCallbackStage::ConvertGpu: return L"video_processor_gpu";
+        case CaptureEngine::FrameCallbackStage::QueueFrame: return L"queue_frame";
+        default: return L"unknown";
+    }
+}
+
 } // namespace
 
 SessionController::SessionController()
@@ -45,6 +57,7 @@ SessionController::SessionController()
 {}
 
 SessionController::~SessionController() {
+    stop_diagnostics_monitor();
     if (!machine_.is_idle()) {
         encode_running_.store(false, std::memory_order_release);
         capture_->stop();
@@ -55,13 +68,35 @@ SessionController::~SessionController() {
     }
 }
 
+const wchar_t* SessionController::diagnostics_stage_label(DiagnosticsStage stage) {
+    switch (stage) {
+        case DiagnosticsStage::Starting: return L"starting";
+        case DiagnosticsStage::WaitingForFrame: return L"waiting_for_frame";
+        case DiagnosticsStage::EncodingVideo: return L"video_encode";
+        case DiagnosticsStage::MuxingVideo: return L"video_mux_write";
+        case DiagnosticsStage::MixingAudio: return L"audio_mix";
+        case DiagnosticsStage::MuxingAudio: return L"audio_mux_write";
+        case DiagnosticsStage::StoppingDiskMonitor: return L"stop_disk_monitor";
+        case DiagnosticsStage::StoppingCapture: return L"stop_capture";
+        case DiagnosticsStage::StoppingMicrophone: return L"stop_microphone";
+        case DiagnosticsStage::StoppingLoopback: return L"stop_loopback";
+        case DiagnosticsStage::JoiningEncodeThread: return L"join_encode_thread";
+        case DiagnosticsStage::FlushingEncoder: return L"encoder_flush";
+        case DiagnosticsStage::FinalizingMp4: return L"finalize_mp4";
+        case DiagnosticsStage::Complete: return L"complete";
+        default: return L"unknown";
+    }
+}
+
 bool SessionController::initialize(StorageManager* storage,
                                     StatusCallback on_status,
-                                    ErrorCallback  on_error)
+                                    ErrorCallback  on_error,
+                                    StopRequestCallback on_stop_requested)
 {
     storage_   = storage;
     on_status_ = std::move(on_status);
     on_error_  = std::move(on_error);
+    on_stop_requested_ = std::move(on_stop_requested);
 
     // Initialize Media Foundation
     HRESULT hr = MFStartup(MF_VERSION);
@@ -85,6 +120,8 @@ bool SessionController::initialize(StorageManager* storage,
 
 bool SessionController::start() {
     if (!machine_.transition(SessionEvent::Start)) return false;
+
+    diagnostics_stage_.store(DiagnosticsStage::Starting, std::memory_order_relaxed);
 
     // Elevate process priority during recording for smooth capture
     SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
@@ -144,6 +181,7 @@ bool SessionController::start() {
                                enc_prof.fps))
     {
         diagnostics_.write_failure(L"capture_engine_initialization_failed");
+        clear_persistent_log_path();
         notify_error(L"Capture engine initialization failed");
         machine_.transition(SessionEvent::Stop);
         machine_.transition(SessionEvent::Finalized);
@@ -183,6 +221,7 @@ bool SessionController::start() {
                                probe_.d3d_context.Get()))
     {
         diagnostics_.write_failure(L"video_encoder_initialization_failed");
+        clear_persistent_log_path();
         notify_error(L"Video encoder initialization failed");
         machine_.transition(SessionEvent::Stop);
         machine_.transition(SessionEvent::Finalized);
@@ -204,6 +243,7 @@ bool SessionController::start() {
 
     if (!muxer_->initialize(current_partial_path_, current_output_path_, mux_cfg)) {
         diagnostics_.write_failure(L"mux_writer_initialization_failed");
+        clear_persistent_log_path();
         notify_error(L"Mux writer initialization failed");
         machine_.transition(SessionEvent::Stop);
         machine_.transition(SessionEvent::Finalized);
@@ -239,22 +279,34 @@ bool SessionController::start() {
     // T039: register device-lost callback — fires when D3D device is removed
     capture_->set_device_lost_callback([this]() {
         SR_LOG_ERROR(L"[T039] Device-lost event received — auto-stopping recording");
+        diagnostics_.write_event(L"event=device_lost stop_requested=1");
         notify_error(L"\u26A0 Graphics device was reset or removed. Recording stopped.");
-        // stop() is safe to call from the WGC frame-arrived callback thread:
-        // it uses atomic transitions (same pattern as T031 disk-space auto-stop).
-        stop();
+        // Do not tear down WGC from inside its FrameArrived callback. Ask the
+        // UI thread to start the normal stop worker after this callback exits.
+        if (on_stop_requested_) {
+            on_stop_requested_();
+        } else {
+            SR_LOG_ERROR(L"No stop-request dispatcher is registered; WGC teardown deferred");
+            diagnostics_.write_event(L"event=device_lost stop_dispatcher=missing");
+        }
     });
 
     encode_running_.store(true, std::memory_order_release);
     encode_thread_ = std::thread(&SessionController::encode_loop, this);
 
     if (!capture_->start()) {
+        diagnostics_.write_event(L"event=start_stage stage=capture state=failed");
         notify_error(L"Capture start failed");
         stop();
         return false;
     }
-    audio_->start();
-    loopback_audio_->start();
+    diagnostics_.write_event(L"event=start_stage stage=capture state=complete");
+    diagnostics_.write_event(audio_->start()
+        ? L"event=start_stage stage=microphone state=complete"
+        : L"event=start_stage stage=microphone state=unavailable");
+    diagnostics_.write_event(loopback_audio_->start()
+        ? L"event=start_stage stage=loopback state=complete"
+        : L"event=start_stage stage=loopback state=unavailable");
 
     // T031: Start async disk space polling — auto-stop on < 500 MB free
     if (storage_) {
@@ -268,6 +320,8 @@ bool SessionController::start() {
         });
     }
 
+    start_diagnostics_monitor();
+    diagnostics_.write_event(L"event=recording_started");
     notify_status(L"Recording...");
     SR_LOG_INFO(L"Recording started -> %s", current_output_path_.c_str());
     return true;
@@ -278,23 +332,43 @@ bool SessionController::stop() {
 
     if (!machine_.transition(SessionEvent::Stop)) return false;
     notify_status(L"Stopping...");
+    diagnostics_.write_event(L"event=stop_requested");
 
     // T031: Stop disk space polling (handles re-entrant call from poll thread)
+    diagnostics_stage_.store(DiagnosticsStage::StoppingDiskMonitor, std::memory_order_relaxed);
+    diagnostics_.write_event(L"event=stop_stage stage=stop_disk_monitor state=begin");
     if (storage_) storage_->stopDiskSpacePolling();
+    diagnostics_.write_event(L"event=stop_stage stage=stop_disk_monitor state=complete");
 
     // Stop producers first
+    diagnostics_stage_.store(DiagnosticsStage::StoppingCapture, std::memory_order_relaxed);
+    diagnostics_.write_event(L"event=stop_stage stage=stop_capture state=begin");
     capture_->stop();
+    diagnostics_.write_event(L"event=stop_stage stage=stop_capture state=complete");
+    diagnostics_stage_.store(DiagnosticsStage::StoppingMicrophone, std::memory_order_relaxed);
+    diagnostics_.write_event(L"event=stop_stage stage=stop_microphone state=begin");
     audio_->stop();
+    diagnostics_.write_event(L"event=stop_stage stage=stop_microphone state=complete");
+    diagnostics_stage_.store(DiagnosticsStage::StoppingLoopback, std::memory_order_relaxed);
+    diagnostics_.write_event(L"event=stop_stage stage=stop_loopback state=begin");
     loopback_audio_->stop();
+    diagnostics_.write_event(L"event=stop_stage stage=stop_loopback state=complete");
 
     // Stop encode loop (it drains remaining frames)
+    diagnostics_stage_.store(DiagnosticsStage::JoiningEncodeThread, std::memory_order_relaxed);
+    diagnostics_.write_event(L"event=stop_stage stage=join_encode_thread state=begin");
     encode_running_.store(false, std::memory_order_release);
     if (encode_thread_.joinable()) encode_thread_.join();
+    diagnostics_.write_event(L"event=stop_stage stage=join_encode_thread state=complete");
 
     // Flush encoder and write remaining samples
     if (was_recording) {
+        diagnostics_stage_.store(DiagnosticsStage::FlushingEncoder, std::memory_order_relaxed);
+        diagnostics_.write_event(L"event=stop_stage stage=encoder_flush state=begin");
         std::vector<ComPtr<IMFSample>> leftover;
         encoder_->flush(leftover);
+        diagnostics_.write_event(L"event=stop_stage stage=encoder_flush state=complete samples=" +
+                                 std::to_wstring(leftover.size()));
         SR_LOG_INFO(L"Encoder flush produced %zu samples", leftover.size());
         for (auto& s : leftover) {
             if (muxer_->write_video(s.Get())) {
@@ -310,7 +384,12 @@ bool SessionController::stop() {
     }
 
     // Finalize mux (rename .partial.mp4 -> .mp4)
+    diagnostics_stage_.store(DiagnosticsStage::FinalizingMp4, std::memory_order_relaxed);
+    diagnostics_.write_event(L"event=stop_stage stage=finalize_mp4 state=begin");
     const bool finalized = muxer_->finalize();
+    diagnostics_.write_event(finalized
+        ? L"event=stop_stage stage=finalize_mp4 state=complete"
+        : L"event=stop_stage stage=finalize_mp4 state=failed");
     if (!finalized) {
         notify_error(L"Failed to finalize recording file. Partial file kept.");
     }
@@ -335,7 +414,85 @@ bool SessionController::stop() {
 
     SR_LOG_INFO(L"Recording stopped. Encoded: %u frames, audio pkts: %u",
                 frames_encoded_.load(), audio_written_.load());
+    diagnostics_stage_.store(DiagnosticsStage::Complete, std::memory_order_relaxed);
+    diagnostics_.write_event(L"event=stop_complete");
+    stop_diagnostics_monitor();
+    clear_persistent_log_path();
     return true;
+}
+
+void SessionController::start_diagnostics_monitor() {
+    diagnostics_started_ = std::chrono::steady_clock::now();
+    diagnostics_monitor_running_.store(true, std::memory_order_release);
+    diagnostics_thread_ = std::thread(&SessionController::diagnostics_monitor_loop, this);
+}
+
+void SessionController::stop_diagnostics_monitor() {
+    diagnostics_monitor_running_.store(false, std::memory_order_release);
+    diagnostics_wait_cv_.notify_all();
+    if (diagnostics_thread_.joinable() &&
+        diagnostics_thread_.get_id() != std::this_thread::get_id()) {
+        diagnostics_thread_.join();
+    }
+}
+
+void SessionController::diagnostics_monitor_loop() {
+    std::unique_lock<std::mutex> wait_lock(diagnostics_wait_mutex_);
+    constexpr auto kHeartbeatInterval = std::chrono::seconds(30);
+
+    while (diagnostics_monitor_running_.load(std::memory_order_acquire)) {
+        if (diagnostics_wait_cv_.wait_for(wait_lock, kHeartbeatInterval, [this]() {
+                return !diagnostics_monitor_running_.load(std::memory_order_acquire);
+            })) {
+            break;
+        }
+
+        wait_lock.unlock();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - diagnostics_started_).count();
+        const auto stage = diagnostics_stage_.load(std::memory_order_relaxed);
+        const uint32_t captured = capture_ ? capture_->frames_captured() : 0;
+        const uint32_t encoded = frames_encoded_.load(std::memory_order_relaxed);
+        const uint32_t dropped = capture_ ? capture_->frames_dropped() : 0;
+        const uint32_t queue_drops = capture_ ? capture_->queue_drops() : 0;
+        const size_t video_queue = frame_queue_ ? frame_queue_->size() : 0;
+        const size_t mic_queue = audio_queue_ ? audio_queue_->size() : 0;
+        const size_t loopback_queue = loopback_queue_ ? loopback_queue_->size() : 0;
+        const uint32_t audio_drops = (audio_ ? audio_->queue_drops() : 0) +
+                                     (loopback_audio_ ? loopback_audio_->queue_drops() : 0);
+        const uint32_t audio_packets = audio_written_.load(std::memory_order_relaxed);
+        const auto capture_stage = capture_
+            ? capture_->frame_callback_stage()
+            : CaptureEngine::FrameCallbackStage::Idle;
+        const uint64_t capture_stage_age_ms = capture_ ? capture_->frame_callback_age_ms() : 0;
+        uint64_t partial_bytes = 0;
+        WIN32_FILE_ATTRIBUTE_DATA file_data{};
+        if (GetFileAttributesExW(current_partial_path_.c_str(), GetFileExInfoStandard, &file_data)) {
+            ULARGE_INTEGER size{};
+            size.HighPart = file_data.nFileSizeHigh;
+            size.LowPart = file_data.nFileSizeLow;
+            partial_bytes = size.QuadPart;
+        }
+
+        wchar_t event[1024]{};
+        _snwprintf_s(event, _countof(event), _TRUNCATE,
+                     L"event=heartbeat elapsed_s=%lld stage=%s "
+                     L"captured=%u encoded=%u dropped=%u queue_drops=%u "
+                     L"video_queue=%llu mic_queue=%llu loopback_queue=%llu "
+                     L"audio_drops=%u audio_packets=%u partial_bytes=%llu "
+                     L"capture_callback=%s capture_callback_age_ms=%llu",
+                     static_cast<long long>(elapsed), diagnostics_stage_label(stage),
+                     captured, encoded, dropped, queue_drops,
+                     static_cast<unsigned long long>(video_queue),
+                     static_cast<unsigned long long>(mic_queue),
+                     static_cast<unsigned long long>(loopback_queue),
+                     audio_drops, audio_packets,
+                     static_cast<unsigned long long>(partial_bytes),
+                     capture_stage_label(capture_stage),
+                     static_cast<unsigned long long>(capture_stage_age_ms));
+        diagnostics_.write_event(event);
+        wait_lock.lock();
+    }
 }
 
 bool SessionController::pause() {
@@ -511,6 +668,7 @@ void SessionController::encode_loop() {
     while (encode_running_.load(std::memory_order_acquire) ||
            !frame_queue_->empty() || !audio_queue_->empty() || !loopback_queue_->empty())
     {
+        diagnostics_stage_.store(DiagnosticsStage::WaitingForFrame, std::memory_order_relaxed);
         uint32_t target_fps = encoder_ ? encoder_->output_fps() : 24;
         auto wait_interval = std::chrono::milliseconds(
             500 / (std::max)(1u, target_fps));
@@ -541,7 +699,9 @@ void SessionController::encode_loop() {
                 // Duplicate PTS = midpoint between last and current frame.
                 int64_t dup_pts = last_paced_pts + (paced_pts - last_paced_pts) / 2;
                 ComPtr<IMFSample> dup_sample;
+                diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
                 if (encoder_->encode_frame(last_texture.Get(), dup_pts, dup_sample)) {
+                    diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
                     if (muxer_->write_video(dup_sample.Get())) {
                         frames_encoded_.fetch_add(1, std::memory_order_relaxed);
                         telemetry_.on_frame_encoded();
@@ -560,7 +720,9 @@ void SessionController::encode_loop() {
 
             // Encode current frame
             ComPtr<IMFSample> encoded;
+            diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
             if (encoder_->encode_frame(frame.texture.Get(), paced_pts, encoded)) {
+                diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
                 if (muxer_->write_video(encoded.Get())) {
                     frames_encoded_.fetch_add(1, std::memory_order_relaxed);
                     telemetry_.on_frame_encoded();
@@ -578,6 +740,7 @@ void SessionController::encode_loop() {
 
         // --- Audio: timestamp-align mic and loopback, mix, and write one stream ---
         {
+            diagnostics_stage_.store(DiagnosticsStage::MixingAudio, std::memory_order_relaxed);
             while (auto packet = audio_queue_->try_pop()) {
                 if (!machine_.is_paused()) audio_mixer.push(std::move(*packet), true);
             }
@@ -600,6 +763,7 @@ void SessionController::encode_loop() {
                         sample->SetSampleDuration(
                             static_cast<int64_t>(mixed->frames) * 10'000'000LL /
                             static_cast<int64_t>(kAudioOutputRate));
+                        diagnostics_stage_.store(DiagnosticsStage::MuxingAudio, std::memory_order_relaxed);
                         if (muxer_->write_audio(sample.Get())) {
                             audio_written_.fetch_add(1, std::memory_order_relaxed);
                             telemetry_.on_audio_written();
@@ -609,6 +773,7 @@ void SessionController::encode_loop() {
                     }
                 }
             }
+            diagnostics_stage_.store(DiagnosticsStage::WaitingForFrame, std::memory_order_relaxed);
         }
 
         const ULONGLONG now_ms = GetTickCount64();
