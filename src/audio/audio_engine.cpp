@@ -390,9 +390,12 @@ void AudioEngine::capture_loop() {
 
             if (queue_) {
                 if (!queue_->try_push(std::move(pkt))) {
-                    queue_drops_.fetch_add(1, std::memory_order_relaxed);
-                    SR_LOG_WARN(L"[%s] Audio packet queue full; packet dropped",
-                                mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone");
+                    const uint32_t drops = queue_drops_.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (drops == 1 || (drops % 100) == 0) {
+                        SR_LOG_WARN(L"[%s] Audio packet queue full; packets dropped=%u",
+                                    mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone",
+                                    drops);
+                    }
                 }
             }
         }

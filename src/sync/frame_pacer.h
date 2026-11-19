@@ -22,6 +22,12 @@
 
 namespace sr {
 
+// Select the timestamp for a repeat after capture has been quiet. Skip a long
+// missed interval rather than encoding a backlog of stale frames after a stall.
+inline int64_t idle_repeat_pts(int64_t now, int64_t previous, int64_t interval) {
+    return (std::max)(previous + interval, now - interval);
+}
+
 enum class PaceAction {
     Accept,     // Frame is fine — use *out_pts as the corrected PTS
     Duplicate,  // Gap > 1.5× target — insert a duplicate of the PREVIOUS frame first
@@ -74,7 +80,7 @@ public:
         int64_t gap = output_pts - last_pts_;
         int64_t threshold_150pct = target_interval_100ns_ * 3 / 2;
         bool need_dup = gap > threshold_150pct &&
-                        gap < target_interval_100ns_ * 2;
+                        gap <= target_interval_100ns_ * 2;
 
         if (need_dup) {
             ++dups_;

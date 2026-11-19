@@ -160,7 +160,16 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
 
 bool MuxWriter::write_video(IMFSample* sample) {
     if (!initialized_) return false;
+    const ULONGLONG start = GetTickCount64();
+    LONGLONG pts = -1;
+    sample->GetSampleTime(&pts);
+    active_write_started_ms_.store(start, std::memory_order_release);
     HRESULT hr = sink_writer_->WriteSample(video_stream_index_, sample);
+    active_write_started_ms_.store(0, std::memory_order_release);
+    const ULONGLONG elapsed = GetTickCount64() - start;
+    if (elapsed >= 250) {
+        SR_LOG_WARN(L"Slow video WriteSample: elapsed_ms=%llu pts_100ns=%lld hr=0x%08X", elapsed, pts, hr);
+    }
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"WriteSample (video) failed: 0x%08X", hr);
         return false;
@@ -175,7 +184,25 @@ bool MuxWriter::write_video(IMFSample* sample) {
 
 bool MuxWriter::write_audio(IMFSample* sample) {
     if (!initialized_) return false;
+    const ULONGLONG start = GetTickCount64();
+    LONGLONG pts = -1;
+    sample->GetSampleTime(&pts);
+    active_write_started_ms_.store(start, std::memory_order_release);
+#ifdef SR_LOCAL_RECORDING_PROBE
+    // Explicit fault injection, compiled only into the disposable local probe.
+    static bool injected = false;
+    wchar_t value[2]{};
+    if (!injected && GetEnvironmentVariableW(L"SR_PROBE_STALL_AUDIO", value, 2) == 1 && value[0] == L'1') {
+        injected = true;
+        Sleep(18'000);
+    }
+#endif
     HRESULT hr = sink_writer_->WriteSample(audio_stream_index_, sample);
+    active_write_started_ms_.store(0, std::memory_order_release);
+    const ULONGLONG elapsed = GetTickCount64() - start;
+    if (elapsed >= 250) {
+        SR_LOG_WARN(L"Slow audio WriteSample: elapsed_ms=%llu pts_100ns=%lld hr=0x%08X", elapsed, pts, hr);
+    }
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"WriteSample (audio) failed: 0x%08X", hr);
         return false;

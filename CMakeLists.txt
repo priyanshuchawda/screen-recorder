@@ -79,6 +79,17 @@ install(FILES
 enable_testing()
 add_subdirectory(tests)
 
+# Explicitly built local hardware diagnostic; it records a disposable desktop
+# session and is not run as part of the unattended unit-test suite.
+add_executable(recording_probe EXCLUDE_FROM_ALL
+    tests/manual/recording_probe.cpp
+    ${CTRL_SRC} ${CAPTURE_SRC} ${AUDIO_SRC} ${ENCODER_SRC}
+    ${SYNC_SRC} ${STORAGE_SRC} ${UTIL_SRC}
+)
+target_include_directories(recording_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(recording_probe PRIVATE ${WIN_LIBS} psapi)
+target_compile_definitions(recording_probe PRIVATE SR_LOCAL_RECORDING_PROBE)
+
 # Packaging
 set(CPACK_PACKAGE_NAME "ScreenRecorder")
 set(CPACK_PACKAGE_VENDOR "ScreenRecorder")

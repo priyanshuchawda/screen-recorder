@@ -156,6 +156,7 @@ private:
     // Counters (legacy — kept for backwards-compat; TelemetryStore is canonical)
     std::atomic<uint32_t> frames_encoded_{ 0 };
     std::atomic<uint32_t> video_write_failures_{ 0 };
+    std::atomic<bool> output_failure_reported_{ false };
     std::atomic<uint32_t> audio_written_ { 0 };
 
     // Output path for current recording
@@ -175,6 +176,7 @@ private:
 
     void notify_status(const std::wstring& msg);
     void notify_error (const std::wstring& msg);
+    void report_output_failure(const wchar_t* stream);
 };
 
 } // namespace sr

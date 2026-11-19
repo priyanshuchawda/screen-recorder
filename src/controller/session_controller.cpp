@@ -9,6 +9,7 @@
 #include "storage/mux_writer.h"
 #include "storage/storage_manager.h"
 #include "utils/logging.h"
+#include "utils/qpc_clock.h"
 
 #include <mfapi.h>
 #include <thread>
@@ -269,6 +270,7 @@ bool SessionController::start() {
     // ---------------------------------------------------------------
     frames_encoded_.store(0, std::memory_order_relaxed);
     video_write_failures_.store(0, std::memory_order_relaxed);
+    output_failure_reported_.store(false, std::memory_order_relaxed);
     audio_written_.store(0,  std::memory_order_relaxed);
     capture_->reset_counters();
     telemetry_.reset(); // T037: clear counters for new session
@@ -379,6 +381,7 @@ bool SessionController::stop() {
                 if (failures == 1 || (failures % 120) == 0) {
                     SR_LOG_ERROR(L"Muxer rejected encoded video sample (total failures=%u)", failures);
                 }
+                report_output_failure(L"video");
             }
         }
     }
@@ -438,18 +441,64 @@ void SessionController::stop_diagnostics_monitor() {
 
 void SessionController::diagnostics_monitor_loop() {
     std::unique_lock<std::mutex> wait_lock(diagnostics_wait_mutex_);
+    constexpr auto kMonitorInterval = std::chrono::seconds(5);
     constexpr auto kHeartbeatInterval = std::chrono::seconds(30);
+    auto last_heartbeat = diagnostics_started_;
+    bool write_stall_reported = false;
+    uint32_t last_encoded = 0;
+    ULONGLONG last_video_progress_ms = GetTickCount64();
 
     while (diagnostics_monitor_running_.load(std::memory_order_acquire)) {
-        if (diagnostics_wait_cv_.wait_for(wait_lock, kHeartbeatInterval, [this]() {
+        if (diagnostics_wait_cv_.wait_for(wait_lock, kMonitorInterval, [this]() {
                 return !diagnostics_monitor_running_.load(std::memory_order_acquire);
             })) {
             break;
         }
 
         wait_lock.unlock();
+        const uint64_t write_started = muxer_ ? muxer_->active_write_started_ms() : 0;
+        const uint64_t now_ms = GetTickCount64();
+        const uint32_t encoded_now = frames_encoded_.load(std::memory_order_relaxed);
+        const bool recording = machine_.is_recording();
+        if (!recording || encoded_now != last_encoded) {
+            last_encoded = encoded_now;
+            last_video_progress_ms = now_ms;
+        }
+        const bool write_blocked = write_started != 0 && now_ms >= write_started &&
+                                   now_ms - write_started >= 10'000;
+        const bool video_stalled = now_ms >= last_video_progress_ms &&
+                                   now_ms - last_video_progress_ms >= 20'000 &&
+                                   (audio_written_.load(std::memory_order_relaxed) > 0 ||
+                                    (capture_ && capture_->frames_captured() > 0));
+        const auto callback_stage = capture_ ? capture_->frame_callback_stage()
+                                             : CaptureEngine::FrameCallbackStage::Idle;
+        const uint64_t callback_age = capture_ ? capture_->frame_callback_age_ms() : 0;
+        const bool callback_stalled = callback_stage != CaptureEngine::FrameCallbackStage::Idle &&
+                                      callback_age >= 20'000;
+        if (!write_stall_reported && recording && (write_blocked || video_stalled || callback_stalled)) {
+            write_stall_reported = true;
+            if (write_blocked) {
+                diagnostics_.write_event(L"event=mux_write_stalled elapsed_ms=" +
+                                         std::to_wstring(now_ms - write_started));
+            } else if (callback_stalled) {
+                diagnostics_.write_event(L"event=capture_callback_stalled stage=" +
+                    std::wstring(capture_stage_label(callback_stage)) + L" elapsed_ms=" +
+                    std::to_wstring(callback_age));
+            } else {
+                diagnostics_.write_event(L"event=video_output_stalled elapsed_ms=" +
+                                         std::to_wstring(now_ms - last_video_progress_ms));
+            }
+            notify_error(L"Recording output stopped progressing. Stopping to protect the recording; saving may take time.");
+            if (on_stop_requested_) on_stop_requested_();
+        }
+        const auto monitor_now = std::chrono::steady_clock::now();
+        if (monitor_now - last_heartbeat < kHeartbeatInterval) {
+            wait_lock.lock();
+            continue;
+        }
+        last_heartbeat = monitor_now;
         const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::steady_clock::now() - diagnostics_started_).count();
+            monitor_now - diagnostics_started_).count();
         const auto stage = diagnostics_stage_.load(std::memory_order_relaxed);
         const uint32_t captured = capture_ ? capture_->frames_captured() : 0;
         const uint32_t encoded = frames_encoded_.load(std::memory_order_relaxed);
@@ -711,6 +760,7 @@ void SessionController::encode_loop() {
                         if (failures == 1 || (failures % 120) == 0) {
                             SR_LOG_ERROR(L"Muxer rejected duplicate video sample (total failures=%u)", failures);
                         }
+                        report_output_failure(L"video");
                     }
                 }
             }
@@ -731,11 +781,39 @@ void SessionController::encode_loop() {
                     if (failures == 1 || (failures % 120) == 0) {
                         SR_LOG_ERROR(L"Muxer rejected video sample (total failures=%u)", failures);
                     }
+                    report_output_failure(L"video");
                 }
             }
 
             have_last_frame = true;
             last_paced_pts  = paced_pts;
+        } else if (machine_.is_recording() && have_last_frame && last_texture &&
+                   encode_running_.load(std::memory_order_acquire)) {
+            // WGC can stop delivering frames when the desktop is unchanged.
+            // Keep the video timeline advancing so the sink sees both streams
+            // progress and the last desktop image remains visible.
+            const int64_t interval = 10'000'000LL / (std::max)(1u, target_fps);
+            const int64_t now_pts = QPCClock::instance().now_hns() - sync_.anchor_100ns();
+            const int64_t next_pts = last_paced_pts + interval;
+            if (now_pts >= next_pts + interval / 2) {
+                const int64_t repeat_pts = idle_repeat_pts(now_pts, last_paced_pts, interval);
+                int64_t paced_pts = repeat_pts;
+                pacer_.pace_frame(repeat_pts, false, &paced_pts);
+                ComPtr<IMFSample> encoded;
+                diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
+                if (encoder_->encode_frame(last_texture.Get(), paced_pts, encoded)) {
+                    diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
+                    if (muxer_->write_video(encoded.Get())) {
+                        frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+                        telemetry_.on_frame_encoded();
+                        telemetry_.on_duplicate_inserted();
+                    } else {
+                        video_write_failures_.fetch_add(1, std::memory_order_relaxed);
+                        report_output_failure(L"video");
+                    }
+                }
+                last_paced_pts = paced_pts;
+            }
         }
 
         // --- Audio: timestamp-align mic and loopback, mix, and write one stream ---
@@ -748,7 +826,13 @@ void SessionController::encode_loop() {
                 if (!machine_.is_paused()) audio_mixer.push(std::move(*packet), false);
             }
 
-            while (auto mixed = audio_mixer.take()) {
+            // Yield to the video queue while catching up on audio. Draining an
+            // arbitrary audio backlog in one pass can starve video submission
+            // to the same throttled sink writer.
+            constexpr unsigned kAudioBlocksPerPass = 4;
+            for (unsigned blocks = 0; blocks < kAudioBlocksPerPass; ++blocks) {
+                auto mixed = audio_mixer.take();
+                if (!mixed) break;
                 ComPtr<IMFSample> sample;
                 ComPtr<IMFMediaBuffer> buffer;
                 const DWORD bytes = static_cast<DWORD>(mixed->stereo.size() * sizeof(float));
@@ -767,6 +851,8 @@ void SessionController::encode_loop() {
                         if (muxer_->write_audio(sample.Get())) {
                             audio_written_.fetch_add(1, std::memory_order_relaxed);
                             telemetry_.on_audio_written();
+                        } else {
+                            report_output_failure(L"audio");
                         }
                     } else {
                         SR_LOG_ERROR(L"Mixed audio buffer lock failed: 0x%08X", hr);
@@ -852,6 +938,8 @@ void SessionController::encode_loop() {
         if (muxer_->write_audio(sample.Get())) {
             audio_written_.fetch_add(1, std::memory_order_relaxed);
             telemetry_.on_audio_written();
+        } else {
+            report_output_failure(L"audio");
         }
     }
 }
@@ -863,6 +951,15 @@ void SessionController::notify_status(const std::wstring& msg) {
 void SessionController::notify_error(const std::wstring& msg) {
     SR_LOG_ERROR(L"%s", msg.c_str());
     if (on_error_) on_error_(msg);
+}
+
+void SessionController::report_output_failure(const wchar_t* stream) {
+    if (output_failure_reported_.exchange(true, std::memory_order_acq_rel)) return;
+    diagnostics_.write_event(L"event=mux_write_failed stream=" + std::wstring(stream));
+    notify_error(L"Recording could not write media data. Stopping; check the saved recording and diagnostics.");
+    if ((machine_.is_recording() || machine_.is_paused()) && on_stop_requested_) {
+        on_stop_requested_();
+    }
 }
 
 } // namespace sr

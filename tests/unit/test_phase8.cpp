@@ -13,6 +13,7 @@
 #include "utils/bounded_queue.h"
 #include "utils/render_frame.h"
 #include "capture/capture_engine.h"
+#include "audio/audio_engine.h"
 
 // ─── T032: AudioResampler ─────────────────────────────────────────────────────
 #include "audio/audio_resampler.h"

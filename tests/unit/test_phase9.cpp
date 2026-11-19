@@ -88,6 +88,11 @@ TEST(T037_Telemetry, EncoderModeLabelStrings) {
 // T038: FramePacer
 // ============================================================
 
+TEST(T038_FramePacer, IdleRepeatDoesNotReplayLongStaleBacklog) {
+    EXPECT_EQ(sr::idle_repeat_pts(10'000'000, 0, 333'333), 9'666'667);
+    EXPECT_EQ(sr::idle_repeat_pts(500'000, 0, 333'333), 333'333);
+}
+
 TEST(T038_FramePacer, FirstFrameAlwaysAccepted) {
     sr::FramePacer pacer;
     pacer.initialize(30);

@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 #include <string>
 #include <cstdint>
+#include <atomic>
 
 namespace sr {
 
@@ -57,6 +58,9 @@ public:
     bool        initialized()  const { return initialized_; }
     uint64_t    bytes_written()const { return bytes_written_; }
     std::wstring final_path()  const { return final_path_; }
+    uint64_t active_write_started_ms() const {
+        return active_write_started_ms_.load(std::memory_order_acquire);
+    }
 
 private:
     ComPtr<IMFSinkWriter> sink_writer_;
@@ -66,6 +70,7 @@ private:
     DWORD                 audio_stream_index_ = 1;
     bool                  initialized_        = false;
     uint64_t              bytes_written_      = 0;
+    std::atomic<uint64_t> active_write_started_ms_{0};
     // T029: exclusive write lock — FILE_SHARE_READ only, prevents external writes
     HANDLE                lock_handle_        = INVALID_HANDLE_VALUE;
 };
