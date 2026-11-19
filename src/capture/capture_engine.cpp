@@ -12,6 +12,7 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 
 #include "capture/capture_engine.h"
+#include "capture/capture_cadence.h"
 #include "utils/logging.h"
 
 #include <d3d11_1.h>
@@ -72,7 +73,7 @@ struct CaptureEngineImpl {
     int64_t        start_100ns     = 0;   // absolute 100ns at session start
     LARGE_INTEGER  qpc_freq        = {};
     std::atomic<int64_t> capture_interval_100ns{ 333'333 };
-    int64_t        last_capture_pts = -1;
+    CaptureCadence capture_cadence;
 
     // -----------------------------------------------------------------------
     // setup_video_processor — create D3D11 VP from in_w x in_h (BGRA) to
@@ -259,12 +260,10 @@ struct CaptureEngineImpl {
         const int64_t capture_pts = static_cast<int64_t>(
             static_cast<double>(now.QuadPart) * 10'000'000.0 /
             static_cast<double>(qpc_freq.QuadPart)) - start_100ns;
-        if (last_capture_pts >= 0 &&
-            capture_pts - last_capture_pts <
-                capture_interval_100ns.load(std::memory_order_relaxed)) {
+        if (!capture_cadence.accept(
+                capture_pts, capture_interval_100ns.load(std::memory_order_relaxed))) {
             return;
         }
-        last_capture_pts = capture_pts;
 
         if (frame_w != vp_width || frame_h != vp_height) {
             SR_LOG_INFO(L"WGC resolution changed: %ux%u -> %ux%u — recreating VP",
@@ -480,7 +479,7 @@ bool CaptureEngine::start() {
         : static_cast<int64_t>(
               static_cast<double>(now.QuadPart) * 10'000'000.0 /
               static_cast<double>(impl_->qpc_freq.QuadPart));
-    impl_->last_capture_pts = -1;
+    impl_->capture_cadence.reset();
 
     running_.store(true, std::memory_order_release);
     impl_->session.StartCapture();

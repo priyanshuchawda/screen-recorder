@@ -55,7 +55,7 @@ int wmain(int argc, wchar_t** argv) {
                                   WS_OVERLAPPEDWINDOW | WS_VISIBLE, 50, 50, 640, 240,
                                   nullptr, nullptr, cls.hInstance, nullptr);
     if (!window) return 5;
-    SetTimer(window, 1, 50, nullptr);
+    SetTimer(window, 1, 16, nullptr);
     std::atomic<bool> stop_requested{false};
     int result = 0;
     {

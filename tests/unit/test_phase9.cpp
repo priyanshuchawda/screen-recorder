@@ -21,6 +21,44 @@
 #include "utils/bounded_queue.h"
 #include "utils/render_frame.h"
 #include "capture/capture_engine.h"   // T039 / T043
+#include "capture/capture_cadence.h"
+
+TEST(CaptureCadenceTest, KeepsNearlySixtyHertzFramesAtSixtyFps) {
+    sr::CaptureCadence cadence;
+    constexpr int64_t interval = 10'000'000 / 60;
+    unsigned accepted = 0;
+    for (int i = 0; i < 3600; ++i) {
+        const int64_t pts = static_cast<int64_t>(i) * (interval - 200);
+        if (cadence.accept(pts, interval)) ++accepted;
+    }
+    EXPECT_GE(accepted, 3500u);
+}
+
+TEST(CaptureCadenceTest, LimitsOneHundredTwentyHertzToSixtyFps) {
+    sr::CaptureCadence cadence;
+    constexpr int64_t interval = 10'000'000 / 60;
+    unsigned accepted = 0;
+    for (int i = 0; i < 1200; ++i) {
+        const int64_t pts = static_cast<int64_t>(i) * interval / 2;
+        if (cadence.accept(pts, interval)) ++accepted;
+    }
+    EXPECT_GE(accepted, 590u);
+    EXPECT_LE(accepted, 610u);
+}
+
+TEST(CaptureCadenceTest, RateChangeAndLongGapDoNotCreateCatchUpBurst) {
+    sr::CaptureCadence cadence;
+    constexpr int64_t fps60 = 10'000'000 / 60;
+    constexpr int64_t fps30 = 10'000'000 / 30;
+    EXPECT_TRUE(cadence.accept(0, fps60));
+    EXPECT_FALSE(cadence.accept(fps60 / 2, fps60));
+    EXPECT_TRUE(cadence.accept(10'000'000, fps60));
+    EXPECT_FALSE(cadence.accept(10'000'001, fps60));
+    EXPECT_TRUE(cadence.accept(10'000'002, fps30));
+    EXPECT_FALSE(cadence.accept(10'000'003, fps30));
+    cadence.reset();
+    EXPECT_TRUE(cadence.accept(0, fps30));
+}
 
 // ============================================================
 // T037: TelemetryStore
