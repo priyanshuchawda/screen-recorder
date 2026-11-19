@@ -13,8 +13,8 @@ Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.n
 
 ## Download
 
-The latest Windows x64 release is [Screen Recorder v0.3.15](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.15).
-Download [ScreenRecorder-0.3.15-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.15/ScreenRecorder-0.3.15-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
+The latest Windows x64 release is [Screen Recorder v0.3.16](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.16).
+Download [ScreenRecorder-0.3.16-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
 
 ## Features
 
@@ -89,16 +89,16 @@ cpack --config build\CPackConfig.cmake -C Release
 
 Generated artifact:
 
-- `ScreenRecorder-0.3.15-windows-x64.zip`
+- `ScreenRecorder-0.3.16-windows-x64.zip`
 
 ## Release
 
 Use GitHub CLI to publish a tagged release with the package:
 
 ```powershell
-git tag v0.3.15
-git push origin v0.3.15
-gh release create v0.3.15 ScreenRecorder-0.3.15-windows-x64.zip --title "Screen Recorder v0.3.15" --notes "Adds persistent pipeline and WGC shutdown diagnostics, fixes stop dispatch from inside WGC callbacks, and aligns WGC teardown order with OBS."
+git tag v0.3.16
+git push origin v0.3.16
+gh release create v0.3.16 ScreenRecorder-0.3.16-windows-x64.zip --title "Screen Recorder v0.3.16" --notes "Improves recording output progress and stall diagnostics."
 ```
 
 ## Project Layout
