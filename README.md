@@ -1,127 +1,360 @@
-# ScreenRecorder
+# ScreenRecorder — Free, Lightweight Open-Source Screen Recorder
 
-Lightweight native Windows screen recorder built with C++20, Win32, Windows Graphics Capture, Media Foundation, D3D11, Intel Quick Sync capable hardware encoding, and WASAPI.
+**A portable, GPU-accelerated screen recorder for Windows 10/11, laptops and low-end PCs, with a separate native Fedora Wayland edition.**
 
-> Fedora 44 GNOME/Wayland users: a separate, portal-first native implementation lives in [fedora-linux-app](fedora-linux-app/README.md). It uses PipeWire + GStreamer and does not attempt to build the Windows source tree on Linux.
+ScreenRecorder is a free, MIT-licensed screen recording application designed for low overhead and straightforward local recording. It prioritizes hardware H.264 encoding, including Intel Quick Sync on compatible Intel Iris Xe and integrated graphics, and records your screen, microphone, system audio and optional webcam overlay to MP4. It is a lightweight alternative to OBS Studio for everyday recording when you do not need a full streaming and scene-composition suite.
 
-![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)
-![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Status](https://img.shields.io/badge/Status-Stable-green)
+The Windows application is built in native C++20 with Win32, Windows Graphics Capture (WGC), Direct3D 11 (D3D11), Media Foundation and WASAPI. The Fedora edition uses GTK4, libadwaita, PipeWire, GStreamer and hardware encoding through VA-API or Quick Sync where available.
 
-Website: [screen-recorder-windows.netlify.app](https://screen-recorder-windows.netlify.app)
+[![Download Windows](https://img.shields.io/badge/Download-Windows%20x64-0078D4?style=for-the-badge&logo=windows)](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip)
+[![Download Fedora](https://img.shields.io/badge/Download-Fedora%2044-51A2DA?style=for-the-badge&logo=fedora&logoColor=white)](https://github.com/priyanshuchawda/screen-recorder/releases/download/fedora-v0.1.5/fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm)
 
-## Download
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![C++20](https://img.shields.io/badge/C%2B%2B-20-00599C?logo=cplusplus)](CMakeLists.txt)
+[![GitHub stars](https://img.shields.io/github/stars/priyanshuchawda/screen-recorder?style=flat)](https://github.com/priyanshuchawda/screen-recorder/stargazers)
+[![GitHub downloads](https://img.shields.io/github/downloads/priyanshuchawda/screen-recorder/total)](https://github.com/priyanshuchawda/screen-recorder/releases)
 
-The latest Windows x64 release is [Screen Recorder v0.3.16](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.16).
-Download [ScreenRecorder-0.3.16-windows-x64.zip](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip), extract it, and run `ScreenRecorder.exe`.
+[Website](https://screen-recorder-windows.netlify.app/) · [All releases](https://github.com/priyanshuchawda/screen-recorder/releases) · [Fedora documentation](fedora-linux-app/README.md) · [Report a bug](https://github.com/priyanshuchawda/screen-recorder/issues/new)
 
-## Features
+![ScreenRecorder Windows application interface with screen recording controls](docs/app-preview.png)
 
-- Full-screen capture via Windows Graphics Capture (WGC)
-- Hardware-first H.264 video + AAC audio muxed to MP4 using Media Foundation
-- Intel GPU / Quick Sync preference when available, with graceful software fallback
-- **System Audio Capture**: Record desktop/YouTube audio via WASAPI Loopback
-- **Audio synchronization**: Microphone and desktop audio are aligned by capture timestamps before mixing
-- **Microphone Auto-Level**: Smooth automatic gain with a soft peak limiter; no hard noise gate
-- **Camera Overlay**: Throttled efficient default preview with an HQ 720p-capable profile
-- **Anti-Ducking**: Opt-out from Windows auto-lowering volume during capture
-- **Resolution choices**: 360p, 480p, 720p, and 1080p output profiles with frame-rate-aware bitrates
-- **Video continuity**: Keeps the newest frame under encoder pressure, preserves source timestamps, and falls back if hardware encoding stops producing frames
-- **Recording Diagnostics**: Timestamped per-session logs in `_diagnostics` record encoder/capture settings, 30-second pipeline heartbeats, errors, WGC callback stage, and each stop/finalize stage
-- Embedded app icon for the main and settings windows
-- Pause/resume with monotonic timestamp rebasing
-- Mute/unmute with silence injection
-- Recovery flow for orphaned `.partial.mp4` files
-- Low-disk auto-stop and output directory management
+## Download and install
 
-## Audio behavior
+| Platform | Release | Package | Download |
+| --- | --- | --- | --- |
+| Windows 10/11 (x64) | v0.3.16 | Portable ZIP, approximately 126 KiB | [Download Windows ZIP](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip) |
+| Fedora 44 GNOME/Wayland (x86_64) | fedora-v0.1.5 | Binary RPM, approximately 118 KiB | [Download Fedora RPM](https://github.com/priyanshuchawda/screen-recorder/releases/download/fedora-v0.1.5/fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm) |
 
-- Captures the Windows default microphone and desktop output through WASAPI.
-- Aligns both sources by capture timestamps, then mixes them into one stereo track.
-- Writes 48 kHz AAC-LC audio at 192 kbps. Desktop audio is mixed below the microphone to keep speech foregrounded.
-- Microphone auto-leveling and a soft limiter help control level changes and peaks. The recorder does not currently include voice noise suppression or a compressor, and the MP4 does not contain separate microphone and desktop tracks.
+Package sizes are compressed release asset sizes, not installed size, runtime RAM usage or the size of Linux runtime dependencies. Check [all releases](https://github.com/priyanshuchawda/screen-recorder/releases) for newer builds and release notes. Windows and Fedora releases are versioned independently.
 
-Because the sources are combined in the recording, you cannot change their relative levels afterward in a standard player. For clearer speech, use a close microphone and set its input level in Windows before recording.
+### Windows quick start
 
-## Performance Profiles
+1. Download the Windows ZIP and extract it to a folder.
+2. Run `ScreenRecorder.exe`.
+3. Select the resolution, frame rate and output folder in Settings.
+4. Configure microphone/system audio and the optional camera overlay, then start recording.
+5. Stop recording and allow the MP4 to finish finalizing before closing the app.
 
-- **Resolution presets** use 640x360, 848x480, 1280x720, or 1920x1080 output targets. The main-window resolution button cycles through presets; Settings offers the full selector.
-- On battery, 360p and 480p use the existing power-saving encoder caps. 720p and 1080p preserve the selected quality profile, which can use more battery and storage.
-- **Camera preview** intentionally uses a throttled RGB32/GDI overlay path today. It avoids adding a second GPU composition pipeline, keeps fallback simple across webcams, and is rate-limited to reduce CPU/battery cost. Screen capture and video encoding still use the D3D11/Media Foundation hardware path when available.
-- Every recording writes a timestamped diagnostics sidecar to `<recording folder>\_diagnostics\<recording name>.diagnostics.txt`. It includes settings, app log messages, and a low-frequency pipeline heartbeat (frame/audio counters, queue depth, output file size, encoder stage, and WGC frame-callback stage/age). On stop, each shutdown stage records begin and completion, including WGC event revoke, frame-pool close, and capture-session close, so a later hang identifies the last operation reached. Heartbeats are written every 30 seconds to keep logging overhead low.
+No installer or cloud account is required for normal Windows recording. Recordings are saved locally.
 
-## Build Requirements
+### Fedora Linux quick start
 
-- Windows 10/11 (x64)
+Download the binary RPM (not the source RPM) and install it from your Downloads folder:
+
+```bash
+cd ~/Downloads
+sudo dnf install ./fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm
+```
+
+Launch **Fedora Screen Recorder** from the GNOME app grid, or run:
+
+```bash
+gtk-launch io.github.screenrecorder.Fedora
+```
+
+Choose a screen or window through the desktop portal. See the [Fedora installation and hardware encoder guide](fedora-linux-app/README.md) for dependencies, Intel media drivers, source builds and troubleshooting.
+
+## Why ScreenRecorder?
+
+- **Lightweight native application:** no Electron or browser runtime in the Windows recording path.
+- **Hardware-accelerated screen recording:** uses compatible GPU media encoders before falling back to software.
+- **Designed for laptops and integrated graphics:** Intel Iris Xe, Intel Quick Sync and battery-aware recording profiles are development priorities.
+- **Screen, voice and desktop sound:** record tutorials, presentations, lectures and coding sessions with microphone and system audio.
+- **Optional webcam overlay:** useful for demonstrations and educational recordings.
+- **Local, offline workflow:** no account or cloud service is required for recording.
+- **Free and open source:** inspect, modify and redistribute the source under the [MIT License](LICENSE).
+
+ScreenRecorder is intentionally focused on recording rather than live streaming, extensive scene composition or full video editing. Actual CPU, GPU, RAM and battery consumption depend on your hardware, drivers, recording settings and workload.
+
+## Features and platform support
+
+The Windows and Fedora applications share the same goals but have separate native implementations.
+
+| Feature | Windows | Fedora 44 GNOME/Wayland |
+| --- | --- | --- |
+| Screen capture | Primary monitor | Screen or window via desktop portal |
+| Video recording | H.264 | H.264 |
+| Hardware encoding | Media Foundation, Intel GPU preference | VA low-power, Quick Sync or VA-API |
+| Software fallback | H.264 software MFT | OpenH264 |
+| Output format | MP4 (H.264 + AAC) | MP4 (H.264 + AAC) |
+| Microphone and system audio | WASAPI | PipeWire/PulseAudio-compatible sources |
+| Webcam picture-in-picture | Supported | Supported |
+| Pause and resume | Supported | Supported |
+| Power-aware recording | Supported | Supported |
+| Dedicated Battery Saver mode | Planned | Supported |
+| Local recording diagnostics | Supported | Supported |
+| Low-disk automatic stop | Supported | Supported |
+| Interrupted-file preservation | Partial MP4 retained | Partial MP4 retained |
+
+### Windows recording features
+
+- Full-screen capture through Windows Graphics Capture, with D3D11 video processing.
+- Hardware-first H.264 video encoding and AAC audio muxing through Media Foundation.
+- Intel GPU / Quick Sync preference when available, with software fallback.
+- WASAPI loopback for desktop, browser and other system audio.
+- Timestamp-aligned microphone and system audio mixing.
+- Microphone automatic gain control and soft peak limiting, without a hard noise gate.
+- Anti-ducking behavior to avoid automatic Windows volume reduction during capture.
+- Optional throttled webcam overlay with a 720p-capable high-quality profile.
+- Selectable 360p, 480p, 720p and 1080p output profiles, with 30/60 FPS settings.
+- Pause/resume with monotonic timestamp rebasing; mute/unmute with silence injection.
+- Bounded frame queues favor recent frames under encoder pressure and preserve source timestamps.
+- Output folder management, low-disk safeguards and interrupted-file recovery flow.
+- Per-session diagnostics, recording progress monitoring and encoder stall detection.
+- Embedded application icons for the main and settings windows.
+
+## Recommended recording settings
+
+### Windows quality presets
+
+| Resolution | Output size | Nominal bitrate at 30 FPS | Nominal bitrate at 60 FPS |
+| --- | --- | ---: | ---: |
+| 360p | 640 × 360 | 1.5 Mbps | 2.5 Mbps |
+| 480p | 848 × 480 | 4 Mbps | 6 Mbps |
+| 720p | 1280 × 720 | 5 Mbps | 8 Mbps |
+| 1080p | 1920 × 1080 | 8 Mbps | 10 Mbps |
+
+These are configured targets. Power-saving caps and encoder behavior may change the effective bitrate or frame rate. Sustained 60 FPS is hardware- and workload-dependent and has not yet been established by the current published Windows tests.
+
+| Use case | Suggested starting point |
+| --- | --- |
+| Low-end PC or battery-powered laptop | 480p, 30 FPS; webcam off if unnecessary |
+| Online classes and presentations | 720p or 1080p, 30 FPS for readable text |
+| Coding tutorials and software demos | 1080p, 30 FPS |
+| Fast-motion content | 60 FPS only after a short test confirms adequate throughput |
+
+On Windows, 360p and 480p use power-saving encoder caps on battery. The 720p and 1080p profiles preserve the selected quality policy and may consume more battery and storage.
+
+The Fedora edition additionally offers an explicit Battery Saver profile (360p, 15 FPS) and an automatic battery efficiency profile. See the [Fedora power and quality policy](fedora-linux-app/README.md#power-and-quality-policy).
+
+## Intel Iris Xe and integrated GPU support
+
+ScreenRecorder prioritizes hardware video encoding to reduce dependence on CPU-based video compression. It is designed with Intel integrated graphics and laptop power constraints in mind, but is not limited to Intel hardware.
+
+- **Windows:** the application enumerates Media Foundation H.264 encoder transforms, prefers an Intel-capable hardware path where available and can fall back to software H.264.
+- **Fedora:** the encoder policy tries Intel VA low-power H.264 (`vah264lpenc`), Quick Sync and VA-API before OpenH264. The Intel VA low-power path has been smoke-tested on an Iris Xe development laptop.
+- **Other GPUs:** compatible hardware encoders may be usable, but broad AMD/NVIDIA and older Intel compatibility has not been established by a published test matrix.
+
+A supported GPU does not guarantee hardware encoding: drivers, codec support, operating-system components and encoder initialization also matter. Check the recording diagnostics to confirm the selected encoder.
+
+## Performance and validation
+
+The project aims for low recording overhead, small packages and reliable output. Published results are distinguished from design goals.
+
+| Evidence | Result |
+| --- | --- |
+| Windows v0.3.16 portable ZIP | 129,117 bytes (approximately 126 KiB) |
+| Windows v0.3.16 local unit tests | 158 passed, as reported in release notes |
+| Five-minute Windows 1080p60 test | Finalized successfully, no reported audio/video queue drops |
+| Average encoded frame rate in that test | Approximately 39.5 FPS; sustained 60 FPS remains unverified |
+| Fedora Intel VA low-power smoke test | 848 × 480 at 30 FPS, verified in the development environment |
+
+Sources: [Windows v0.3.16 release notes](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.16), [Fedora initial release validation](https://github.com/priyanshuchawda/screen-recorder/releases/tag/fedora-v0.1.0), and [Fedora validation guide](fedora-linux-app/README.md#validation).
+
+Controlled CPU, RAM, power, frame-delivery and long-session comparisons against OBS Studio, wcap and other lightweight recorders are planned under [issue #159](https://github.com/priyanshuchawda/screen-recorder/issues/159). No claim of being the fastest or lowest-resource recorder is made without comparable measurements.
+
+## Audio behavior on Windows
+
+The app captures the default Windows microphone and desktop output through WASAPI, aligns them using capture timestamps and mixes them into a single stereo track. The output uses 48 kHz AAC-LC at 192 kbps. Desktop audio is mixed below the microphone to keep speech foregrounded.
+
+Automatic microphone gain and a soft limiter help manage changing levels and peaks. Noise suppression, a compressor and independent audio tracks are not currently included. For clearer speech, use a close microphone and set its input level in Windows before recording. Test both audio sources before important recordings.
+
+## Recording safety and known limitations
+
+ScreenRecorder retains `.partial.mp4` files until finalization succeeds. Low-disk monitoring and recording watchdogs help detect failures; however, an interrupted MP4 may be unplayable if its metadata was not finalized. Renaming a partial file does not repair it. Keep the original file and avoid overwriting your only copy.
+
+Current limitations include:
+
+- Windows captures the primary monitor only; window, region and other-monitor selection are not yet implemented there.
+- Windows records H.264/AAC to MP4, rather than HEVC, AV1 or a crash-resilient MKV/fragmented MP4 format.
+- Windows uses default audio endpoints and a combined audio track.
+- Hardware output stalls trigger software fallback after five seconds, but permanently blocked OS media calls can still delay shutdown.
+- Sustained 1080p60, multi-hour recording stability and broad hardware compatibility require further real-device validation.
+- Fedora support currently targets Fedora 44 GNOME/Wayland on x86_64; other distributions and desktop environments are not established supported configurations.
+
+See the [recording reliability roadmap (#160)](https://github.com/priyanshuchawda/screen-recorder/issues/160), [interruption-safe recording (#154)](https://github.com/priyanshuchawda/screen-recorder/issues/154) and [open issues](https://github.com/priyanshuchawda/screen-recorder/issues) for current development priorities.
+
+## Frequently asked questions
+
+**Is ScreenRecorder free and open source?**  
+Yes. The source is available under the MIT License, and Windows and Fedora release packages are free to download.
+
+**Does it work with Intel Iris Xe graphics or low-end laptops?**  
+Intel integrated graphics are a primary optimization target. Compatible hardware encoding and lower-resolution profiles are intended to reduce overhead. Actual performance depends on the device and drivers; make a short test recording first.
+
+**Is it a lightweight alternative to OBS Studio?**  
+Yes, for simple local recording. OBS remains more appropriate for advanced scenes, streaming, plugins, complex audio routing and other features that ScreenRecorder does not currently provide. Comparative resource benchmarks are still planned.
+
+**Can I record my screen with internal audio, microphone and webcam?**  
+Yes. Both editions support system sound, microphone audio and an optional camera overlay. On Windows, the audio sources are combined into one stereo AAC track.
+
+**Can I record offline?**  
+Normal recording saves files locally and does not require a cloud account. Downloading the application and installing any required dependencies may require an internet connection.
+
+**Can I record lectures, coding sessions and presentations?**  
+Yes, these are intended use cases. Choose a resolution that keeps text readable and check the recording and audio before relying on a long session. Multi-hour reliability testing is ongoing.
+
+**Does it support Linux?**  
+Yes. There is a separate native Fedora 44 GNOME/Wayland edition using PipeWire and GStreamer. It is not a Linux build of the Windows code. See the [Fedora README](fedora-linux-app/README.md).
+
+**Can I recover recordings after a crash?**  
+Partial files are preserved when possible, but playback or repair is not guaranteed. Interruption-safe containers and validated recovery are active development goals.
+
+## Troubleshooting and diagnostics
+
+If you experience stuttering, silent audio, encoder errors or a recording that takes too long to stop:
+
+1. Check that your graphics driver is up to date and the selected hardware encoder is available.
+2. Try a 30 FPS recording at a lower resolution, with the webcam disabled.
+3. Confirm the default Windows microphone and playback device and check available disk space.
+4. Inspect the session diagnostics and retain any unfinished recording.
+5. [Open a GitHub issue](https://github.com/priyanshuchawda/screen-recorder/issues/new) with the app version, OS, GPU/driver, recording settings, expected behavior and relevant logs. Review logs and remove personal paths or other sensitive information before sharing them.
+
+Windows diagnostics are written to:
+
+```text
+<recording folder>\_diagnostics\<recording name>.diagnostics.txt
+```
+
+The sidecar includes the selected adapter, encoder mode, power state, profile, errors, queue depth, frame/audio counters, output size, encoder stage and WGC callback stage/age. Low-frequency heartbeats run every 30 seconds. Stop-stage logs record WGC event revocation, frame-pool/session closure, audio stop, encoder-thread join, flush and MP4 finalization. A missing completion entry can help identify a stalled operation.
+
+The optional external upload watcher's `_uploader/watcher.log` is separate from the recorder diagnostics, as documented in the original project notes. Fedora writes neighboring diagnostic files; see its [behavior and safeguards](fedora-linux-app/README.md#behavior-and-safeguards).
+
+## Technical architecture
+
+### Windows recording pipeline
+
+```mermaid
+flowchart LR
+    A[Windows Graphics Capture] --> B[D3D11 video processing / NV12]
+    B --> C[Media Foundation H.264 encoder]
+    D[WASAPI microphone] --> F[Timestamp alignment and audio mixing]
+    E[WASAPI loopback] --> F
+    F --> G[AAC audio]
+    C --> H[Media Foundation MP4 muxing]
+    G --> H
+    H --> I[Local recording]
+```
+
+- **Capture:** Windows Graphics Capture and Direct3D 11 video processing.
+- **Encoding:** Media Foundation hardware-first H.264 MFT selection and software fallback.
+- **Audio:** WASAPI microphone/loopback capture, resampling, timestamp alignment, gain and mixing.
+- **Synchronization:** monotonic timing, bounded queues and timestamp rebasing across pauses.
+- **Storage:** Media Foundation Sink Writer, partial-file retention, output monitoring and finalization.
+- **Camera:** throttled RGB32/GDI overlay path, intentionally separate from a second GPU composition pipeline; the main screen capture and encoding retain the D3D11/Media Foundation hardware path where available.
+- **UI:** native Win32 windows and settings, with settings persisted locally.
+
+### Fedora recording pipeline
+
+```mermaid
+flowchart LR
+    A[Desktop portal] --> B[PipeWire video]
+    B --> C[GStreamer pipeline]
+    D[Microphone / system audio] --> C
+    E[Optional V4L2 camera PiP] --> C
+    C --> F[Hardware-first H.264 and AAC / MP4]
+    F --> G[Local recording]
+```
+
+The Fedora implementation uses C++20, GTK4/libadwaita, libportal, PipeWire DMA-BUF transport where supported, GStreamer, VA-API and V4L2. See the [native Fedora stack](fedora-linux-app/README.md#native-stack) for encoder selection, preview behavior and power management.
+
+## Build from source
+
+### Windows requirements
+
+- Windows 10/11 x64
 - Visual Studio 2026 (Visual Studio 18) or Build Tools 18 with the C++ workload
 - Windows SDK 10.0.26100 or later
-- CMake 3.20+
+- CMake 3.20+ (use a version that supports the Visual Studio 18 2026 generator)
 
-## Build & Run
+These are developer build requirements, not a statement that end users need Visual Studio to run the released package.
 
 ```powershell
-# Configure
+git clone https://github.com/priyanshuchawda/screen-recorder.git
+cd screen-recorder
 cmake -B build -G "Visual Studio 18 2026" -A x64
-
-# Build (Debug)
 cmake --build build --config Debug
-
-# Run tests
 ctest --test-dir build -C Debug --output-on-failure
-
-# Run app
 .\build\Debug\ScreenRecorder.exe
 ```
 
-## Package (ZIP)
+### Package the Windows portable ZIP
 
 ```powershell
-# Configure once (if not already configured)
 cmake -B build -G "Visual Studio 18 2026" -A x64
-
-# Build release binary
 cmake --build build --config Release
-
-# Create distributable zip
 cpack --config build\CPackConfig.cmake -C Release
 ```
 
-Generated artifact:
+The generated archive follows the naming convention `ScreenRecorder-<version>-windows-x64.zip` (currently `ScreenRecorder-0.3.16-windows-x64.zip`).
 
-- `ScreenRecorder-0.3.16-windows-x64.zip`
+For maintainers: update the project version, test and build the matching package, then create a new Git tag and publish the archive using `gh release create`. Use a new tag, matching asset filename, release notes and validation evidence; do not reuse an existing release tag. Update the Windows/Fedora download links independently when publishing a new version.
 
-## Release
+### Fedora build and packaging
 
-Use GitHub CLI to publish a tagged release with the package:
+Follow the [Fedora build requirements and installation instructions](fedora-linux-app/README.md) to install GTK4, libportal, PipeWire and GStreamer dependencies.
 
-```powershell
-git tag v0.3.16
-git push origin v0.3.16
-gh release create v0.3.16 ScreenRecorder-0.3.16-windows-x64.zip --title "Screen Recorder v0.3.16" --notes "Improves recording output progress and stall diagnostics."
+```bash
+cd fedora-linux-app
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+./build/fedora-screen-recorder
 ```
 
-## Project Layout
+To build the native RPM after installing the packaging dependencies:
+
+```bash
+./packaging/build-rpm.sh
+```
+
+## Testing and development
+
+Windows unit tests use CTest. The repository also includes an opt-in real-device recording probe to investigate video continuity, audio synchronization, output stalls and shutdown behavior.
+
+```powershell
+ctest --test-dir build -C Debug --output-on-failure
+cmake --build build --config Release --target recording_probe
+```
+
+Read the [local Windows recording probe guide](tests/manual/README.md) before running the probe; it records the actual desktop and microphone, so use a private temporary output folder.
+
+For Fedora, run the local verification gate from `fedora-linux-app/`:
+
+```bash
+./verify-local.sh
+./verify-ui-runtime.sh
+```
+
+The optional `./verify-intel-va.sh` script checks the Intel hardware path with the required drivers/plugins and `ffprobe` installed. See the [Fedora validation instructions](fedora-linux-app/README.md#validation).
+
+Repository workflow definitions: [Windows CI](.github/workflows/windows-ci.yml) and [Fedora CI](.github/workflows/fedora-linux-ci.yml). The Fedora documentation describes local checks as the required validation gate and hosted workflows as disabled; workflow files alone do not establish that hosted checks currently run.
+
+### Project structure
 
 ```text
 src/
-  app/ controller/ capture/ audio/ encoder/ storage/ sync/ utils/
-tests/
-  unit/ integration/
+  app/          Win32 interface, settings and camera overlay
+  controller/   Recording lifecycle and session coordination
+  capture/      Windows Graphics Capture and GPU processing
+  audio/        WASAPI, audio mixing and resampling
+  encoder/      Hardware detection and video encoding
+  storage/      MP4 muxing and storage safeguards
+  sync/         Frame pacing and timing
+  utils/        Queues, logging and diagnostics
+tests/          Unit, integration and manual recording tests
+fedora-linux-app/  Native Fedora implementation and RPM packaging
+docs/           Project website and application preview
+.github/        Workflow definitions and development guidance
 ```
 
-## CI
+## Contributing
 
-GitHub Actions workflow: `.github/workflows/windows-ci.yml`
+Bug reports, reproducible hardware test results, documentation fixes and focused pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before submitting changes.
 
-## Notes
+Keep changes focused, add tests for behavior changes and include actual validation evidence. Hardware compatibility reports are particularly useful when they identify the operating system, GPU, driver, encoder, resolution and frame rate.
 
-- The supported build commands use the Visual Studio 18 2026 generator.
-- Each recording writes its `.diagnostics.txt` sidecar directly into `_diagnostics`, alongside the upload watcher's own `watcher.log` under `_uploader`.
-- Diagnostics identify the selected adapter, encoder mode, power, profile, queue drops, output file size, and low-frequency audio/video progress.
-- Stop diagnostics log the begin/completion state for capture stop, audio stop, encoder-thread join, encoder flush, and MP4 finalization. A missing completion entry identifies where shutdown stopped progressing. Hardware output stalls trigger a software fallback after five seconds.
-- If finalize fails, output remains `.partial.mp4` and is not renamed to `.mp4`.
+If ScreenRecorder is useful to you, consider starring the repository or sharing it with someone looking for a lightweight, open-source screen recorder.
 
 ## License
 
-MIT License. See `LICENSE`.
+ScreenRecorder is released under the [MIT License](LICENSE).
