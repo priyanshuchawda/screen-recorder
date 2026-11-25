@@ -1,2 +1,7 @@
 # Local browser-review screenshots and snapshots.
 .playwright-cli/
+
+# Generated Astro output and installed website dependencies.
+.astro/
+dist/
+node_modules/
