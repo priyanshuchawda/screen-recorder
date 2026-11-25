@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro check && astro build",
+    "deploy:pages": "pnpm dlx wrangler@4.168.0 pages deploy dist --project-name screenrecording --branch main",
     "preview": "astro preview",
     "check": "astro check",
     "format": "prettier --plugin prettier-plugin-astro --write \"src/**/*.{astro,ts,css}\" \"*.{json,mjs,ts}\" \"README.md\""

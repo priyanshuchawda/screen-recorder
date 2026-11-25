@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://screen-recorder-windows.netlify.app/sitemap-index.xml
+Sitemap: https://screenrecording.pages.dev/sitemap-index.xml
