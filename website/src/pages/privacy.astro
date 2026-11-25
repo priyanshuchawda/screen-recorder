@@ -1,0 +1,71 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import { repository } from "../data/site";
+---
+
+<BaseLayout
+  title="Privacy and local recording · ScreenRecorder"
+  description="Learn what ScreenRecorder records, where files and diagnostics are stored, which permissions it uses, and what the static website collects."
+>
+  <article class="guide wrap">
+    <a class="back-link" href="/">← Home</a>
+    <div class="eyebrow">PRIVACY · PRODUCT AND WEBSITE</div>
+    <h1>
+      Record locally.<br /><span class="accent-word">Know what leaves.</span>
+    </h1>
+    <p class="guide-lead">
+      ScreenRecorder is designed to save recordings on your device. It does not
+      require an account or send recordings to a ScreenRecorder cloud service.
+      This page describes the application and the separate public website.
+    </p>
+
+    <h2>ScreenRecorder application</h2>
+    <p>
+      Video and audio are written to the output location you choose. The app
+      does not upload recordings to the project website. Windows uses the
+      screen-capture APIs and audio inputs needed for the sources you enable.
+      Fedora uses the desktop portal for screen or window capture and PipeWire
+      audio sources.
+    </p>
+    <p>
+      Camera, microphone, desktop audio and screen capture are used only for the
+      recording features you enable. Your operating system may show its own
+      permission or source-selection prompt.
+    </p>
+
+    <h2>Diagnostics and local files</h2>
+    <p>
+      Session diagnostics are stored locally to help investigate capture and
+      encoding issues. They may include technical details such as timestamps,
+      selected settings, encoder status and local output paths. Review a log
+      before sharing it publicly, because paths can contain your account name or
+      other personal information.
+    </p>
+    <p>
+      If a recording is interrupted, a partial output may remain on disk. Keep
+      it private unless you choose to share it; the app does not transmit it
+      automatically.
+    </p>
+
+    <h2>Public website</h2>
+    <p>
+      This is a static website. It has no sign-in, user-submitted forms,
+      advertising, or analytics script configured. The hosting provider may
+      process connection data as part of serving pages. When you follow a link
+      to GitHub, that service handles the visit under its own privacy terms.
+    </p>
+    <p>
+      The website may be accessed by search and AI crawlers. Its
+      <a href="/robots.txt">crawler policy</a> permits search, query-time AI use,
+      and model-training use of the public website content.
+    </p>
+
+    <h2>Open source and contact</h2>
+    <p>
+      You can inspect the application source and report privacy concerns through
+      the <a href={repository}>GitHub project</a>. This page applies to the
+      currently published website and application behavior; it will be updated
+      if those practices change.
+    </p>
+  </article>
+</BaseLayout>
