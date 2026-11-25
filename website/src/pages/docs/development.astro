@@ -1,0 +1,49 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { repository } from "../../data/site";
+---
+
+<BaseLayout
+  title="ScreenRecorder development"
+  description="Build requirements and source layout for contributors to the ScreenRecorder project."
+>
+  <article class="guide wrap">
+    <a class="back-link" href="/docs/">← All documentation</a><div
+      class="eyebrow"
+    >
+      CONTRIBUTE · 3 MIN READ
+    </div><h1>
+      Built in the open.<br /><span class="accent-word">Join in.</span>
+    </h1><p class="guide-lead">
+      ScreenRecorder is a native C++20 project with separate Windows and Fedora
+      implementations. The static website lives in its own <code>website/</code> directory.
+    </p><h2>Windows build</h2><ul class="guide-list">
+      <li>Windows 10/11 x64</li><li>
+        Visual Studio 2026 / Build Tools 18 with C++ workload
+      </li><li>Windows SDK 10.0.26100 or later</li><li>CMake 3.20 or later</li>
+    </ul><pre><code>cmake -B build -G "Visual Studio 18 2026" -A x64
+cmake --build build --config Debug
+ctest --test-dir build -C Debug --output-on-failure</code></pre><h2
+    >
+      Fedora build
+    </h2><p>
+      The Fedora app is developed separately in <code>fedora-linux-app/</code>.
+      Its README documents the current dependencies, Ninja build, installation,
+      and RPM packaging workflow.
+    </p><h2>Website development</h2><p>
+      The site is Astro and TypeScript, built statically. From the website
+      directory:
+    </p><pre><code>pnpm install
+pnpm dev
+pnpm build</code></pre><h2>
+      Contributing
+    </h2><p>
+      Open an issue to discuss larger changes, then submit a focused pull
+      request with a clear description. See the project contribution guide and
+      CI workflows on GitHub.
+    </p><a
+      class="text-link guide-next"
+      href={`${repository}/blob/main/CONTRIBUTING.md`}
+      >Read contribution guide ↗</a>
+  </article>
+</BaseLayout>

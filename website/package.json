@@ -1,0 +1,24 @@
+{
+  "name": "screenrecorder-website",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro check && astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "format": "prettier --plugin prettier-plugin-astro --write \"src/**/*.{astro,ts,css}\" \"*.{json,mjs,ts}\" \"README.md\""
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@astrojs/sitemap": "^3.6.0",
+    "astro": "^5.15.0",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "prettier": "^3.10.1",
+    "prettier-plugin-astro": "^0.14.1"
+  }
+}

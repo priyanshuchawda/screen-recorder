@@ -1,0 +1,44 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+---
+
+<BaseLayout
+  title="Audio and camera in ScreenRecorder"
+  description="Learn how ScreenRecorder handles desktop sound, microphone audio, and optional camera overlays."
+>
+  <article class="guide wrap">
+    <a class="back-link" href="/docs/">← All documentation</a><div
+      class="eyebrow"
+    >
+      INPUTS · 4 MIN READ
+    </div><h1>
+      Bring your voice<br /><span class="accent-word">into focus.</span>
+    </h1><p class="guide-lead">
+      Add the sound and camera context your recording needs. You choose which
+      inputs to enable.
+    </p><h2>Windows audio</h2><p>
+      The Windows app can capture the default microphone and desktop output
+      through WASAPI Loopback. It aligns both sources using capture timestamps,
+      then mixes them into one stereo AAC track at 48 kHz / 192 kbps.
+    </p><p>
+      Desktop audio is mixed below the microphone to keep speech in the
+      foreground. You cannot adjust the relative source levels after recording
+      in a standard player, because they share a track.
+    </p><h2>Microphone behavior</h2><p>
+      Microphone auto-leveling and a soft peak limiter help manage level
+      changes. The current app does not include voice noise suppression or a
+      compressor; a close microphone and an appropriate Windows input level help
+      with clear speech.
+    </p><h2>Camera overlay</h2><p>
+      Camera overlay is optional. The Windows preview uses a throttled RGB32/GDI
+      path to avoid a second GPU composition pipeline. Fedora offers a camera
+      picture-in-picture path and a separate live preview window when a camera
+      is available.
+    </p><h2>Fedora permissions</h2><p>
+      Fedora screen and window capture uses the desktop portal. Select the
+      source in the system prompt. Camera and monitor audio are opt-in, and
+      availability depends on the devices and desktop session.
+    </p><a class="text-link guide-next" href="/docs/troubleshooting/"
+      >Next: troubleshooting →</a>
+  </article>
+</BaseLayout>

@@ -1,0 +1,86 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+const docs = [
+  {
+    title: "Getting started",
+    description: "Install the app and make your first recording.",
+    href: "/docs/getting-started/",
+    tag: "BASICS",
+    icon: "↗",
+  },
+  {
+    title: "Recording settings",
+    description: "Understand resolution, frame rate, and power profiles.",
+    href: "/docs/recording-settings/",
+    tag: "CAPTURE",
+    icon: "⌗",
+  },
+  {
+    title: "Audio and camera",
+    description: "Set up desktop audio, your microphone, and camera overlay.",
+    href: "/docs/audio-camera/",
+    tag: "INPUTS",
+    icon: "〰",
+  },
+  {
+    title: "Troubleshooting",
+    description: "Find diagnostics and common ways to resolve capture issues.",
+    href: "/docs/troubleshooting/",
+    tag: "HELP",
+    icon: "⌁",
+  },
+  {
+    title: "Development",
+    description:
+      "Build requirements and repository structure for contributors.",
+    href: "/docs/development/",
+    tag: "CONTRIBUTE",
+    icon: "</>",
+  },
+];
+---
+
+<BaseLayout
+  title="ScreenRecorder Documentation"
+  description="Practical documentation for installing, configuring, and troubleshooting ScreenRecorder on Windows and Fedora."
+>
+  <section class="page-hero wrap">
+    <div class="eyebrow">THE FIELD GUIDE</div><h1>
+      Everything to get<br /><span class="accent-word">you recording.</span>
+    </h1><p>
+      Installation, settings, audio, troubleshooting, and the notes you need
+      along the way.
+    </p>
+  </section>
+  <section class="wrap docs-grid">
+    {
+      docs.map((doc, i) => (
+        <a
+          class:list={["doc-card", { "doc-card-wide": i === 0 }]}
+          href={doc.href}
+        >
+          <>
+            <div class="doc-card-meta">
+              <>
+                <span>{doc.tag}</span>
+                <span class="doc-card-icon">{doc.icon}</span>
+              </>
+            </div>
+            <h2>{doc.title}</h2>
+            <p>{doc.description}</p>
+            <span class="doc-arrow">Read guide ↗</span>
+          </>
+        </a>
+      ))
+    }
+  </section>
+  <section class="doc-help wrap">
+    <p>
+      Can't find what you need? Ask a question or report an issue on GitHub.
+    </p><a
+      class="text-link"
+      href="https://github.com/priyanshuchawda/screen-recorder/issues"
+      target="_blank"
+      rel="noreferrer">Open an issue <span aria-hidden="true">→</span></a>
+  </section>
+</BaseLayout>

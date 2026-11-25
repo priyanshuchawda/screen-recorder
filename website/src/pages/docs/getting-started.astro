@@ -1,0 +1,51 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { releases } from "../../data/site";
+---
+
+<BaseLayout
+  title="Getting started with ScreenRecorder"
+  description="Install ScreenRecorder on Windows or Fedora and make your first local screen recording."
+>
+  <article class="guide wrap">
+    <a class="back-link" href="/docs/">← All documentation</a><div
+      class="eyebrow"
+    >
+      THE BASICS · 3 MIN READ
+    </div><h1>
+      Make your first<br /><span class="accent-word">recording.</span>
+    </h1><p class="guide-lead">
+      Choose the instructions for your platform, launch the app, and save a
+      short test clip to make sure everything is working.
+    </p><div class="guide-callout">
+      <span>✳</span><p>
+        ScreenRecorder saves recordings locally. The website and app do not
+        upload your video.
+      </p>
+    </div><h2>Windows 10 / 11</h2><ol class="guide-list">
+      <li>
+        Download the <a href={releases.windows.url}>Windows x64 ZIP</a>.
+      </li><li>Extract the ZIP to a folder you can access.</li><li>
+        Run <code>ScreenRecorder.exe</code>.
+      </li><li>
+        Choose an output folder and capture quality, then start recording.
+      </li><li>Stop the recording and open the saved MP4 to review it.</li>
+    </ol><h2>Fedora 44 · GNOME / Wayland</h2><ol class="guide-list">
+      <li>
+        Open <a href={releases.fedora.url}>GitHub Releases</a> and choose the Fedora
+        RPM for your architecture.
+      </li><li>
+        Install the RPM with DNF, for example <code
+          >sudo dnf install ./fedora-screen-recorder-*.rpm</code
+        >.
+      </li><li>Launch Fedora Screen Recorder from the application grid.</li><li>
+        Choose a screen or window in the desktop portal prompt.
+      </li>
+    </ol><h2>Check the basics</h2><p>
+      Record a short clip with system audio or a microphone enabled if you need
+      sound. The Windows build mixes both into one stereo track, so check their
+      levels before recording.
+    </p><a class="text-link guide-next" href="/docs/recording-settings/"
+      >Next: recording settings →</a>
+  </article>
+</BaseLayout>

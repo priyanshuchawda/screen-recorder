@@ -1,0 +1,69 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+---
+
+<BaseLayout
+  title="ScreenRecorder recording settings"
+  description="Choose a ScreenRecorder resolution, frame rate, and power profile for presentations, tutorials, or higher detail."
+>
+  <article class="guide wrap">
+    <a class="back-link" href="/docs/">← All documentation</a><div
+      class="eyebrow"
+    >
+      CAPTURE · 4 MIN READ
+    </div><h1>
+      Choose the right<br /><span class="accent-word">recording profile.</span>
+    </h1><p class="guide-lead">
+      Start with the smallest profile that keeps the details your audience
+      needs. Higher resolution and frame rates increase storage and can use more
+      power.
+    </p><h2>Resolution presets</h2><div class="guide-table">
+      <table>
+        <thead
+          ><tr
+            ><th scope="col">Preset</th><th scope="col">Output size</th><th
+              scope="col">A good starting point for</th
+            ></tr
+          ></thead
+        ><tbody
+          ><tr
+            ><th scope="row">360p</th><td>640 × 360</td><td
+              >Quick notes and small text-free demos</td
+            ></tr
+          ><tr
+            ><th scope="row">480p</th><td>848 × 480</td><td
+              >Lectures and general screen sharing</td
+            ></tr
+          ><tr
+            ><th scope="row">720p</th><td>1280 × 720</td><td
+              >Readable tutorials and walkthroughs</td
+            ></tr
+          ><tr
+            ><th scope="row">1080p</th><td>1920 × 1080</td><td
+              >Fine detail and high-quality presentations</td
+            ></tr
+          ></tbody>
+      </table>
+    </div><h2>Frame rate</h2><p>
+      30 FPS is a useful default for desktop applications, slides, and
+      tutorials. Higher frame rates can make fast motion smoother, with greater
+      encoding, battery, and storage cost.
+    </p><h2>On battery</h2><p>
+      On Windows, 360p and 480p use existing power-saving encoder caps while on
+      battery. The 720p and 1080p profiles preserve the selected quality and may
+      use more battery. Fedora has an efficiency mode that is automatically
+      clamped on battery; its High quality profile is an explicit opt-in.
+    </p><h2>Hardware encoding</h2><p>
+      The Windows build prefers Intel Quick Sync H.264 when available and falls
+      back to software encoding when needed. Fedora prefers Intel VA-API
+      encoding and has additional fallbacks. Which encoder is selected depends
+      on your system and installed support.
+    </p><div class="guide-callout">
+      <span>ⓘ</span><p>
+        These profiles are choices, not promises of a fixed file size or battery
+        runtime. Encoder behavior and on-screen content affect both.
+      </p>
+    </div><a class="text-link guide-next" href="/docs/audio-camera/"
+      >Next: audio and camera →</a>
+  </article>
+</BaseLayout>

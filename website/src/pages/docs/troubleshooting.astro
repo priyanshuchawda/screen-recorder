@@ -1,0 +1,60 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { repository } from "../../data/site";
+---
+
+<BaseLayout
+  title="ScreenRecorder troubleshooting"
+  description="Use recording diagnostics and common checks to troubleshoot ScreenRecorder capture and encoding problems."
+>
+  <article class="guide wrap">
+    <a class="back-link" href="/docs/">← All documentation</a><div
+      class="eyebrow"
+    >
+      HELP · 4 MIN READ
+    </div><h1>
+      When a recording<br /><span class="accent-word">needs a hand.</span>
+    </h1><p class="guide-lead">
+      Start with the output file and diagnostic sidecar, then include useful
+      details if you need help from the project.
+    </p><h2>Windows diagnostics</h2><p>
+      Each recording writes a timestamped diagnostics file under <code
+        >&lt;recording folder&gt;\_diagnostics</code
+      >. It includes capture and encoder settings, errors, pipeline progress,
+      output size, and stop/finalize stages.
+    </p><ul class="guide-list">
+      <li>
+        If an MP4 is missing, check for a <code>.partial.mp4</code> file and review
+        the diagnostic sidecar.
+      </li><li>
+        If the app stops making progress, note the last completed pipeline or
+        shutdown stage.
+      </li><li>
+        Check that the destination drive has enough free space and that the
+        folder is writable.
+      </li><li>
+        If a microphone or desktop audio is missing, verify the selected Windows
+        input/output devices and app settings.
+      </li>
+    </ul><h2>Fedora checks</h2><ul class="guide-list">
+      <li>
+        Confirm you are using GNOME on Wayland and that the desktop portal
+        prompt was completed.
+      </li><li>
+        Check that the selected display/window and audio devices are still
+        available.
+      </li><li>
+        For RPM install problems, review the DNF output and use an RPM matching
+        your machine architecture.
+      </li>
+    </ul><h2>Report a problem</h2><p>
+      Include your operating system, ScreenRecorder version, steps to reproduce,
+      and relevant diagnostic text. Review logs for personal information before
+      sharing.
+    </p><a
+      class="button button-primary"
+      href={`${repository}/issues`}
+      target="_blank"
+      rel="noreferrer">Open a GitHub issue ↗</a>
+  </article>
+</BaseLayout>

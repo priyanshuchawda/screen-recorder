@@ -1,0 +1,280 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import DownloadCard from "../components/DownloadCard.astro";
+import { features, questions, releases, repository } from "../data/site";
+---
+
+<BaseLayout
+  title="ScreenRecorder — A lighter way to record your screen"
+  description="A free, open-source native screen recorder for Windows and Fedora. Hardware-first encoding, desktop and mic audio, and local recordings."
+>
+  <section class="hero wrap">
+    <div class="hero-copy reveal">
+      <div class="eyebrow">
+        <span class="live-dot"></span> OPEN SOURCE · NATIVE · LOCAL
+      </div>
+      <h1>
+        Make the screen<br />the <span class="accent-word">whole story.</span>
+      </h1>
+      <p>
+        A lightweight screen recorder for Windows and Fedora. Capture the
+        details, keep your performance, and save everything right on your
+        machine.
+      </p>
+      <div class="hero-actions">
+        <a class="button button-primary" href={releases.windows.url}
+          >Download for Windows <span aria-hidden="true">↓</span></a
+        ><a class="text-link" href="/download/"
+          >Explore all downloads <span aria-hidden="true">→</span></a>
+      </div>
+      <div class="hero-facts">
+        <span><b>✳</b> Free &amp; open source</span><span
+          ><b>⌂</b> Saved locally</span
+        ><span><b>◈</b> Hardware first</span>
+      </div>
+    </div>
+    <div
+      class="product-stage reveal"
+      aria-label="Illustration of ScreenRecorder recording controls"
+    >
+      <div class="stage-orbit orbit-one"></div><div
+        class="stage-orbit orbit-two"
+      >
+      </div><div class="stage-glow"></div>
+      <div class="recorder-window">
+        <div class="window-top">
+          <div class="window-brand">
+            <span class="mini-mark">◉</span> ScreenRecorder
+          </div><div class="window-dots"><i></i><i></i><i></i></div>
+        </div>
+        <div class="recording-preview">
+          <div class="preview-sun"></div><div
+            class="preview-mountain mountain-a"
+          >
+          </div><div class="preview-mountain mountain-b"></div><div
+            class="preview-horizon"
+          >
+          </div><div class="preview-label">
+            <span class="live-dot"></span> PREVIEW
+          </div><div class="preview-time">00:14:32</div>
+        </div>
+        <div class="window-settings">
+          <div>
+            <small>CAPTURE</small><strong>Full screen <span>⌄</span></strong>
+          </div><div>
+            <small>QUALITY</small><strong>1080p · 30 FPS <span>⌄</span></strong>
+          </div>
+        </div>
+        <div class="window-controls">
+          <button aria-label="Pause recording">Ⅱ</button><span
+            class="record-state"><i></i> Recording</span
+          ><button class="stop-button" aria-label="Stop recording">■</button>
+        </div>
+        <div class="window-foot">
+          <span>◈ Intel hardware encoder</span><span>● 00:14:32</span>
+        </div>
+      </div>
+      <div class="float-chip chip-top">
+        <span class="chip-icon">⌁</span><span
+          ><small>ENCODING</small><b>Hardware accelerated</b></span
+        ><i class="chip-check">✓</i>
+      </div>
+      <div class="float-chip chip-bottom">
+        <span class="chip-icon audio-icon">〰</span><span
+          ><small>AUDIO</small><b>Desktop + microphone</b></span
+        ><span class="wave-bars"
+          ><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+      </div>
+      <div class="stage-caption">
+        <span class="caption-line"></span> YOUR DESKTOP, IN FOCUS
+      </div>
+    </div>
+    <div class="hero-scroll"><span></span> SCROLL TO EXPLORE</div>
+  </section>
+
+  <section class="trust-strip">
+    <div class="wrap trust-inner">
+      <span>BUILT FOR REAL WORKFLOWS</span><i></i><span>Windows 10 / 11</span><i
+      ></i><span>Fedora 44 · GNOME</span><i></i><span>MIT licensed</span><i
+      ></i><span>No account required</span>
+    </div>
+  </section>
+
+  <section class="section features-section wrap" id="features">
+    <div class="section-heading reveal">
+      <div>
+        <div class="eyebrow">LESS SETUP. MORE MAKING.</div><h2>
+          Everything you need.<br /><span class="muted-heading"
+            >Nothing in your way.</span>
+        </h2>
+      </div><p>
+        Thoughtful capture tools for demos, lessons, walkthroughs, and all the
+        things worth showing.
+      </p>
+    </div>
+    <div class="feature-grid">
+      {
+        features.map((feature) => (
+          <article class="feature-card reveal">
+            <>
+              <span class="feature-number">{feature.number}</span>
+              <span class="feature-icon">{feature.icon}</span>
+              <h3>{feature.title}</h3>
+              <p>{feature.text}</p>
+              <span class="feature-corner" aria-hidden="true">
+                ↗
+              </span>
+            </>
+          </article>
+        ))
+      }
+    </div>
+  </section>
+
+  <section class="quality-section">
+    <div class="wrap quality-layout">
+      <div class="quality-copy reveal">
+        <div class="eyebrow">QUALITY THAT FITS</div><h2>
+          Dial in the<br />right <span class="accent-word">detail.</span>
+        </h2><p>
+          Go lightweight for a quick lecture or turn up the clarity for a
+          product demo. Your settings stay in your hands.
+        </p><a class="text-link" href="/docs/recording-settings/"
+          >Explore recording settings <span aria-hidden="true">→</span></a
+        ><div class="quality-note">
+          <span>ⓘ</span> Higher resolution and frame rates can use more battery and
+          storage.
+        </div>
+      </div><div class="quality-visual reveal">
+        <div class="quality-card">
+          <div class="quality-card-head">
+            <span>OUTPUT PROFILE</span><span class="quality-tag"
+              >CUSTOMIZE</span>
+          </div><div class="quality-screen">
+            <div class="screen-grid"></div><div class="screen-center">
+              <span class="screen-rec-dot"></span><strong
+                >Ready when you are.</strong
+              ><small>Choose your capture quality</small>
+            </div><div class="screen-corner top-left"></div><div
+              class="screen-corner top-right"
+            >
+            </div><div class="screen-corner bottom-left"></div><div
+              class="screen-corner bottom-right"
+            >
+            </div>
+          </div><div class="resolution-row">
+            <span>360p</span><span>480p</span><span class="selected-resolution"
+              >720p <i>✓</i></span
+            ><span>1080p</span>
+          </div><div class="quality-sliders">
+            <div>
+              <span>Frame rate</span><strong>30 <small>FPS</small></strong>
+            </div><div class="slider-track"><i></i><b></b></div><div
+              class="slider-labels"
+            >
+              <span>15 FPS</span><span>60 FPS</span>
+            </div>
+          </div><div class="quality-card-foot">
+            <span>◈ Hardware encode preferred</span><span class="power-label"
+              ><i></i> EFFICIENT</span>
+          </div>
+        </div><div class="quality-glow"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="platform-section wrap">
+    <div class="section-heading reveal">
+      <div>
+        <div class="eyebrow">TWO PLATFORMS. ONE SIMPLE IDEA.</div><h2>
+          Your setup,<br /><span class="muted-heading">your recorder.</span>
+        </h2>
+      </div><a class="text-link" href="/download/"
+        >All release options <span aria-hidden="true">→</span></a>
+    </div><div class="download-grid">
+      <DownloadCard
+        platform="Windows"
+        detail={releases.windows.platform}
+        version={`v${releases.windows.version}`}
+        href={releases.windows.url}
+        label="Download Windows ZIP"
+        featured
+      /><DownloadCard
+        platform="Fedora"
+        detail={releases.fedora.platform}
+        version={releases.fedora.version}
+        href={releases.fedora.url}
+        label="Choose Fedora RPM"
+        note={releases.fedora.note}
+      />
+    </div><p class="platform-footnote">
+      Downloads are hosted by GitHub Releases. Review the source, release notes,
+      and license on GitHub.
+    </p>
+  </section>
+
+  <section class="faq-section">
+    <div class="wrap faq-layout">
+      <div class="faq-intro reveal">
+        <div class="eyebrow">GOOD TO KNOW</div><h2>
+          Quick answers.<br /><span class="muted-heading"
+            >Clear recording.</span>
+        </h2><p>
+          Details that help you choose, install, and get started with
+          confidence.
+        </p><a href="/docs/" class="text-link"
+          >Visit the documentation <span aria-hidden="true">→</span></a>
+      </div><div class="faq-list reveal">
+        {
+          questions.map((item, index) => (
+            <details class="faq-item" open={index === 0}>
+              <>
+                <summary>
+                  {item.q}
+                  <span class="faq-toggle" aria-hidden="true">
+                    +
+                  </span>
+                </summary>
+                <p>{item.a}</p>
+              </>
+            </details>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="closing-section wrap">
+    <div class="closing-card reveal">
+      <div class="closing-orb"></div><div class="eyebrow">
+        <span class="live-dot"></span> YOUR NEXT RECORDING STARTS HERE
+      </div><h2>
+        Have something<br />worth <span class="accent-word">showing?</span>
+      </h2><p>
+        Get the recorder, pick your settings, and press record. That's the whole
+        workflow.
+      </p><div class="hero-actions">
+        <a class="button button-primary" href={releases.windows.url}
+          >Get ScreenRecorder <span aria-hidden="true">↓</span></a
+        ><a
+          class="button button-outline"
+          href={repository}
+          target="_blank"
+          rel="noreferrer">Explore the source ↗</a>
+      </div><span class="closing-foot">FREE · OPEN SOURCE · BUILT IN C++</span>
+    </div>
+  </section>
+  <script>
+    const observer = new IntersectionObserver(
+      (entries) =>
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            observer.unobserve(entry.target);
+          }
+        }),
+      { threshold: 0.12 },
+    );
+    document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+  </script>
+</BaseLayout>

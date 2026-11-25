@@ -1,0 +1,71 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import DownloadCard from "../../components/DownloadCard.astro";
+import { releases, repository } from "../../data/site";
+---
+
+<BaseLayout
+  title="Download ScreenRecorder"
+  description="Download the free, open-source ScreenRecorder for Windows 10/11 or Fedora 44 GNOME/Wayland."
+>
+  <section class="page-hero wrap">
+    <div class="eyebrow">OFFICIAL RELEASES</div><h1>
+      Pick your platform.<br /><span class="accent-word">Press record.</span>
+    </h1><p>
+      Free downloads from the ScreenRecorder GitHub repository. Your recordings
+      stay on your device.
+    </p>
+  </section>
+  <section class="wrap download-page-grid">
+    <DownloadCard
+      platform="Windows"
+      detail={releases.windows.platform}
+      version={`v${releases.windows.version}`}
+      href={releases.windows.url}
+      label="Download Windows ZIP"
+      featured
+    /><DownloadCard
+      platform="Fedora"
+      detail={releases.fedora.platform}
+      version={releases.fedora.version}
+      href={releases.fedora.url}
+      label="Choose Fedora RPM"
+      note={releases.fedora.note}
+    />
+  </section>
+  <section class="install-section wrap">
+    <div>
+      <div class="eyebrow">UP AND RUNNING</div><h2>Three small steps.</h2>
+    </div><ol class="install-steps">
+      <li>
+        <span>01</span><div>
+          <strong>Download your build</strong><p>
+            Get the Windows ZIP or select your Fedora RPM from GitHub Releases.
+          </p>
+        </div>
+      </li><li>
+        <span>02</span><div>
+          <strong>Extract or install</strong><p>
+            Windows: extract the ZIP. Fedora: install the RPM with DNF.
+          </p>
+        </div>
+      </li><li>
+        <span>03</span><div>
+          <strong>Choose a capture profile</strong><p>
+            Pick resolution and frame rate, then start your recording.
+          </p>
+        </div>
+      </li>
+    </ol>
+  </section>
+  <section class="release-callout wrap">
+    <span class="release-icon">↗</span><p>
+      Want older builds, checksums, or detailed release notes?
+    </p><a
+      class="text-link"
+      href={`${repository}/releases`}
+      target="_blank"
+      rel="noreferrer"
+      >Browse all GitHub releases <span aria-hidden="true">→</span></a>
+  </section>
+</BaseLayout>

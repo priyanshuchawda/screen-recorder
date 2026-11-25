@@ -1,0 +1,36 @@
+---
+interface Props {
+  platform: string;
+  detail: string;
+  version: string;
+  href: string;
+  label: string;
+  note?: string;
+  featured?: boolean;
+}
+const {
+  platform,
+  detail,
+  version,
+  href,
+  label,
+  note,
+  featured = false,
+} = Astro.props;
+---
+
+<article class:list={["download-card", { featured }]}>
+  <div class="download-card-top">
+    <span class="platform-symbol" aria-hidden="true"
+      >{platform.startsWith("Windows") ? "⊞" : "◉"}</span
+    ><span class="availability">AVAILABLE</span>
+  </div>
+  <h3>{platform}</h3><p>{detail}</p>
+  <div class="download-version">
+    <span>Current version</span><strong>{version}</strong>
+  </div>
+  <a class="button download-button" href={href} target="_blank" rel="noreferrer"
+    >{label}<span aria-hidden="true">↓</span></a
+  >
+  {note && <small class="download-note">{note}</small>}
+</article>

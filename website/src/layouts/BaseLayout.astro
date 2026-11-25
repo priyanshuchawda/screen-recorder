@@ -1,0 +1,94 @@
+---
+import { repository } from "../data/site";
+import "../styles/global.css";
+interface Props {
+  title: string;
+  description: string;
+}
+const { title, description } = Astro.props;
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0d11" />
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:site_name" content="ScreenRecorder" />
+    <script
+      type="application/ld+json"
+      set:html={JSON.stringify({
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        name: "ScreenRecorder",
+        operatingSystem: "Windows 10, Windows 11, Fedora 44",
+        applicationCategory: "MultimediaApplication",
+        license: "https://opensource.org/license/mit",
+        downloadUrl:
+          "https://github.com/priyanshuchawda/screen-recorder/releases/latest",
+        description,
+      })}
+    />
+    <script>
+      document.documentElement.classList.add("has-js");
+    </script>
+    <title>{title}</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="ScreenRecorder home"
+        ><span class="brand-icon"><span></span></span><span
+          >Screen<span class="brand-light">Recorder</span></span
+        ></a
+      >
+      <nav aria-label="Main navigation">
+        <a href="/#features">Features</a><a href="/download/">Download</a><a
+          href="/docs/">Docs</a
+        ><a
+          class="github-link"
+          href={repository}
+          target="_blank"
+          rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a
+        >
+      </nav>
+      <button
+        class="menu-toggle"
+        aria-label="Toggle navigation"
+        aria-expanded="false"><span></span><span></span></button
+      >
+    </header>
+    <main id="main"><slot /></main>
+    <footer class="site-footer">
+      <a class="brand footer-brand" href="/"
+        ><span class="brand-icon"><span></span></span><span
+          >Screen<span class="brand-light">Recorder</span></span
+        ></a
+      >
+      <p>Made for recording. Built to stay out of your way.</p>
+      <div class="footer-links">
+        <a href="/download/">Downloads</a><a href="/docs/">Documentation</a><a
+          href={`${repository}/blob/main/LICENSE`}>MIT License</a
+        ><a href={repository}>GitHub ↗</a>
+      </div>
+      <small>© {new Date().getFullYear()} ScreenRecorder contributors</small>
+    </footer>
+    <script>
+      const toggle = document.querySelector<HTMLButtonElement>(".menu-toggle");
+      const nav = document.querySelector<HTMLElement>(".site-header nav");
+      toggle?.addEventListener("click", () => {
+        const open = toggle.getAttribute("aria-expanded") === "true";
+        toggle.setAttribute("aria-expanded", String(!open));
+        nav?.classList.toggle("nav-open", !open);
+      });
+    </script>
+  </body>
+</html>
