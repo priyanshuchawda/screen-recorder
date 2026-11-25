@@ -2,6 +2,7 @@
 // T016: Start -> init engines -> run capture->encode->mux loop -> Stop -> finalize
 
 #include "controller/session_controller.h"
+#include "controller/audio_write_schedule.h"
 #include "capture/capture_engine.h"
 #include "audio/audio_engine.h"
 #include "audio/audio_mixer.h"
@@ -446,6 +447,7 @@ void SessionController::diagnostics_monitor_loop() {
     auto last_heartbeat = diagnostics_started_;
     bool write_stall_reported = false;
     uint32_t last_encoded = 0;
+    uint32_t last_audio_drops = 0;
     ULONGLONG last_video_progress_ms = GetTickCount64();
 
     while (diagnostics_monitor_running_.load(std::memory_order_acquire)) {
@@ -475,9 +477,16 @@ void SessionController::diagnostics_monitor_loop() {
         const uint64_t callback_age = capture_ ? capture_->frame_callback_age_ms() : 0;
         const bool callback_stalled = callback_stage != CaptureEngine::FrameCallbackStage::Idle &&
                                       callback_age >= 20'000;
-        if (!write_stall_reported && recording && (write_blocked || video_stalled || callback_stalled)) {
+        const uint32_t current_audio_drops = (audio_ ? audio_->queue_drops() : 0) +
+                                             (loopback_audio_ ? loopback_audio_->queue_drops() : 0);
+        const bool audio_lost = recording && current_audio_drops > last_audio_drops;
+        last_audio_drops = current_audio_drops;
+        if (!write_stall_reported && recording && (write_blocked || video_stalled || callback_stalled || audio_lost)) {
             write_stall_reported = true;
-            if (write_blocked) {
+            if (audio_lost) {
+                diagnostics_.write_event(L"event=audio_queue_loss_stop audio_drops=" +
+                                         std::to_wstring(current_audio_drops));
+            } else if (write_blocked) {
                 diagnostics_.write_event(L"event=mux_write_stalled elapsed_ms=" +
                                          std::to_wstring(now_ms - write_started));
             } else if (callback_stalled) {
@@ -488,7 +497,9 @@ void SessionController::diagnostics_monitor_loop() {
                 diagnostics_.write_event(L"event=video_output_stalled elapsed_ms=" +
                                          std::to_wstring(now_ms - last_video_progress_ms));
             }
-            notify_error(L"Recording output stopped progressing. Stopping to protect the recording; saving may take time.");
+            notify_error(audio_lost
+                ? L"Audio was lost because the recorder could not keep up. Stopping to save the remaining recording."
+                : L"Recording output stopped progressing. Stopping to protect the recording; saving may take time.");
             if (on_stop_requested_) on_stop_requested_();
         }
         const auto monitor_now = std::chrono::steady_clock::now();
@@ -529,6 +540,7 @@ void SessionController::diagnostics_monitor_loop() {
                      L"captured=%u encoded=%u dropped=%u queue_drops=%u "
                      L"video_queue=%llu mic_queue=%llu loopback_queue=%llu "
                      L"audio_drops=%u audio_packets=%u partial_bytes=%llu "
+                     L"video_pts_100ns=%lld audio_pts_100ns=%lld "
                      L"capture_callback=%s capture_callback_age_ms=%llu",
                      static_cast<long long>(elapsed), diagnostics_stage_label(stage),
                      captured, encoded, dropped, queue_drops,
@@ -537,6 +549,8 @@ void SessionController::diagnostics_monitor_loop() {
                      static_cast<unsigned long long>(loopback_queue),
                      audio_drops, audio_packets,
                      static_cast<unsigned long long>(partial_bytes),
+                     static_cast<long long>(muxer_ ? muxer_->last_video_pts() : -1),
+                     static_cast<long long>(muxer_ ? muxer_->last_audio_pts() : -1),
                      capture_stage_label(capture_stage),
                      static_cast<unsigned long long>(capture_stage_age_ms));
         diagnostics_.write_event(event);
@@ -826,11 +840,10 @@ void SessionController::encode_loop() {
                 if (!machine_.is_paused()) audio_mixer.push(std::move(*packet), false);
             }
 
-            // Yield to the video queue while catching up on audio. Draining an
-            // arbitrary audio backlog in one pass can starve video submission
-            // to the same throttled sink writer.
-            constexpr unsigned kAudioBlocksPerPass = 4;
-            for (unsigned blocks = 0; blocks < kAudioBlocksPerPass; ++blocks) {
+            // A fixed four blocks per video write cannot catch up after a slow
+            // write. Advance audio towards the last submitted video timestamp,
+            // with a hard bound to avoid starving video on large gaps.
+            for (unsigned blocks = 0; blocks < 200; ++blocks) {
                 auto mixed = audio_mixer.take();
                 if (!mixed) break;
                 ComPtr<IMFSample> sample;
@@ -858,6 +871,8 @@ void SessionController::encode_loop() {
                         SR_LOG_ERROR(L"Mixed audio buffer lock failed: 0x%08X", hr);
                     }
                 }
+                if (!continue_audio_pass(blocks + 1, mixed->pts,
+                                         last_paced_pts, have_last_frame)) break;
             }
             diagnostics_stage_.store(DiagnosticsStage::WaitingForFrame, std::memory_order_relaxed);
         }

@@ -6,7 +6,7 @@
 //
 // T036 Memory Stability Review:
 //   - Video queue:  Capacity=8  → max 8 queued D3D11 texture refs = bounded
-//   - Audio queue:  Capacity=64 → max 64 packets * ~10ms PCM ≈ bounded
+//   - Audio queues retain a bounded reserve for temporary muxer stalls.
 //   - All queues use std::array<T, Capacity+1> — FIXED stack/BSS allocation at startup
 //   - try_push returns false (caller drops) when full — NO dynamic growth
 //   - COM texture pointers in RenderFrame use WRL ComPtr — Released in destructor
@@ -31,8 +31,8 @@ namespace sr {
 template <typename T, size_t Capacity = 5>
 class BoundedQueue {
     // T036: Compile-time guard — prevent accidental unbounded config
-    static_assert(Capacity >= 1  && Capacity <= 256,
-                  "BoundedQueue Capacity must be in [1, 256]");
+    static_assert(Capacity >= 1  && Capacity <= 2048,
+                  "BoundedQueue Capacity must be in [1, 2048]");
 
 public:
     BoundedQueue() : head_(0), tail_(0) {}

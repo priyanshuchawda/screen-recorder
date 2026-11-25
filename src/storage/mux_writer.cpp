@@ -153,6 +153,8 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
         return false;
     }
 
+    last_video_pts_.store(-1, std::memory_order_relaxed);
+    last_audio_pts_.store(-1, std::memory_order_relaxed);
     initialized_ = true;
     SR_LOG_INFO(L"MuxWriter: writing to '%s'", partial_path.c_str());
     return true;
@@ -168,12 +170,13 @@ bool MuxWriter::write_video(IMFSample* sample) {
     active_write_started_ms_.store(0, std::memory_order_release);
     const ULONGLONG elapsed = GetTickCount64() - start;
     if (elapsed >= 250) {
-        SR_LOG_WARN(L"Slow video WriteSample: elapsed_ms=%llu pts_100ns=%lld hr=0x%08X", elapsed, pts, hr);
+        SR_LOG_WARN(L"Slow video WriteSample: elapsed_ms=%llu pts_100ns=%lld last_audio_pts_100ns=%lld hr=0x%08X", elapsed, pts, last_audio_pts(), hr);
     }
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"WriteSample (video) failed: 0x%08X", hr);
         return false;
     }
+    last_video_pts_.store(pts, std::memory_order_relaxed);
     // Approximate bytes: sample duration * bitrate / 8
     // (not exact, but good enough for monitoring)
     DWORD buf_len = 0;
@@ -201,12 +204,13 @@ bool MuxWriter::write_audio(IMFSample* sample) {
     active_write_started_ms_.store(0, std::memory_order_release);
     const ULONGLONG elapsed = GetTickCount64() - start;
     if (elapsed >= 250) {
-        SR_LOG_WARN(L"Slow audio WriteSample: elapsed_ms=%llu pts_100ns=%lld hr=0x%08X", elapsed, pts, hr);
+        SR_LOG_WARN(L"Slow audio WriteSample: elapsed_ms=%llu pts_100ns=%lld last_video_pts_100ns=%lld hr=0x%08X", elapsed, pts, last_video_pts(), hr);
     }
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"WriteSample (audio) failed: 0x%08X", hr);
         return false;
     }
+    last_audio_pts_.store(pts, std::memory_order_relaxed);
     DWORD buf_len = 0;
     sample->GetTotalLength(&buf_len);
     bytes_written_ += buf_len;

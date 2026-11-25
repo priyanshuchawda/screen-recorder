@@ -6,7 +6,7 @@ ScreenRecorder is a free, MIT-licensed screen recording application designed for
 
 The Windows application is built in native C++20 with Win32, Windows Graphics Capture (WGC), Direct3D 11 (D3D11), Media Foundation and WASAPI. The Fedora edition uses GTK4, libadwaita, PipeWire, GStreamer and hardware encoding through VA-API or Quick Sync where available.
 
-[![Download Windows](https://img.shields.io/badge/Download-Windows%20x64-0078D4?style=for-the-badge&logo=windows)](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip)
+[![Download Windows](https://img.shields.io/badge/Download-Windows%20x64-0078D4?style=for-the-badge&logo=windows)](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.17/ScreenRecorder-0.3.17-windows-x64.zip)
 [![Download Fedora](https://img.shields.io/badge/Download-Fedora%2044-51A2DA?style=for-the-badge&logo=fedora&logoColor=white)](https://github.com/priyanshuchawda/screen-recorder/releases/download/fedora-v0.1.5/fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -22,7 +22,7 @@ The Windows application is built in native C++20 with Win32, Windows Graphics Ca
 
 | Platform | Release | Package | Download |
 | --- | --- | --- | --- |
-| Windows 10/11 (x64) | v0.3.16 | Portable ZIP, approximately 126 KiB | [Download Windows ZIP](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip) |
+| Windows 10/11 (x64) | v0.3.17 | Portable ZIP | [Download Windows ZIP](https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.17/ScreenRecorder-0.3.17-windows-x64.zip) |
 | Fedora 44 GNOME/Wayland (x86_64) | fedora-v0.1.5 | Binary RPM, approximately 118 KiB | [Download Fedora RPM](https://github.com/priyanshuchawda/screen-recorder/releases/download/fedora-v0.1.5/fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm) |
 
 Package sizes are compressed release asset sizes, not installed size, runtime RAM usage or the size of Linux runtime dependencies. Check [all releases](https://github.com/priyanshuchawda/screen-recorder/releases) for newer builds and release notes. Windows and Fedora releases are versioned independently.
@@ -143,13 +143,13 @@ The project aims for low recording overhead, small packages and reliable output.
 
 | Evidence | Result |
 | --- | --- |
-| Windows v0.3.16 portable ZIP | 129,117 bytes (approximately 126 KiB) |
-| Windows v0.3.16 local unit tests | 158 passed, as reported in release notes |
+| Windows v0.3.17 portable ZIP | See release asset |
+| Windows v0.3.17 local CTest suite | 164 passed in the local Release build |
 | Five-minute Windows 1080p60 test | Finalized successfully, no reported audio/video queue drops |
 | Average encoded frame rate in that test | Approximately 39.5 FPS; sustained 60 FPS remains unverified |
 | Fedora Intel VA low-power smoke test | 848 × 480 at 30 FPS, verified in the development environment |
 
-Sources: [Windows v0.3.16 release notes](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.16), [Fedora initial release validation](https://github.com/priyanshuchawda/screen-recorder/releases/tag/fedora-v0.1.0), and [Fedora validation guide](fedora-linux-app/README.md#validation).
+Sources: [Windows v0.3.17 release notes](https://github.com/priyanshuchawda/screen-recorder/releases/tag/v0.3.17), [Fedora initial release validation](https://github.com/priyanshuchawda/screen-recorder/releases/tag/fedora-v0.1.0), and [Fedora validation guide](fedora-linux-app/README.md#validation).
 
 Controlled CPU, RAM, power, frame-delivery and long-session comparisons against OBS Studio, wcap and other lightweight recorders are planned under [issue #159](https://github.com/priyanshuchawda/screen-recorder/issues/159). No claim of being the fastest or lowest-resource recorder is made without comparable measurements.
 
@@ -286,7 +286,7 @@ cmake --build build --config Release
 cpack --config build\CPackConfig.cmake -C Release
 ```
 
-The generated archive follows the naming convention `ScreenRecorder-<version>-windows-x64.zip` (currently `ScreenRecorder-0.3.16-windows-x64.zip`).
+The generated archive follows the naming convention `ScreenRecorder-<version>-windows-x64.zip` (currently `ScreenRecorder-0.3.17-windows-x64.zip`).
 
 For maintainers: update the project version, test and build the matching package, then create a new Git tag and publish the archive using `gh release create`. Use a new tag, matching asset filename, release notes and validation evidence; do not reuse an existing release tag. Update the Windows/Fedora download links independently when publishing a new version.
 

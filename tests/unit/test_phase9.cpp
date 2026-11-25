@@ -22,6 +22,23 @@
 #include "utils/render_frame.h"
 #include "capture/capture_engine.h"   // T039 / T043
 #include "capture/capture_cadence.h"
+#include "controller/audio_write_schedule.h"
+#include "audio/audio_engine.h"
+
+TEST(AudioQueueRecovery, BuffersTwentySecondsOfTenMillisecondPackets) {
+    EXPECT_GE(sr::AudioQueue::capacity(), 2000u);
+}
+
+TEST(AudioWriteSchedule, CatchesUpBeyondFourBlocksWhenVideoIsAhead) {
+    EXPECT_TRUE(sr::continue_audio_pass(4, 6'000'000, 10'000'000, true));
+    EXPECT_FALSE(sr::continue_audio_pass(40, 10'000'000, 10'000'000, true));
+}
+
+TEST(AudioWriteSchedule, BoundsWorkAndHandlesMissingVideo) {
+    EXPECT_FALSE(sr::continue_audio_pass(200, 0, 100'000'000, true));
+    EXPECT_TRUE(sr::continue_audio_pass(3, 0, 0, false));
+    EXPECT_FALSE(sr::continue_audio_pass(4, 0, 0, false));
+}
 
 TEST(CaptureCadenceTest, KeepsNearlySixtyHertzFramesAtSixtyFps) {
     sr::CaptureCadence cadence;

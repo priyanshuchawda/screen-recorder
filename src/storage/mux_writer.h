@@ -61,6 +61,8 @@ public:
     uint64_t active_write_started_ms() const {
         return active_write_started_ms_.load(std::memory_order_acquire);
     }
+    int64_t last_video_pts() const { return last_video_pts_.load(std::memory_order_relaxed); }
+    int64_t last_audio_pts() const { return last_audio_pts_.load(std::memory_order_relaxed); }
 
 private:
     ComPtr<IMFSinkWriter> sink_writer_;
@@ -71,6 +73,8 @@ private:
     bool                  initialized_        = false;
     uint64_t              bytes_written_      = 0;
     std::atomic<uint64_t> active_write_started_ms_{0};
+    std::atomic<int64_t> last_video_pts_{-1};
+    std::atomic<int64_t> last_audio_pts_{-1};
     // T029: exclusive write lock — FILE_SHARE_READ only, prevents external writes
     HANDLE                lock_handle_        = INVALID_HANDLE_VALUE;
 };

@@ -31,8 +31,8 @@ TEST(T036_QueueStability, VideoQueueCapacityIsEight) {
     EXPECT_EQ(FrameQueue::capacity(), 8u);
 }
 
-TEST(T036_QueueStability, AudioQueueCapacityIs64) {
-    EXPECT_EQ(AudioQueue::capacity(), 64u);
+TEST(T036_QueueStability, AudioQueueCapacityIsBounded) {
+    EXPECT_LE(AudioQueue::capacity(), 2048u);
 }
 
 TEST(T036_QueueStability, QueueNeverExceedsCapacity) {

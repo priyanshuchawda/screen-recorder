@@ -26,9 +26,9 @@ enum class AudioCaptureMode {
     Loopback     // eRender + AUDCLNT_STREAMFLAGS_LOOPBACK — system audio
 };
 
-// Audio packets run about every 10 ms; buffer brief encoder/muxer stalls without
-// unbounded growth (64 slots provide about 640 ms at the common 48 kHz rate).
-using AudioQueue = BoundedQueue<AudioPacket, 64>;
+// A bounded reserve absorbs transient writer stalls. With 10 ms WASAPI packets
+// this holds roughly 20 seconds; other packet sizes change the duration.
+using AudioQueue = BoundedQueue<AudioPacket, 2048>;
 
 // Device-invalidation callback type — called when the audio device is removed
 // or invalidated (e.g., USB mic unplugged). If set, engine signals the caller

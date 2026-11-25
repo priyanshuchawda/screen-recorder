@@ -37,8 +37,8 @@ static LRESULT CALLBACK probe_window(HWND window, UINT message, WPARAM wparam, L
 }
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 3) {
-        std::fwprintf(stderr, L"Usage: recording_probe OUTPUT_DIRECTORY SECONDS\n");
+    if (argc != 3 && argc != 4) {
+        std::fwprintf(stderr, L"Usage: recording_probe OUTPUT_DIRECTORY SECONDS [15]\n");
         return 2;
     }
     const int seconds = _wtoi(argv[2]);
@@ -68,7 +68,13 @@ int wmain(int argc, wchar_t** argv) {
         sr::EncoderProfile profile{};
         profile.width = 1920; profile.height = 1080;
         profile.fps = 60; profile.bitrate_bps = 10'000'000;
-        controller.set_encoder_profile(profile, true);
+        const bool low_rate = argc == 4 && _wtoi(argv[3]) == 15;
+        if (argc == 4 && !low_rate) return 2;
+        if (low_rate) {
+            profile.width = 640; profile.height = 360;
+            profile.fps = 15; profile.bitrate_bps = 1'000'000;
+        }
+        controller.set_encoder_profile(profile, !low_rate);
         if (!controller.start()) return 7;
         std::fwprintf(stdout, L"Recording: %ls\n", controller.output_path().c_str());
         std::fflush(stdout);
