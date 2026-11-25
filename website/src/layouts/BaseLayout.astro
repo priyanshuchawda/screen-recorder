@@ -9,6 +9,53 @@ const { title, description } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site);
 const includeSoftwareSchema =
   Astro.url.pathname === "/" || Astro.url.pathname === "/download/";
+const windowsSoftware = {
+  "@type": "SoftwareApplication",
+  name: "ScreenRecorder for Windows",
+  operatingSystem: "Windows 10, Windows 11",
+  applicationCategory: "MultimediaApplication",
+  softwareVersion: "0.3.16",
+  license: "https://opensource.org/license/mit",
+  isAccessibleForFree: true,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  downloadUrl:
+    "https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip",
+  url: "https://screenrecording.pages.dev/download/",
+  description:
+    "Free, open-source screen recorder for Windows 10 and 11 with hardware-first H.264 encoding and local recordings.",
+};
+const fedoraSoftware = {
+  "@type": "SoftwareApplication",
+  name: "ScreenRecorder for Fedora",
+  operatingSystem: "Fedora Linux 44",
+  applicationCategory: "MultimediaApplication",
+  softwareVersion: "0.1.5",
+  license: "https://opensource.org/license/mit",
+  isAccessibleForFree: true,
+  offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+  downloadUrl:
+    "https://github.com/priyanshuchawda/screen-recorder/releases/download/fedora-v0.1.5/fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm",
+  url: "https://screenrecording.pages.dev/download/",
+  description:
+    "Free, open-source screen recorder package for Fedora 44 with GNOME and Wayland.",
+};
+const structuredData =
+  Astro.url.pathname === "/"
+    ? {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            name: "ScreenRecorder",
+            url: "https://screenrecording.pages.dev/",
+          },
+          windowsSoftware,
+        ],
+      }
+    : {
+        "@context": "https://schema.org",
+        "@graph": [windowsSoftware, fedoraSoftware],
+      };
 ---
 
 <!doctype html>
@@ -25,21 +72,28 @@ const includeSoftwareSchema =
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
     <meta property="og:site_name" content="ScreenRecorder" />
+    <meta
+      property="og:image"
+      content="https://screenrecording.pages.dev/social-card.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="ScreenRecorder, a free lightweight screen recorder for Windows and Fedora"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta
+      name="twitter:image"
+      content="https://screenrecording.pages.dev/social-card.png"
+    />
     {
       includeSoftwareSchema && (
         <script
           type="application/ld+json"
-          set:html={JSON.stringify({
-            "@context": "https://schema.org",
-            "@type": "SoftwareApplication",
-            name: "ScreenRecorder",
-            operatingSystem: "Windows 10, Windows 11, Fedora 44",
-            applicationCategory: "MultimediaApplication",
-            license: "https://opensource.org/license/mit",
-            downloadUrl:
-              "https://github.com/priyanshuchawda/screen-recorder/releases/latest",
-            description,
-          })}
+          set:html={JSON.stringify(structuredData)}
         />
       )
     }

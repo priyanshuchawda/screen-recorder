@@ -6,13 +6,17 @@ export const releases = {
     name: "ScreenRecorder-0.3.16-windows-x64.zip",
     url: `${repository}/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip`,
     size: "129,117 bytes",
+    sha256: "443c24a51ae57fe7a404ecd87e1e4ee9b66d42b4889ba39cef8766f4f9cfef7e",
     platform: "Windows 10/11 · x64",
   },
   fedora: {
-    version: "Latest release",
-    url: `${repository}/releases/latest`,
+    version: "0.1.5",
+    name: "fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm",
+    url: `${repository}/releases/download/fedora-v0.1.5/fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm`,
+    size: "120,775 bytes",
+    sha256: "d17819f2d01e5819802f524426145aaa8f605b83f10f5d902b3f0549d265c137",
     platform: "Fedora 44 · GNOME / Wayland",
-    note: "Choose the Fedora RPM matching your architecture from GitHub Releases.",
+    note: "x86_64 RPM · SHA-256 available below",
   },
 };
 

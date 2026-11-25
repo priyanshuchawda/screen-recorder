@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="84" y1="54" x2="1116" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#101722"/>
+      <stop offset="1" stop-color="#080B10"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="208" y1="202" x2="792" y2="470" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#B7D4FF"/>
+      <stop offset="1" stop-color="#6D9EFF"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="matrix(468 0 0 300 892 326)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#3978D8" stop-opacity=".3"/>
+      <stop offset="1" stop-color="#3978D8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <path fill="url(#bg)" d="M0 0h1200v630H0z"/>
+  <path fill="url(#glow)" d="M0 0h1200v630H0z"/>
+  <rect x="78" y="78" width="46" height="46" rx="13" fill="#17263A" stroke="#48648A"/>
+  <circle cx="101" cy="101" r="11" stroke="#A8C8FB" stroke-width="3"/>
+  <circle cx="101" cy="101" r="3" fill="#70A3F8"/>
+  <text x="139" y="109" fill="#F1F5FC" font-family="Arial, sans-serif" font-size="25" font-weight="700">ScreenRecorder</text>
+  <rect x="80" y="190" width="322" height="35" rx="17.5" fill="#182435" stroke="#2E405A"/>
+  <circle cx="102" cy="207.5" r="5" fill="#55CE93"/>
+  <text x="119" y="213" fill="#B6C8E2" font-family="Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="2">OPEN SOURCE · LOCAL · NATIVE</text>
+  <text x="78" y="326" fill="#F5F7FB" font-family="Arial, sans-serif" font-size="68" font-weight="700" letter-spacing="-2">Free, lightweight</text>
+  <text x="78" y="408" fill="url(#blue)" font-family="Arial, sans-serif" font-size="68" font-weight="700" letter-spacing="-2">screen recorder.</text>
+  <text x="82" y="466" fill="#A8B2C2" font-family="Arial, sans-serif" font-size="24">For Windows and Fedora. Built for local recording.</text>
+  <rect x="80" y="518" width="220" height="52" rx="8" fill="#DCE8F8"/>
+  <text x="106" y="551" fill="#111B29" font-family="Arial, sans-serif" font-size="17" font-weight="700">FREE · MIT LICENSE</text>
+  <g transform="translate(824 177)">
+    <rect x="0" y="0" width="290" height="286" rx="18" fill="#111821" stroke="#38495E" stroke-width="2"/>
+    <path d="M18 1h254a17 17 0 0 1 17 17v31H1V18A17 17 0 0 1 18 1Z" fill="#19222D"/>
+    <circle cx="24" cy="25" r="5" fill="#536174"/><circle cx="42" cy="25" r="5" fill="#536174"/><circle cx="60" cy="25" r="5" fill="#536174"/>
+    <rect x="20" y="70" width="250" height="129" rx="10" fill="#1A2B3D"/>
+    <path d="m20 168 61-58 40 34 43-45 106 79v21H20v-31Z" fill="#325B87"/>
+    <path d="m20 178 65-35 48 30 58-53 79 64v15H20v-21Z" fill="#4F7CAD"/>
+    <rect x="20" y="218" width="112" height="9" rx="4.5" fill="#35465B"/><rect x="20" y="239" width="76" height="9" rx="4.5" fill="#35465B"/>
+    <circle cx="240" cy="237" r="15" fill="#E95C67"/><circle cx="240" cy="237" r="5" fill="#FFF"/>
+  </g>
+  <text x="833" y="505" fill="#7F91AA" font-family="Arial, sans-serif" font-size="13" font-weight="700" letter-spacing="2">CAPTURE MORE. USE LESS.</text>
+</svg>

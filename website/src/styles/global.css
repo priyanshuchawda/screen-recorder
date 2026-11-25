@@ -1045,9 +1045,10 @@ p {
   letter-spacing: -0.6px;
 }
 .download-card > p {
-  font-size: 10px;
+  font-size: 13px;
   color: #969eaa;
   margin-bottom: 18px;
+  line-height: 1.5;
 }
 .download-version {
   display: flex;
@@ -1056,11 +1057,33 @@ p {
   padding: 12px 0;
   border-top: 1px solid #292f38;
   color: #7e8793;
-  font-size: 9px;
+  font-size: 12px;
 }
 .download-version strong {
   color: #d4dbe4;
-  font: 10px var(--mono);
+  font: 12px var(--mono);
+}
+.download-file-meta {
+  margin: -10px 0 15px !important;
+  font: 11px var(--mono);
+  color: #a8b1bf !important;
+}
+.checksum-details {
+  margin-top: 12px;
+  color: #a8b1bf;
+  font-size: 12px;
+}
+.checksum-details summary {
+  width: fit-content;
+  cursor: pointer;
+  text-underline-offset: 3px;
+}
+.checksum-details code {
+  display: block;
+  margin-top: 9px;
+  overflow-wrap: anywhere;
+  color: #c4d3e9;
+  font: 11px/1.6 var(--mono);
 }
 .download-button {
   min-height: 40px;
@@ -1087,7 +1110,7 @@ p {
   display: block;
   margin-top: 12px;
   color: #858e99;
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1.65;
 }
 .platform-footnote {

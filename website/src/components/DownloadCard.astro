@@ -6,6 +6,8 @@ interface Props {
   href: string;
   label: string;
   note?: string;
+  size?: string;
+  sha256?: string;
   featured?: boolean;
 }
 const {
@@ -15,6 +17,8 @@ const {
   href,
   label,
   note,
+  size,
+  sha256,
   featured = false,
 } = Astro.props;
 ---
@@ -29,8 +33,17 @@ const {
   <div class="download-version">
     <span>Current version</span><strong>{version}</strong>
   </div>
+  {size && <p class="download-file-meta">Package size: {size}</p>}
   <a class="button download-button" href={href} target="_blank" rel="noreferrer"
     >{label}<span aria-hidden="true">↓</span></a
   >
   {note && <small class="download-note">{note}</small>}
+  {
+    sha256 && (
+      <details class="checksum-details">
+        <summary>SHA-256 checksum</summary>
+        <code>{sha256}</code>
+      </details>
+    )
+  }
 </article>
