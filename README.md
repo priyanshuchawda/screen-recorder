@@ -14,7 +14,7 @@ The Windows application is built in native C++20 with Win32, Windows Graphics Ca
 [![GitHub stars](https://img.shields.io/github/stars/priyanshuchawda/screen-recorder?style=flat)](https://github.com/priyanshuchawda/screen-recorder/stargazers)
 [![GitHub downloads](https://img.shields.io/github/downloads/priyanshuchawda/screen-recorder/total)](https://github.com/priyanshuchawda/screen-recorder/releases)
 
-[Website](https://screen-recorder-windows.netlify.app/) · [All releases](https://github.com/priyanshuchawda/screen-recorder/releases) · [Fedora documentation](fedora-linux-app/README.md) · [Report a bug](https://github.com/priyanshuchawda/screen-recorder/issues/new)
+[Website](https://screenrecording.pages.dev/) · [All releases](https://github.com/priyanshuchawda/screen-recorder/releases) · [Fedora documentation](fedora-linux-app/README.md) · [Report a bug](https://github.com/priyanshuchawda/screen-recorder/issues/new)
 
 ![ScreenRecorder Windows application interface with screen recording controls](docs/app-preview.png)
 
