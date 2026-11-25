@@ -2,9 +2,10 @@ export const repository = "https://github.com/priyanshuchawda/screen-recorder";
 
 export const releases = {
   windows: {
-    version: "0.3.17",
-    name: "ScreenRecorder-0.3.17-windows-x64.zip",
-    url: `${repository}/releases/download/v0.3.17/ScreenRecorder-0.3.17-windows-x64.zip`,
+    version: "0.3.16",
+    name: "ScreenRecorder-0.3.16-windows-x64.zip",
+    url: `${repository}/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip`,
+    size: "129,117 bytes",
     platform: "Windows 10/11 · x64",
   },
   fedora: {
