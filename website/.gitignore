@@ -1,3 +1,2 @@
-node_modules/
-dist/
-.astro/
+# Local browser-review screenshots and snapshots.
+.playwright-cli/
