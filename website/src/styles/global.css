@@ -160,7 +160,7 @@ button {
   margin-top: -7px;
 }
 .eyebrow {
-  font: 10px var(--mono);
+  font: 11px var(--mono);
   letter-spacing: 1.45px;
   color: #9aa4b2;
   display: flex;
@@ -222,7 +222,7 @@ p {
   justify-content: center;
   gap: 17px;
   border-radius: 5px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   transition:
     transform 0.22s,
@@ -241,7 +241,7 @@ p {
   background: #b4d1ff;
 }
 .text-link {
-  font-size: 12px;
+  font-size: 14px;
   color: #d6dce4;
   display: inline-flex;
   gap: 10px;
@@ -258,7 +258,7 @@ p {
   gap: 22px;
   margin-top: 43px;
   color: #858d99;
-  font-size: 10px;
+  font-size: 12px;
 }
 .hero-facts b {
   color: #9bbdf1;
@@ -589,7 +589,7 @@ p {
   right: 45px;
   bottom: 15px;
   color: #7c8794;
-  font: 8px var(--mono);
+  font: 10px var(--mono);
   letter-spacing: 1.15px;
   display: flex;
   gap: 9px;
@@ -626,10 +626,10 @@ p {
   align-items: center;
   justify-content: space-between;
   color: #9ba2ad;
-  font-size: 10px;
+  font-size: 12px;
 }
 .trust-inner span:first-child {
-  font: 9px var(--mono);
+  font: 10px var(--mono);
   letter-spacing: 1px;
   color: #6f7884;
 }
@@ -664,7 +664,7 @@ p {
 .section-heading > p {
   max-width: 295px;
   color: #949ba5;
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1.8;
   margin: 0 15px 5px 0;
 }
@@ -711,12 +711,12 @@ p {
   margin-bottom: 24px;
 }
 .feature-card h3 {
-  font-size: 14px;
+  font-size: 17px;
   letter-spacing: -0.25px;
   margin-bottom: 9px;
 }
 .feature-card p {
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.75;
   color: #969da7;
   max-width: 295px;
@@ -754,7 +754,7 @@ p {
 .quality-copy > p,
 .faq-intro > p {
   color: #989fa9;
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1.9;
   max-width: 350px;
 }
@@ -766,7 +766,7 @@ p {
   border-top: 1px solid #282d36;
   padding-top: 15px;
   color: #808995;
-  font-size: 9px;
+  font-size: 12px;
   display: flex;
   gap: 8px;
   align-items: flex-start;
@@ -782,7 +782,7 @@ p {
 }
 .quality-glow {
   position: absolute;
-  width: 390px;
+  width: min(390px, 100%);
   height: 320px;
   background: radial-gradient(ellipse, #33507d55, transparent 70%);
   filter: blur(20px);
@@ -1115,7 +1115,7 @@ p {
 }
 .platform-footnote {
   color: #777f8b;
-  font-size: 9px;
+  font-size: 12px;
   margin-top: 17px;
 }
 .faq-section {
@@ -1149,7 +1149,7 @@ p {
   align-items: center;
   list-style: none;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 600;
 }
 .faq-item summary::-webkit-details-marker {
@@ -1165,7 +1165,7 @@ p {
   transform: rotate(45deg);
 }
 .faq-item > p {
-  font-size: 10px;
+  font-size: 14px;
   line-height: 1.85;
   color: #989fa9;
   max-width: 530px;
@@ -1626,7 +1626,7 @@ p {
     gap: 12px;
   }
   .trust-inner span {
-    font-size: 9px;
+    font-size: 12px;
   }
   .quality-layout {
     gap: 30px;
@@ -1710,6 +1710,14 @@ p {
   .hero-copy > p {
     font-size: 16px;
   }
+  .hero-actions {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .hero-actions .button,
+  .hero-actions .text-link {
+    white-space: nowrap;
+  }
   .hero-facts {
     gap: 12px;
     flex-wrap: wrap;
@@ -1791,11 +1799,11 @@ p {
     margin-bottom: 17px;
   }
   .feature-card h3 {
-    font-size: 12px;
+    font-size: 14px;
     line-height: 1.45;
   }
   .feature-card p {
-    font-size: 10px;
+    font-size: 12px;
   }
   .quality-layout {
     padding-block: 68px;
@@ -1845,11 +1853,11 @@ p {
     font-size: 37px;
   }
   .faq-item summary {
-    font-size: 10px;
+    font-size: 14px;
     gap: 14px;
   }
   .faq-item > p {
-    font-size: 10px;
+    font-size: 13px;
   }
   .closing-section {
     padding-block: 65px;
