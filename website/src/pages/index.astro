@@ -5,7 +5,7 @@ import { features, questions, releases, repository } from "../data/site";
 ---
 
 <BaseLayout
-  title="ScreenRecorder — A lighter way to record your screen"
+  title="ScreenRecorder — Free Lightweight Screen Recorder for Windows & Fedora"
   description="A free, open-source native screen recorder for Windows and Fedora. Hardware-first encoding, desktop and mic audio, and local recordings."
 >
   <section class="hero wrap">
@@ -14,12 +14,12 @@ import { features, questions, releases, repository } from "../data/site";
         <span class="live-dot"></span> OPEN SOURCE · NATIVE · LOCAL
       </div>
       <h1>
-        Make the screen<br />the <span class="accent-word">whole story.</span>
+        Free, lightweight<br /><span class="accent-word">screen recorder.</span>
       </h1>
       <p>
-        A lightweight screen recorder for Windows and Fedora. Capture the
-        details, keep your performance, and save everything right on your
-        machine.
+        Capture more. Use less. ScreenRecorder is a free, open-source native
+        recorder for Windows and Fedora, built for local recording and
+        hardware-first H.264 encoding.
       </p>
       <div class="hero-actions">
         <a class="button button-primary" href={releases.windows.url}
@@ -34,10 +34,7 @@ import { features, questions, releases, repository } from "../data/site";
         ><span><b>◈</b> Hardware first</span>
       </div>
     </div>
-    <div
-      class="product-stage reveal"
-      aria-label="Illustration of ScreenRecorder recording controls"
-    >
+    <div class="product-stage reveal" aria-hidden="true">
       <div class="stage-orbit orbit-one"></div><div
         class="stage-orbit orbit-two"
       >
@@ -67,9 +64,9 @@ import { features, questions, releases, repository } from "../data/site";
           </div>
         </div>
         <div class="window-controls">
-          <button aria-label="Pause recording">Ⅱ</button><span
-            class="record-state"><i></i> Recording</span
-          ><button class="stop-button" aria-label="Stop recording">■</button>
+          <span class="pause-control">Ⅱ</span><span class="record-state"
+            ><i></i> Recording</span
+          ><span class="stop-button">■</span>
         </div>
         <div class="window-foot">
           <span>◈ Intel hardware encoder</span><span>● 00:14:32</span>

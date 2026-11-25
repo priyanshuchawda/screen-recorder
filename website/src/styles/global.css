@@ -25,6 +25,25 @@ body {
   background: var(--bg);
   color: #f2f3f5;
 }
+.wrap {
+  width: min(1240px, calc(100% - 2 * clamp(20px, 4vw, 48px)));
+  margin-inline: auto;
+  min-width: 0;
+}
+main,
+section,
+.hero,
+.quality-layout,
+.faq-layout,
+.feature-grid,
+.download-grid,
+.docs-grid {
+  min-width: 0;
+}
+:focus-visible {
+  outline: 2px solid var(--blue2);
+  outline-offset: 4px;
+}
 a {
   color: inherit;
   text-decoration: none;
@@ -105,7 +124,7 @@ button {
   gap: 34px;
 }
 .site-header nav a {
-  font-size: 12px;
+  font-size: 14px;
   color: #a7acb6;
   transition: color 0.2s;
 }
@@ -129,7 +148,7 @@ button {
 .hero {
   min-height: 675px;
   display: grid;
-  grid-template-columns: 1fr 1.05fr;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
   align-items: center;
   position: relative;
   padding-top: 36px;
@@ -185,8 +204,8 @@ p {
 }
 .hero-copy > p {
   color: #a4aab4;
-  font-size: 14px;
-  line-height: 1.9;
+  font-size: 17px;
+  line-height: 1.75;
   max-width: 445px;
 }
 .hero-actions {
@@ -252,7 +271,7 @@ p {
   position: relative;
   display: grid;
   place-items: center;
-  margin-right: -39px;
+  margin-right: 0;
   perspective: 1000px;
 }
 .stage-glow {
@@ -429,7 +448,10 @@ p {
   align-items: center;
   gap: 12px;
 }
-.window-controls button {
+.window-controls > span:first-child,
+.window-controls .stop-button {
+  display: grid;
+  place-items: center;
   border: 1px solid #3b424d;
   background: #20252c;
   color: #d9dce0;
@@ -443,6 +465,11 @@ p {
   border-color: #763c3f;
   color: #ffb5b5;
   margin-left: auto;
+}
+.window-controls .pause-control {
+  width: 29px;
+  height: 28px;
+  font-size: 11px;
 }
 .record-state {
   font-size: 9px;
@@ -716,7 +743,7 @@ p {
 .quality-layout {
   min-height: 520px;
   display: grid;
-  grid-template-columns: 0.9fr 1.1fr;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   align-items: center;
   gap: 70px;
 }
@@ -1075,7 +1102,7 @@ p {
 }
 .faq-layout {
   display: grid;
-  grid-template-columns: 0.8fr 1.2fr;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
   gap: 90px;
 }
 .faq-intro h2 {
@@ -1528,6 +1555,21 @@ p {
     opacity 0.7s ease,
     transform 0.7s ease;
 }
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .reveal,
+  .has-js .reveal {
+    opacity: 1;
+    transform: none;
+  }
+}
 .reveal.is-visible {
   opacity: 1;
   transform: translateY(0);
@@ -1548,11 +1590,13 @@ p {
     grid-template-columns: 0.9fr 1.1fr;
     min-height: 620px;
   }
+  .wrap {
+    width: min(100% - 40px, 560px);
+  }
   .hero h1 {
     font-size: 63px;
   }
   .product-stage {
-    margin-right: -22px;
     transform: scale(0.9);
   }
   .trust-inner {
@@ -1641,7 +1685,7 @@ p {
     margin-top: 22px;
   }
   .hero-copy > p {
-    font-size: 13px;
+    font-size: 16px;
   }
   .hero-facts {
     gap: 12px;
