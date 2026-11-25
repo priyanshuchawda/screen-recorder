@@ -1,5 +1,5 @@
 ---
-import { repository } from "../data/site";
+import { releases, repository } from "../data/site";
 import "../styles/global.css";
 interface Props {
   title: string;
@@ -14,12 +14,11 @@ const windowsSoftware = {
   name: "ScreenRecorder for Windows",
   operatingSystem: "Windows 10, Windows 11",
   applicationCategory: "MultimediaApplication",
-  softwareVersion: "0.3.16",
+  softwareVersion: releases.windows.version,
   license: "https://opensource.org/license/mit",
   isAccessibleForFree: true,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-  downloadUrl:
-    "https://github.com/priyanshuchawda/screen-recorder/releases/download/v0.3.16/ScreenRecorder-0.3.16-windows-x64.zip",
+  downloadUrl: releases.windows.url,
   url: "https://screenrecording.pages.dev/download/",
   description:
     "Free, open-source screen recorder for Windows 10 and 11 with hardware-first H.264 encoding and local recordings.",
@@ -29,12 +28,11 @@ const fedoraSoftware = {
   name: "ScreenRecorder for Fedora",
   operatingSystem: "Fedora Linux 44",
   applicationCategory: "MultimediaApplication",
-  softwareVersion: "0.1.5",
+  softwareVersion: releases.fedora.version,
   license: "https://opensource.org/license/mit",
   isAccessibleForFree: true,
   offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-  downloadUrl:
-    "https://github.com/priyanshuchawda/screen-recorder/releases/download/fedora-v0.1.5/fedora-screen-recorder-0.1.5-1.fc44.x86_64.rpm",
+  downloadUrl: releases.fedora.url,
   url: "https://screenrecording.pages.dev/download/",
   description:
     "Free, open-source screen recorder package for Fedora 44 with GNOME and Wayland.",
