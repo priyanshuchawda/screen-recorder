@@ -30,6 +30,11 @@ public:
         uint32_t video_write_failures = 0;
         uint32_t audio_queue_drops = 0;
         uint32_t audio_packets = 0;
+        bool encoder_drain_complete = true;
+        uint64_t encoder_pending_inputs = 0;
+        uint64_t encoder_drain_samples = 0;
+        uint64_t encoder_drain_ms = 0;
+        uint64_t finalize_ms = 0;
     };
 
     static std::wstring path_for_output(const std::wstring& output_path);

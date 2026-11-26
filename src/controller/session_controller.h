@@ -24,6 +24,7 @@
 #include "utils/render_frame.h"
 #include "utils/bounded_queue.h"
 #include "utils/session_diagnostics.h"
+#include "utils/latency_histogram.h"
 #include "capture/capture_engine.h"  // for FrameQueue typedef
 #include "audio/audio_engine.h"     // for AudioQueue typedef
 
@@ -98,30 +99,40 @@ private:
         uint64_t samples = 0;
         uint64_t total_us = 0;
         uint64_t max_us = 0;
+        uint64_t p50_upper_us = 0;
+        uint64_t p95_upper_us = 0;
+        uint64_t p99_upper_us = 0;
     };
 
     struct StageTimingCounters {
         void record(uint64_t duration_us) {
             samples.fetch_add(1, std::memory_order_relaxed);
             total_us.fetch_add(duration_us, std::memory_order_relaxed);
+            histogram.record(duration_us);
             uint64_t current_max = max_us.load(std::memory_order_relaxed);
             while (duration_us > current_max &&
                    !max_us.compare_exchange_weak(current_max, duration_us,
                                                  std::memory_order_relaxed)) {}
         }
         StageTimingSnapshot snapshot() const {
+            const auto percentiles = histogram.snapshot();
             return { samples.load(std::memory_order_relaxed),
                      total_us.load(std::memory_order_relaxed),
-                     max_us.load(std::memory_order_relaxed) };
+                     max_us.load(std::memory_order_relaxed),
+                     percentiles.p50_upper_us,
+                     percentiles.p95_upper_us,
+                     percentiles.p99_upper_us };
         }
         void reset() {
             samples.store(0, std::memory_order_relaxed);
             total_us.store(0, std::memory_order_relaxed);
             max_us.store(0, std::memory_order_relaxed);
+            histogram.reset();
         }
         std::atomic<uint64_t> samples{ 0 };
         std::atomic<uint64_t> total_us{ 0 };
         std::atomic<uint64_t> max_us{ 0 };
+        LatencyHistogram histogram;
     };
 
     enum class DiagnosticsStage : uint32_t {
@@ -173,6 +184,7 @@ private:
     // Encode thread
     std::thread       encode_thread_;
     std::atomic<bool> encode_running_{ false };
+    std::atomic<bool> pacer_reset_requested_{ false };
 
     // Low-frequency independent heartbeat keeps recording/stop diagnostics
     // useful even if the capture or encode thread stalls.
@@ -191,12 +203,9 @@ private:
     StageTimingCounters video_encode_timing_;
     StageTimingCounters video_mux_timing_;
     StageTimingCounters audio_mux_timing_;
-    std::atomic<uint64_t> audio_pool_reuse_count_{ 0 };
-    std::atomic<uint64_t> audio_pool_fallback_allocation_count_{ 0 };
 
-    // Adapter-wide DXGI memory snapshots, refreshed by the encode thread.
-    // These are deliberately labeled as adapter totals in diagnostics; DXGI's
-    // QueryVideoMemoryInfo values are not per-process GPU allocations.
+    // DXGI process usage/budget snapshots, refreshed by the independent
+    // diagnostics monitor so encoder stalls do not stop memory sampling.
     std::atomic<bool> gpu_memory_sample_available_{ false };
     std::atomic<uint64_t> gpu_memory_sample_tick_ms_{ 0 };
     std::atomic<uint64_t> gpu_local_usage_bytes_{ 0 };

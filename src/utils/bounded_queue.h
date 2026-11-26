@@ -48,6 +48,7 @@ public:
         }
         buffer_[head] = std::move(item);
         head_.store(next, std::memory_order_release);
+        update_high_watermark(size());
         cv_.notify_one();
         return true;
     }
@@ -81,6 +82,7 @@ public:
         }
         buffer_[head] = std::move(item);
         head_.store(next, std::memory_order_release);
+        update_high_watermark(size());
         if (dropped_oldest) *dropped_oldest = dropped;
         cv_.notify_one();
         return true;
@@ -120,11 +122,28 @@ public:
     // T036: expose capacity for runtime assertions and telemetry
     static constexpr size_t capacity() { return Capacity; }
 
+    // Highest observed occupancy since construction or explicit reset.
+    size_t high_watermark() const {
+        return high_watermark_.load(std::memory_order_relaxed);
+    }
+
+    void reset_high_watermark() {
+        high_watermark_.store(size(), std::memory_order_relaxed);
+    }
+
 private:
+    void update_high_watermark(size_t occupancy) {
+        size_t observed = high_watermark_.load(std::memory_order_relaxed);
+        while (occupancy > observed &&
+               !high_watermark_.compare_exchange_weak(observed, occupancy,
+                                                      std::memory_order_relaxed)) {}
+    }
+
     // T036: Fixed-size ring buffer — NEVER allocates after construction
     std::array<T, Capacity + 1> buffer_; // One extra slot for ring buffer sentinel
     alignas(64) std::atomic<size_t> head_;
     alignas(64) std::atomic<size_t> tail_;
+    std::atomic<size_t> high_watermark_{ 0 };
     std::mutex push_mutex_; // Serializes concurrent producers
     std::mutex wait_mutex_;
     std::condition_variable cv_;

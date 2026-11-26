@@ -40,3 +40,21 @@ TEST(SessionDiagnosticsTest, StartSummaryIncludesHardwareProfileAndPowerState) {
     EXPECT_NE(summary.find(L"quality=HQ"), std::wstring::npos);
     EXPECT_NE(summary.find(L"profile=1920x1080@60fps 10000000bps"), std::wstring::npos);
 }
+
+TEST(SessionDiagnosticsTest, StopSummaryMarksIncompleteEncoderDrain) {
+    sr::SessionDiagnostics::StopInfo info;
+    info.status = L"encoder_drain_incomplete_file_finalized";
+    info.encoder_mode = L"HW";
+    info.encoder_drain_complete = false;
+    info.encoder_pending_inputs = 4;
+    info.encoder_drain_samples = 2;
+    info.encoder_drain_ms = 3000;
+    info.finalize_ms = 45;
+
+    const std::wstring summary = sr::SessionDiagnostics::format_stop_summary(info);
+    EXPECT_NE(summary.find(L"status=encoder_drain_incomplete_file_finalized"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_drain_complete=0"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_pending_inputs=4"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_drain_ms=3000"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"finalize_ms=45"), std::wstring::npos);
+}

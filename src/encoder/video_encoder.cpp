@@ -3,6 +3,8 @@
 // Chain: HW MFT -> SW MFT (1080p) -> SW MFT (720p30)
 
 #include "encoder/video_encoder.h"
+#include "encoder/drain_result.h"
+#include "encoder/tracked_sample_allocator.h"
 #include "utils/logging.h"
 
 #include <mfapi.h>
@@ -94,14 +96,17 @@ bool VideoEncoder::pump_hw_events(uint32_t wait_ms) {
         saw_event = true;
 
         HRESULT status = S_OK;
-        event->GetStatus(&status);
-        if (FAILED(status)) {
-            SR_LOG_WARN(L"HW MFT event status failed: 0x%08X", status);
+        const HRESULT status_hr = event->GetStatus(&status);
+        if (FAILED(status_hr) || FAILED(status)) {
+            SR_LOG_ERROR(L"HW MFT event status failed: get=0x%08X status=0x%08X", status_hr, status);
+            return false;
         }
 
         MediaEventType type = MEUnknown;
-        if (FAILED(event->GetType(&type))) {
-            continue;
+        const HRESULT type_hr = event->GetType(&type);
+        if (FAILED(type_hr)) {
+            SR_LOG_ERROR(L"HW MFT event GetType failed: 0x%08X", type_hr);
+            return false;
         }
 
         switch (type) {
@@ -416,6 +421,10 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     input_errors_.store(0, std::memory_order_relaxed);
     output_samples_produced_.store(0, std::memory_order_relaxed);
     output_waits_for_input_.store(0, std::memory_order_relaxed);
+    pending_input_count_.store(0, std::memory_order_relaxed);
+    pending_input_high_watermark_.store(0, std::memory_order_relaxed);
+    input_samples_retried_.store(0, std::memory_order_relaxed);
+    output_timestamp_errors_.store(0, std::memory_order_relaxed);
 
     d3d_device_  = d3d_device;
     d3d_context_ = d3d_context;
@@ -452,6 +461,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
         if (try_init_hw(profile, dxgi_mgr)) {
             SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1 SUCCESS — using HW encoder");
             initialized_ = true;
+            publish_configuration();
             return true;
         }
         SR_LOG_WARN(L"[Encoder Fallback Chain] Step 1 FAILED — HW encoder unavailable or unstable");
@@ -461,6 +471,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
         if (try_init_sw(profile, profile.width, profile.height, profile.fps)) {
             SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2 SUCCESS — using SW encoder (original res)");
             initialized_ = true;
+            publish_configuration();
             return true;
         }
         SR_LOG_WARN(L"[Encoder Fallback Chain] Step 2 FAILED — SW encoder at original resolution failed");
@@ -469,6 +480,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
         if (try_init_sw(profile, 1280, 720, 30)) {
             SR_LOG_WARN(L"[Encoder Fallback Chain] Step 3 SUCCESS — using SW 720p30 degraded fallback");
             initialized_ = true;
+            publish_configuration();
             return true;
         }
         SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
@@ -483,6 +495,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     if (try_init_sw(profile, profile.width, profile.height, profile.fps)) {
         SR_LOG_INFO(L"[Encoder Fallback Chain] Step 1 SUCCESS — using SW encoder (original res)");
         initialized_ = true;
+        publish_configuration();
         return true;
     }
     SR_LOG_WARN(L"[Encoder Fallback Chain] Step 1 FAILED — SW encoder at original resolution failed");
@@ -492,6 +505,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     if (try_init_hw(profile, dxgi_mgr)) {
         SR_LOG_INFO(L"[Encoder Fallback Chain] Step 2 SUCCESS — using HW encoder");
         initialized_ = true;
+        publish_configuration();
         return true;
     }
     SR_LOG_WARN(L"[Encoder Fallback Chain] Step 2 FAILED — HW encoder unavailable or unstable");
@@ -501,6 +515,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     if (try_init_sw(profile, 1280, 720, 30)) {
         SR_LOG_WARN(L"[Encoder Fallback Chain] Step 3 SUCCESS — using SW 720p30 degraded fallback");
         initialized_ = true;
+        publish_configuration();
         return true;
     }
     SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
@@ -512,7 +527,8 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
 // VideoEncoder::encode_frame
 // ---------------------------------------------------------------------------
 bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
-                                 ComPtr<IMFSample>& out_sample)
+                                 ComPtr<IMFSample>& out_sample,
+                                 std::shared_ptr<TextureSurfaceLease> surface_lease)
 {
     if (!initialized_ || !mft_) return false;
     input_samples_offered_.fetch_add(1, std::memory_order_relaxed);
@@ -533,7 +549,9 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     ComPtr<IMFSample>      sample;
     ComPtr<IMFMediaBuffer> buffer;
 
-    HRESULT hr = MFCreateSample(&sample);
+    HRESULT hr = hw_path_
+        ? create_tracked_surface_sample(surface_lease, &sample)
+        : MFCreateSample(&sample);
     if (FAILED(hr)) return false;
 
     if (hw_path_) {
@@ -546,7 +564,10 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             &buffer);
         if (FAILED(hr)) {
             SR_LOG_ERROR(L"MFCreateDXGISurfaceBuffer failed: 0x%08X", hr);
-            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
+            if (recover_stalled_hardware()) {
+                input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                return encode_frame(nv12_texture, pts, out_sample, surface_lease);
+            }
             return false;
         }
 
@@ -578,8 +599,19 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         DWORD total = y_size + uv_size;
 
         hr = MFCreateMemoryBuffer(total, &buffer);
+        if (FAILED(hr)) {
+            d3d_context_->Unmap(staging_tex_.Get(), 0);
+            SR_LOG_ERROR(L"MFCreateMemoryBuffer(%u) failed: 0x%08X", total, hr);
+            return false;
+        }
         BYTE* buf_data = nullptr;
-        buffer->Lock(&buf_data, nullptr, nullptr);
+        hr = buffer->Lock(&buf_data, nullptr, nullptr);
+        if (FAILED(hr) || !buf_data) {
+            if (SUCCEEDED(hr)) buffer->Unlock();
+            d3d_context_->Unmap(staging_tex_.Get(), 0);
+            SR_LOG_ERROR(L"Software encoder input buffer Lock failed: 0x%08X", hr);
+            return false;
+        }
 
         const uint8_t* src = static_cast<uint8_t*>(mapped.pData);
         uint8_t* dst = buf_data;
@@ -600,18 +632,35 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                         tight_stride);
         }
 
-        buffer->Unlock();
-        buffer->SetCurrentLength(total);
+        const HRESULT unlock_hr = buffer->Unlock();
+        const HRESULT length_hr = SUCCEEDED(unlock_hr) ? buffer->SetCurrentLength(total) : unlock_hr;
 
         d3d_context_->Unmap(staging_tex_.Get(), 0);
+        if (FAILED(unlock_hr) || FAILED(length_hr)) {
+            SR_LOG_ERROR(L"Software encoder input buffer finalize failed: unlock=0x%08X length=0x%08X",
+                         unlock_hr, length_hr);
+            return false;
+        }
     }
 
-    sample->AddBuffer(buffer.Get());
-    sample->SetSampleTime(pts);
+    hr = sample->AddBuffer(buffer.Get());
+    if (FAILED(hr)) {
+        SR_LOG_ERROR(L"Attaching encoder input buffer failed: 0x%08X", hr);
+        return false;
+    }
+    hr = sample->SetSampleTime(pts);
+    if (FAILED(hr)) {
+        SR_LOG_ERROR(L"Setting encoder input timestamp failed: 0x%08X", hr);
+        return false;
+    }
 
     // Compute duration (100ns)
     int64_t duration = 10'000'000LL / static_cast<int64_t>(out_fps_);
-    sample->SetSampleDuration(duration);
+    hr = sample->SetSampleDuration(duration);
+    if (FAILED(hr)) {
+        SR_LOG_ERROR(L"Setting encoder input duration failed: 0x%08X", hr);
+        return false;
+    }
 
     // Force IDR keyframe if requested (e.g. after resume from pause)
     if (force_keyframe_next_.exchange(false, std::memory_order_acq_rel)) {
@@ -641,19 +690,30 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         if (FAILED(hr) && hr != MF_E_NOTACCEPTING) {
             input_errors_.fetch_add(1, std::memory_order_relaxed);
             SR_LOG_ERROR(L"ProcessInput failed: 0x%08X", hr);
-            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
+            if (recover_stalled_hardware()) {
+                input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                return encode_frame(nv12_texture, pts, out_sample, surface_lease);
+            }
             return false;
         }
         if (SUCCEEDED(hr)) {
             input_samples_accepted_.fetch_add(1, std::memory_order_relaxed);
             pending_video_pts_.push_back(pts);
+            pending_input_count_.fetch_add(1, std::memory_order_relaxed);
+            uint64_t pending = pending_input_count_.load(std::memory_order_relaxed);
+            uint64_t high = pending_input_high_watermark_.load(std::memory_order_relaxed);
+            while (pending > high && !pending_input_high_watermark_.compare_exchange_weak(
+                       high, pending, std::memory_order_relaxed)) {}
         } else if (hr == MF_E_NOTACCEPTING) {
             input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
         }
     } else {
         input_samples_deferred_without_event_.fetch_add(1, std::memory_order_relaxed);
         if (hw_have_output_events_ == 0) {
-            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
+            if (recover_stalled_hardware()) {
+                input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                return encode_frame(nv12_texture, pts, out_sample, surface_lease);
+            }
             return false;
         }
     }
@@ -666,7 +726,10 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     // return a sample for every input frame.
     while (true) {
         if (hw_async_mft_ && hw_have_output_events_ == 0) {
-            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
+            if (recover_stalled_hardware()) {
+                input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                return encode_frame(nv12_texture, pts, out_sample, surface_lease);
+            }
             return false;
         }
 
@@ -690,7 +753,10 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             output_waits_for_input_.fetch_add(1, std::memory_order_relaxed);
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
-            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
+            if (recover_stalled_hardware()) {
+                input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                return encode_frame(nv12_texture, pts, out_sample, surface_lease);
+            }
             return false; // normal: no encoded sample ready yet
         }
 
@@ -707,13 +773,17 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                         SR_LOG_WARN(L"HW encoder became unstable (0x8000FFFF, 10 consecutive failures). Switched to SW fallback for this session.");
                         if (out_buf.pSample) out_buf.pSample->Release();
                         if (out_buf.pEvents) out_buf.pEvents->Release();
-                        return encode_frame(nv12_texture, pts, out_sample);
+                        input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                        return encode_frame(nv12_texture, pts, out_sample, surface_lease);
                     }
                 }
             }
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
-            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
+            if (recover_stalled_hardware()) {
+                input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                return encode_frame(nv12_texture, pts, out_sample, surface_lease);
+            }
             return false;
         }
 
@@ -722,7 +792,9 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
 
         if (out_buf.pSample) {
-            stamp_output_sample(out_buf.pSample, pts);
+            if (!stamp_output_sample(out_buf.pSample, pts)) {
+                SR_LOG_ERROR(L"Could not assign encoded output timestamps");
+            }
             last_output_tick_ms_ = GetTickCount64();
             out_sample.Attach(out_buf.pSample);
             if (out_buf.pEvents) out_buf.pEvents->Release();
@@ -759,17 +831,27 @@ bool VideoEncoder::switch_to_software_fallback() {
     hw_output_fail_count_ = 0;
     switched_to_sw_due_to_hw_errors_ = true;
     last_output_tick_ms_ = GetTickCount64();
+    publish_configuration();
     return true;
 }
 
-void VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) {
-    if (!sample) return;
+void VideoEncoder::publish_configuration() {
+    published_width_.store(out_width_, std::memory_order_release);
+    published_height_.store(out_height_, std::memory_order_release);
+    published_fps_.store(out_fps_, std::memory_order_release);
+    published_bitrate_.store(active_bitrate_bps_, std::memory_order_release);
+    published_mode_.store(mode_, std::memory_order_release);
+}
+
+bool VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) {
+    if (!sample) return false;
     output_samples_produced_.fetch_add(1, std::memory_order_relaxed);
 
     int64_t output_pts = fallback_pts;
     if (!pending_video_pts_.empty()) {
         output_pts = pending_video_pts_.front();
         pending_video_pts_.pop_front();
+        pending_input_count_.fetch_sub(1, std::memory_order_relaxed);
     } else {
         LONGLONG mft_pts = 0;
         if (SUCCEEDED(sample->GetSampleTime(&mft_pts))) {
@@ -782,9 +864,12 @@ void VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) 
         static_cast<int64_t>((std::max)(1u, out_fps_));
     const HRESULT duration_hr = sample->SetSampleDuration(duration);
     if (FAILED(time_hr) || FAILED(duration_hr)) {
-        SR_LOG_WARN(L"Could not restore encoded video timestamps (time=0x%08X, duration=0x%08X)",
+        output_timestamp_errors_.fetch_add(1, std::memory_order_relaxed);
+        SR_LOG_ERROR(L"Could not restore encoded video timestamps (time=0x%08X, duration=0x%08X)",
                     time_hr, duration_hr);
+        return false;
     }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -792,21 +877,38 @@ void VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) 
 // ---------------------------------------------------------------------------
 bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
     if (!initialized_ || !mft_) return false;
+    try {
+        const size_t pending = static_cast<size_t>(pending_input_count_.load(std::memory_order_relaxed));
+        if (pending > out_samples.max_size() - out_samples.size()) {
+            SR_LOG_ERROR(L"Encoder drain output count exceeds vector capacity limits");
+            return false;
+        }
+        out_samples.reserve(out_samples.size() + pending);
+    } catch (...) {
+        SR_LOG_ERROR(L"Could not reserve output storage for encoder drain; no more output was requested");
+        return false;
+    }
 
     // Some MFTs only emit buffered output after explicit end-of-stream signal.
     HRESULT eos_hr = mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
     if (FAILED(eos_hr)) {
-        SR_LOG_WARN(L"MFT_MESSAGE_NOTIFY_END_OF_STREAM failed: 0x%08X", eos_hr);
+        SR_LOG_ERROR(L"MFT_MESSAGE_NOTIFY_END_OF_STREAM failed: 0x%08X", eos_hr);
+        return false;
     }
 
-    mft_->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+    const HRESULT drain_hr = mft_->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+    if (FAILED(drain_hr)) {
+        SR_LOG_ERROR(L"MFT_MESSAGE_COMMAND_DRAIN failed: 0x%08X", drain_hr);
+        return false;
+    }
 
     if (hw_async_mft_) {
         hw_drain_complete_ = false;
         const ULONGLONG deadline = GetTickCount64() + 3000;
 
-        while (!hw_drain_complete_ && GetTickCount64() < deadline) {
-            pump_hw_events(10);
+        bool drain_ok = true;
+        while ((!hw_drain_complete_ || hw_have_output_events_ > 0) && GetTickCount64() < deadline) {
+            if (!pump_hw_events(10)) drain_ok = false;
 
             while (hw_have_output_events_ > 0) {
                 MFT_OUTPUT_DATA_BUFFER out_buf{};
@@ -825,6 +927,11 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                     --hw_have_output_events_;
                 }
 
+                if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+                    if (out_buf.pSample) out_buf.pSample->Release();
+                    if (out_buf.pEvents) out_buf.pEvents->Release();
+                    break;
+                }
                 if (FAILED(hr)) {
                     SR_LOG_ERROR(L"Async ProcessOutput during flush failed: 0x%08X", hr);
                     if (out_buf.pSample) out_buf.pSample->Release();
@@ -833,7 +940,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                 }
 
                 if (out_buf.pSample) {
-                    stamp_output_sample(out_buf.pSample, 0);
+                    if (!stamp_output_sample(out_buf.pSample, 0)) drain_ok = false;
                     ComPtr<IMFSample> s;
                     s.Attach(out_buf.pSample);
                     out_samples.push_back(std::move(s));
@@ -842,9 +949,22 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
             }
         }
 
-        return true;
+        const bool timed_out = !hw_drain_complete_ && GetTickCount64() >= deadline;
+        if (!hw_drain_complete_) {
+            SR_LOG_ERROR(L"Async MFT drain timed out with %llu pending input timestamp(s)",
+                         static_cast<unsigned long long>(pending_input_count_.load(std::memory_order_relaxed)));
+            drain_ok = false;
+        }
+        if (hw_have_output_events_ > 0) {
+            SR_LOG_ERROR(L"Async MFT drain completed with %u unprocessed output event(s)",
+                         hw_have_output_events_);
+            drain_ok = false;
+        }
+        return encoder_drain_succeeded(hw_drain_complete_, timed_out, drain_ok,
+            pending_input_count_.load(std::memory_order_relaxed));
     }
 
+    bool drain_ok = true;
     while (true) {
         MFT_OUTPUT_DATA_BUFFER out_buf{};
         DWORD status = 0;
@@ -853,7 +973,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
             HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
             if (FAILED(alloc_hr)) {
                 SR_LOG_ERROR(L"Failed to allocate MFT flush output sample: 0x%08X", alloc_hr);
-                break;
+                return false;
             }
         }
 
@@ -867,17 +987,27 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
             SR_LOG_ERROR(L"ProcessOutput during flush failed: 0x%08X", hr);
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
-            break;
+            return false;
         }
         if (out_buf.pSample) {
-            stamp_output_sample(out_buf.pSample, 0);
+            if (!stamp_output_sample(out_buf.pSample, 0)) drain_ok = false;
             ComPtr<IMFSample> s;
             s.Attach(out_buf.pSample);
             out_samples.push_back(std::move(s));
         }
         if (out_buf.pEvents) out_buf.pEvents->Release();
+        if (!out_buf.pSample) {
+            SR_LOG_ERROR(L"ProcessOutput succeeded during drain without returning a sample");
+            return false;
+        }
     }
-    return true;
+    if (!pending_video_pts_.empty()) {
+        SR_LOG_ERROR(L"Synchronous MFT drain left %llu pending input timestamp(s)",
+                     static_cast<unsigned long long>(pending_input_count_.load(std::memory_order_relaxed)));
+        drain_ok = false;
+    }
+    return encoder_drain_succeeded(true, false, drain_ok,
+        pending_input_count_.load(std::memory_order_relaxed));
 }
 
 // ---------------------------------------------------------------------------

@@ -4,25 +4,27 @@
 
 #include <windows.h>
 #include <cstdint>
+#include <mutex>
 
 namespace sr {
 
 class SyncManager {
 public:
-    SyncManager() = default;
+    SyncManager() : freq_(get_freq()) {}
 
     // Call at recording start; anchors the QPC base time
     void start() {
+        std::lock_guard<std::mutex> lock(mutex_);
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
         anchor_qpc_       = now.QuadPart;
         paused_accum_100ns_ = 0;
         pause_start_qpc_  = 0;
-        freq_ = get_freq();
     }
 
     // Call immediately at pause
     void pause() {
+        std::lock_guard<std::mutex> lock(mutex_);
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
         pause_start_qpc_ = now.QuadPart;
@@ -30,6 +32,7 @@ public:
 
     // Call immediately at resume; accumulates pause duration
     void resume() {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (pause_start_qpc_ > 0) {
             LARGE_INTEGER now{};
             QueryPerformanceCounter(&now);
@@ -42,6 +45,7 @@ public:
     // Convert any QPC tick value to a rebased PTS (100ns units)
     // Suitable for both video frames and audio packets
     int64_t to_pts(int64_t qpc_ticks) const {
+        std::lock_guard<std::mutex> lock(mutex_);
         int64_t raw = ticks_to_100ns(qpc_ticks - anchor_qpc_);
         return raw - paused_accum_100ns_;
     }
@@ -54,11 +58,18 @@ public:
     }
 
     // Total paused duration in 100ns units
-    int64_t paused_total_100ns() const { return paused_accum_100ns_; }
+    int64_t paused_total_100ns() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return paused_accum_100ns_;
+    }
 
     // QPC ticks at anchor (recording start)
-    int64_t anchor_qpc() const { return anchor_qpc_; }
+    int64_t anchor_qpc() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return anchor_qpc_;
+    }
     int64_t anchor_100ns() const {
+        std::lock_guard<std::mutex> lock(mutex_);
         return ticks_to_100ns(anchor_qpc_);
     }
 
@@ -66,7 +77,8 @@ private:
     int64_t anchor_qpc_        = 0;
     int64_t paused_accum_100ns_ = 0;
     int64_t pause_start_qpc_   = 0;
-    mutable int64_t freq_      = 0;
+    int64_t freq_              = 0;
+    mutable std::mutex mutex_;
 
     static int64_t get_freq() {
         LARGE_INTEGER f{};
@@ -75,9 +87,6 @@ private:
     }
 
     int64_t ticks_to_100ns(int64_t ticks) const {
-        if (freq_ == 0) {
-            const_cast<SyncManager*>(this)->freq_ = get_freq();
-        }
         // Avoid overflow: use double arithmetic (sufficient precision for 60-min sessions)
         return static_cast<int64_t>(
             static_cast<double>(ticks) * 10'000'000.0 /

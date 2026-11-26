@@ -13,6 +13,7 @@
 #include <memory>
 #include "utils/render_frame.h"
 #include "utils/bounded_queue.h"
+#include "utils/latency_histogram.h"
 
 namespace sr {
 
@@ -70,6 +71,11 @@ public:
     uint32_t frames_captured() const { return frames_captured_.load(std::memory_order_relaxed); }
     uint32_t frames_dropped()  const { return frames_dropped_.load(std::memory_order_relaxed); }
     uint32_t queue_drops()     const { return queue_drops_.load(std::memory_order_relaxed); }
+    uint32_t cadence_rejections() const { return cadence_rejections_.load(std::memory_order_relaxed); }
+    uint64_t conversion_submission_samples() const { return conversion_submission_samples_.load(std::memory_order_relaxed); }
+    uint64_t conversion_submission_total_us() const { return conversion_submission_total_us_.load(std::memory_order_relaxed); }
+    uint64_t conversion_submission_max_us() const { return conversion_submission_max_us_.load(std::memory_order_relaxed); }
+    LatencyHistogram::Snapshot conversion_submission_latency() const { return conversion_submission_latency_.snapshot(); }
     FrameCallbackStage frame_callback_stage() const {
         return frame_callback_stage_.load(std::memory_order_relaxed);
     }
@@ -81,6 +87,11 @@ public:
         frames_captured_.store(0, std::memory_order_relaxed);
         frames_dropped_.store(0, std::memory_order_relaxed);
         queue_drops_.store(0, std::memory_order_relaxed);
+        cadence_rejections_.store(0, std::memory_order_relaxed);
+        conversion_submission_samples_.store(0, std::memory_order_relaxed);
+        conversion_submission_total_us_.store(0, std::memory_order_relaxed);
+        conversion_submission_max_us_.store(0, std::memory_order_relaxed);
+        conversion_submission_latency_.reset();
     }
 
     // Set QPC-based PTS anchor (call between initialize and start)
@@ -107,6 +118,11 @@ private:
     std::atomic<uint32_t> frames_captured_  { 0 };
     std::atomic<uint32_t> frames_dropped_   { 0 };
     std::atomic<uint32_t> queue_drops_      { 0 };
+    std::atomic<uint32_t> cadence_rejections_{ 0 };
+    std::atomic<uint64_t> conversion_submission_samples_{ 0 };
+    std::atomic<uint64_t> conversion_submission_total_us_{ 0 };
+    std::atomic<uint64_t> conversion_submission_max_us_{ 0 };
+    LatencyHistogram conversion_submission_latency_;
     std::atomic<FrameCallbackStage> frame_callback_stage_{ FrameCallbackStage::Idle };
     std::atomic<uint64_t> frame_callback_started_ms_{ 0 };
     std::atomic<uint32_t> target_fps_       { 30 };

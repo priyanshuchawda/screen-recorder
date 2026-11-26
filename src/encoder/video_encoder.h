@@ -35,6 +35,10 @@ public:
         uint64_t input_errors = 0;
         uint64_t output_samples_produced = 0;
         uint64_t output_waits_for_input = 0;
+        uint64_t pending_inputs = 0;
+        uint64_t pending_inputs_high_watermark = 0;
+        uint64_t input_samples_retried = 0;
+        uint64_t output_timestamp_errors = 0;
     };
 
     VideoEncoder()  = default;
@@ -49,7 +53,8 @@ public:
     // Encoded bytes are appended to out_samples (as IMFSample AddRef'd pointers).
     // Caller must Release() each sample after writing it to the muxer.
     bool encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
-                      ComPtr<IMFSample>& out_sample);
+                      ComPtr<IMFSample>& out_sample,
+                      std::shared_ptr<TextureSurfaceLease> surface_lease = {});
 
     // Drain remaining frames from encoder
     bool flush(std::vector<ComPtr<IMFSample>>& out_samples);
@@ -60,11 +65,11 @@ public:
     // Call this immediately on resume from pause to ensure seekability.
     void request_keyframe() { force_keyframe_next_.store(true, std::memory_order_release); }
 
-    EncoderMode  mode()         const { return mode_; }
-    uint32_t     output_width() const { return out_width_; }
-    uint32_t     output_height()const { return out_height_; }
-    uint32_t     output_fps()   const { return out_fps_; }
-    uint32_t     output_bitrate() const { return active_bitrate_bps_; }
+    EncoderMode  mode()         const { return published_mode_.load(std::memory_order_acquire); }
+    uint32_t     output_width() const { return published_width_.load(std::memory_order_acquire); }
+    uint32_t     output_height()const { return published_height_.load(std::memory_order_acquire); }
+    uint32_t     output_fps()   const { return published_fps_.load(std::memory_order_acquire); }
+    uint32_t     output_bitrate() const { return published_bitrate_.load(std::memory_order_acquire); }
     DiagnosticsSnapshot diagnostics_snapshot() const {
         return {
             input_samples_offered_.load(std::memory_order_relaxed),
@@ -73,7 +78,11 @@ public:
             input_samples_deferred_without_event_.load(std::memory_order_relaxed),
             input_errors_.load(std::memory_order_relaxed),
             output_samples_produced_.load(std::memory_order_relaxed),
-            output_waits_for_input_.load(std::memory_order_relaxed)
+            output_waits_for_input_.load(std::memory_order_relaxed),
+            pending_input_count_.load(std::memory_order_relaxed),
+            pending_input_high_watermark_.load(std::memory_order_relaxed),
+            input_samples_retried_.load(std::memory_order_relaxed),
+            output_timestamp_errors_.load(std::memory_order_relaxed)
         };
     }
 
@@ -84,7 +93,8 @@ private:
                            uint32_t fps, uint32_t bitrate_bps, bool use_hw);
     bool switch_to_software_fallback();
     bool pump_hw_events(uint32_t wait_ms);
-    void stamp_output_sample(IMFSample* sample, int64_t fallback_pts);
+    bool stamp_output_sample(IMFSample* sample, int64_t fallback_pts);
+    void publish_configuration();
 
     ComPtr<IMFTransform>       mft_;
     ComPtr<IMFMediaEventGenerator> hw_events_;
@@ -93,6 +103,11 @@ private:
     ComPtr<ID3D11DeviceContext> d3d_context_;
 
     EncoderMode mode_        = EncoderMode::SoftwareMFT;
+    std::atomic<EncoderMode> published_mode_{ EncoderMode::SoftwareMFT };
+    std::atomic<uint32_t> published_width_{ 1920 };
+    std::atomic<uint32_t> published_height_{ 1080 };
+    std::atomic<uint32_t> published_fps_{ 30 };
+    std::atomic<uint32_t> published_bitrate_{ 4'000'000 };
     uint32_t    out_width_   = 1920;
     uint32_t    out_height_  = 1080;
     uint32_t    out_fps_     = 30;
@@ -111,6 +126,8 @@ private:
     bool        hw_drain_complete_ = false;
     ULONGLONG   last_output_tick_ms_ = 0;
     std::deque<int64_t> pending_video_pts_;
+    std::atomic<uint64_t> pending_input_count_{ 0 };
+    std::atomic<uint64_t> pending_input_high_watermark_{ 0 };
 
     // Session counters distinguish accepted MFT input from produced output.
     // A submitted input may legitimately produce output on a later call.
@@ -121,6 +138,8 @@ private:
     std::atomic<uint64_t> input_errors_{ 0 };
     std::atomic<uint64_t> output_samples_produced_{ 0 };
     std::atomic<uint64_t> output_waits_for_input_{ 0 };
+    std::atomic<uint64_t> input_samples_retried_{ 0 };
+    std::atomic<uint64_t> output_timestamp_errors_{ 0 };
 
     // Pre-allocated staging texture for SW encoder path (avoids per-frame alloc)
     ComPtr<ID3D11Texture2D> staging_tex_;

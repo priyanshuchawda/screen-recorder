@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include "sync/sync_manager.h"
 #include <windows.h>
+#include <atomic>
 #include <thread>
 #include <chrono>
 
@@ -171,4 +172,26 @@ TEST_F(SyncManagerTest, PTSNonNegativeDuringPause) {
     // While paused, now_pts() should still reflect time up to pause point (no subtraction until resume)
     int64_t pts_while_paused = sync_.now_pts();
     EXPECT_GE(pts_while_paused, 0) << "PTS should be >= 0 while paused";
+}
+
+TEST_F(SyncManagerTest, ConcurrentPauseResumeAndTimestampReadsRemainSafe) {
+    sync_.start();
+    std::atomic<bool> finished{ false };
+    std::thread clock_reader([&] {
+        while (!finished.load(std::memory_order_acquire)) {
+            LARGE_INTEGER now{};
+            QueryPerformanceCounter(&now);
+            (void)sync_.to_pts(now.QuadPart);
+            (void)sync_.paused_total_100ns();
+            (void)sync_.anchor_100ns();
+        }
+    });
+
+    for (int i = 0; i < 100; ++i) {
+        sync_.pause();
+        sync_.resume();
+    }
+    finished.store(true, std::memory_order_release);
+    clock_reader.join();
+    EXPECT_GE(sync_.paused_total_100ns(), 0);
 }

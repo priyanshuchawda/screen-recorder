@@ -19,6 +19,7 @@
 #include <dxgi1_2.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 
 namespace wgc  = winrt::Windows::Graphics::Capture;
 namespace wdx  = winrt::Windows::Graphics::DirectX;
@@ -54,7 +55,7 @@ struct CaptureEngineImpl {
     static constexpr size_t kNv12TextureCount = FrameQueue::capacity() + 5;
     std::array<winrt::com_ptr<ID3D11Texture2D>, kNv12TextureCount> nv12_tex{};
     std::array<winrt::com_ptr<ID3D11VideoProcessorOutputView>, kNv12TextureCount> vp_out_view{};
-    std::array<ULONG, kNv12TextureCount> nv12_base_refcounts{};
+    std::array<std::shared_ptr<TextureSurfaceSlot>, kNv12TextureCount> nv12_slots{};
     uint32_t write_idx_ = 0;
 
     // Cache VP input views for rotating frame-pool textures (usually 2).
@@ -84,7 +85,7 @@ struct CaptureEngineImpl {
         // Release old GPU objects so they can be recreated
         for (auto& view : vp_out_view) { view = nullptr; }
         for (auto& tex  : nv12_tex)    { tex  = nullptr; }
-        nv12_base_refcounts.fill(0);
+        for (auto& slot : nv12_slots) slot = std::make_shared<TextureSurfaceSlot>();
         for (auto& tex  : cached_in_tex)  { tex  = nullptr; }
         for (auto& view : cached_in_view) { view = nullptr; }
         write_idx_ = 0;
@@ -141,11 +142,6 @@ struct CaptureEngineImpl {
                 return false;
             }
 
-            // Remember the texture's baseline COM references (capture engine
-            // plus its output view) so in-flight samples can be detected.
-            const ULONG refs_with_probe = nv12_tex[i]->AddRef();
-            nv12_tex[i]->Release();
-            nv12_base_refcounts[i] = refs_with_probe - 1;
         }
 
         vp_width   = in_w;
@@ -189,16 +185,17 @@ struct CaptureEngineImpl {
         return in_view;
     }
 
-    bool convert_bgra_to_nv12(ID3D11Texture2D* bgra_tex, uint32_t& out_idx) {
+    bool convert_bgra_to_nv12(ID3D11Texture2D* bgra_tex, uint32_t& out_idx,
+                              std::shared_ptr<TextureSurfaceLease>& out_lease) {
         auto in_view = get_or_create_input_view(bgra_tex);
         if (!in_view) return false;
 
         bool found_free_surface = false;
         for (size_t attempt = 0; attempt < nv12_tex.size(); ++attempt) {
             const size_t idx = (write_idx_ + attempt) % nv12_tex.size();
-            const ULONG refs_with_probe = nv12_tex[idx]->AddRef();
-            nv12_tex[idx]->Release();
-            if (refs_with_probe <= nv12_base_refcounts[idx] + 1) {
+            bool expected = true;
+            if (nv12_slots[idx]->available.compare_exchange_strong(
+                    expected, false, std::memory_order_acq_rel)) {
                 out_idx = static_cast<uint32_t>(idx);
                 write_idx_ = static_cast<uint32_t>((idx + 1) % nv12_tex.size());
                 found_free_surface = true;
@@ -207,7 +204,10 @@ struct CaptureEngineImpl {
         }
         if (!found_free_surface) return false;
         auto out_view = vp_out_view[out_idx];
-        if (!out_view) return false;
+        if (!out_view) {
+            nv12_slots[out_idx]->available.store(true, std::memory_order_release);
+            return false;
+        }
 
         D3D11_VIDEO_PROCESSOR_STREAM stream{};
         stream.Enable        = TRUE;
@@ -223,6 +223,13 @@ struct CaptureEngineImpl {
             } else {
                 SR_LOG_ERROR(L"VideoProcessorBlt failed: 0x%08X", hr);
             }
+            nv12_slots[out_idx]->available.store(true, std::memory_order_release);
+            return false;
+        }
+        try {
+            out_lease = std::make_shared<TextureSurfaceLease>(nv12_slots[out_idx]);
+        } catch (...) {
+            nv12_slots[out_idx]->available.store(true, std::memory_order_release);
             return false;
         }
         return true;
@@ -262,6 +269,7 @@ struct CaptureEngineImpl {
             static_cast<double>(qpc_freq.QuadPart)) - start_100ns;
         if (!capture_cadence.accept(
                 capture_pts, capture_interval_100ns.load(std::memory_order_relaxed))) {
+            parent->cadence_rejections_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
 
@@ -287,17 +295,38 @@ struct CaptureEngineImpl {
         }
 
         uint32_t out_idx = 0;
+        std::shared_ptr<TextureSurfaceLease> surface_lease;
         parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::ConvertGpu);
-        if (!convert_bgra_to_nv12(bgra_tex.get(), out_idx)) {
+        const auto conversion_started = std::chrono::steady_clock::now();
+        if (!convert_bgra_to_nv12(bgra_tex.get(), out_idx, surface_lease)) {
+            const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - conversion_started).count();
+            const uint64_t duration_us = static_cast<uint64_t>((std::max)(0LL, elapsed_us));
+            parent->conversion_submission_samples_.fetch_add(1, std::memory_order_relaxed);
+            parent->conversion_submission_total_us_.fetch_add(duration_us, std::memory_order_relaxed);
+            parent->conversion_submission_latency_.record(duration_us);
+            uint64_t current_max = parent->conversion_submission_max_us_.load(std::memory_order_relaxed);
+            while (duration_us > current_max &&
+                   !parent->conversion_submission_max_us_.compare_exchange_weak(
+                       current_max, duration_us, std::memory_order_relaxed)) {}
             parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
+        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - conversion_started).count();
+        const uint64_t duration_us = static_cast<uint64_t>((std::max)(0LL, elapsed_us));
+        parent->conversion_submission_samples_.fetch_add(1, std::memory_order_relaxed);
+        parent->conversion_submission_total_us_.fetch_add(duration_us, std::memory_order_relaxed);
+        parent->conversion_submission_latency_.record(duration_us);
+        uint64_t current_max = parent->conversion_submission_max_us_.load(std::memory_order_relaxed);
+        while (duration_us > current_max &&
+               !parent->conversion_submission_max_us_.compare_exchange_weak(
+                   current_max, duration_us, std::memory_order_relaxed)) {}
 
         // Build RenderFrame
         RenderFrame rf;
-        // ComPtr copy keeps this independent output surface leased until the
-        // encoder and queue have released their references.
         rf.texture = nv12_tex[out_idx].get();
+        rf.surface_lease = std::move(surface_lease);
         rf.width   = out_width_;   // T034: always report fixed output dimensions
         rf.height  = out_height_;
 
