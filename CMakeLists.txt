@@ -38,22 +38,23 @@ set(WIN_LIBS
 )
 
 # Collect all source files by module
-file(GLOB_RECURSE UTIL_SRC    src/utils/*.cpp src/utils/*.h)
-file(GLOB_RECURSE CTRL_SRC    src/controller/*.cpp src/controller/*.h)
-file(GLOB_RECURSE CAPTURE_SRC src/capture/*.cpp src/capture/*.h)
-file(GLOB_RECURSE AUDIO_SRC   src/audio/*.cpp src/audio/*.h)
-file(GLOB_RECURSE ENCODER_SRC src/encoder/*.cpp src/encoder/*.h)
-file(GLOB_RECURSE SYNC_SRC    src/sync/*.cpp src/sync/*.h)
-file(GLOB_RECURSE STORAGE_SRC src/storage/*.cpp src/storage/*.h)
-file(GLOB_RECURSE APP_SRC     src/app/*.cpp src/app/*.h)
+file(GLOB_RECURSE UTIL_SRC    CONFIGURE_DEPENDS src/utils/*.cpp src/utils/*.h)
+file(GLOB_RECURSE CTRL_SRC    CONFIGURE_DEPENDS src/controller/*.cpp src/controller/*.h)
+file(GLOB_RECURSE CAPTURE_SRC CONFIGURE_DEPENDS src/capture/*.cpp src/capture/*.h)
+file(GLOB_RECURSE AUDIO_SRC   CONFIGURE_DEPENDS src/audio/*.cpp src/audio/*.h)
+file(GLOB_RECURSE ENCODER_SRC CONFIGURE_DEPENDS src/encoder/*.cpp src/encoder/*.h)
+file(GLOB_RECURSE SYNC_SRC    CONFIGURE_DEPENDS src/sync/*.cpp src/sync/*.h)
+file(GLOB_RECURSE STORAGE_SRC CONFIGURE_DEPENDS src/storage/*.cpp src/storage/*.h)
+file(GLOB_RECURSE APP_SRC     CONFIGURE_DEPENDS src/app/*.cpp src/app/*.h)
 list(APPEND APP_SRC
     src/app/camera_overlay.cpp
     src/app/camera_overlay.h
     src/app.rc
 )
 
-add_executable(ScreenRecorder WIN32
-    ${APP_SRC}
+# Compile the shared recording engine once and link it into the app, tests and
+# manual probe. This keeps the tested implementation identical to production.
+add_library(screen_recorder_core STATIC
     ${CTRL_SRC}
     ${CAPTURE_SRC}
     ${AUDIO_SRC}
@@ -62,9 +63,15 @@ add_executable(ScreenRecorder WIN32
     ${STORAGE_SRC}
     ${UTIL_SRC}
 )
+target_include_directories(screen_recorder_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(screen_recorder_core PUBLIC ${WIN_LIBS})
+
+add_executable(ScreenRecorder WIN32
+    ${APP_SRC}
+)
 
 target_include_directories(ScreenRecorder PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(ScreenRecorder PRIVATE ${WIN_LIBS})
+target_link_libraries(ScreenRecorder PRIVATE screen_recorder_core)
 
 install(TARGETS ScreenRecorder
     RUNTIME DESTINATION .
@@ -83,11 +90,9 @@ add_subdirectory(tests)
 # session and is not run as part of the unattended unit-test suite.
 add_executable(recording_probe EXCLUDE_FROM_ALL
     tests/manual/recording_probe.cpp
-    ${CTRL_SRC} ${CAPTURE_SRC} ${AUDIO_SRC} ${ENCODER_SRC}
-    ${SYNC_SRC} ${STORAGE_SRC} ${UTIL_SRC}
 )
 target_include_directories(recording_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(recording_probe PRIVATE ${WIN_LIBS} psapi)
+target_link_libraries(recording_probe PRIVATE screen_recorder_core psapi)
 target_compile_definitions(recording_probe PRIVATE SR_LOCAL_RECORDING_PROBE)
 
 # Packaging
