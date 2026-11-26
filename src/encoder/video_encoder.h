@@ -27,6 +27,16 @@ enum class EncoderMode {
 
 class VideoEncoder {
 public:
+    struct DiagnosticsSnapshot {
+        uint64_t input_samples_offered = 0;
+        uint64_t input_samples_accepted = 0;
+        uint64_t input_samples_not_accepted = 0;
+        uint64_t input_samples_deferred_without_event = 0;
+        uint64_t input_errors = 0;
+        uint64_t output_samples_produced = 0;
+        uint64_t output_waits_for_input = 0;
+    };
+
     VideoEncoder()  = default;
     ~VideoEncoder() { shutdown(); }
 
@@ -55,6 +65,17 @@ public:
     uint32_t     output_height()const { return out_height_; }
     uint32_t     output_fps()   const { return out_fps_; }
     uint32_t     output_bitrate() const { return active_bitrate_bps_; }
+    DiagnosticsSnapshot diagnostics_snapshot() const {
+        return {
+            input_samples_offered_.load(std::memory_order_relaxed),
+            input_samples_accepted_.load(std::memory_order_relaxed),
+            input_samples_not_accepted_.load(std::memory_order_relaxed),
+            input_samples_deferred_without_event_.load(std::memory_order_relaxed),
+            input_errors_.load(std::memory_order_relaxed),
+            output_samples_produced_.load(std::memory_order_relaxed),
+            output_waits_for_input_.load(std::memory_order_relaxed)
+        };
+    }
 
 private:
     bool try_init_hw(const EncoderProfile& profile, IMFDXGIDeviceManager* dxgi_mgr);
@@ -90,6 +111,16 @@ private:
     bool        hw_drain_complete_ = false;
     ULONGLONG   last_output_tick_ms_ = 0;
     std::deque<int64_t> pending_video_pts_;
+
+    // Session counters distinguish accepted MFT input from produced output.
+    // A submitted input may legitimately produce output on a later call.
+    std::atomic<uint64_t> input_samples_offered_{ 0 };
+    std::atomic<uint64_t> input_samples_accepted_{ 0 };
+    std::atomic<uint64_t> input_samples_not_accepted_{ 0 };
+    std::atomic<uint64_t> input_samples_deferred_without_event_{ 0 };
+    std::atomic<uint64_t> input_errors_{ 0 };
+    std::atomic<uint64_t> output_samples_produced_{ 0 };
+    std::atomic<uint64_t> output_waits_for_input_{ 0 };
 
     // Pre-allocated staging texture for SW encoder path (avoids per-frame alloc)
     ComPtr<ID3D11Texture2D> staging_tex_;

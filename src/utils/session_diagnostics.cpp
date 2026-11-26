@@ -68,7 +68,7 @@ bool SessionDiagnostics::open_for_output(const std::wstring& output_path) {
     }
     CloseHandle(file);
     set_persistent_log_path(path_);
-    append_line(L"event=diagnostics_open format=1");
+    append_line(L"event=diagnostics_open format=2");
     return true;
 }
 

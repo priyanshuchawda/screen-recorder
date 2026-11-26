@@ -11,6 +11,7 @@
 #include "storage/storage_manager.h"
 #include "utils/logging.h"
 #include "utils/qpc_clock.h"
+#include "controller/com_reference_count.h"
 
 #include <mfapi.h>
 #include <thread>
@@ -43,6 +44,35 @@ const wchar_t* capture_stage_label(CaptureEngine::FrameCallbackStage stage) {
         case CaptureEngine::FrameCallbackStage::QueueFrame: return L"queue_frame";
         default: return L"unknown";
     }
+}
+
+uint64_t filetime_value_100ns(const FILETIME& value) {
+    ULARGE_INTEGER combined{};
+    combined.LowPart = value.dwLowDateTime;
+    combined.HighPart = value.dwHighDateTime;
+    return combined.QuadPart;
+}
+
+bool process_cpu_time_100ns(uint64_t& cpu_time) {
+    FILETIME created{}, exited{}, kernel{}, user{};
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) {
+        return false;
+    }
+    cpu_time = filetime_value_100ns(kernel) + filetime_value_100ns(user);
+    return true;
+}
+
+const wchar_t* power_source_label(BYTE ac_line_status) {
+    if (ac_line_status == 1) return L"AC";
+    if (ac_line_status == 0) return L"battery";
+    return L"unknown";
+}
+
+const wchar_t* battery_state_label(BYTE battery_flag) {
+    if (battery_flag == 255) return L"unknown";
+    if ((battery_flag & 128) != 0) return L"no_battery";
+    if ((battery_flag & 8) != 0) return L"charging";
+    return L"discharging";
 }
 
 } // namespace
@@ -273,6 +303,17 @@ bool SessionController::start() {
     video_write_failures_.store(0, std::memory_order_relaxed);
     output_failure_reported_.store(false, std::memory_order_relaxed);
     audio_written_.store(0,  std::memory_order_relaxed);
+    gpu_memory_sample_available_.store(false, std::memory_order_relaxed);
+    gpu_memory_sample_tick_ms_.store(0, std::memory_order_relaxed);
+    gpu_local_usage_bytes_.store(0, std::memory_order_relaxed);
+    gpu_local_budget_bytes_.store(0, std::memory_order_relaxed);
+    gpu_nonlocal_usage_bytes_.store(0, std::memory_order_relaxed);
+    gpu_nonlocal_budget_bytes_.store(0, std::memory_order_relaxed);
+    video_encode_timing_.reset();
+    video_mux_timing_.reset();
+    audio_mux_timing_.reset();
+    audio_pool_reuse_count_.store(0, std::memory_order_relaxed);
+    audio_pool_fallback_allocation_count_.store(0, std::memory_order_relaxed);
     capture_->reset_counters();
     telemetry_.reset(); // T037: clear counters for new session
 
@@ -449,6 +490,20 @@ void SessionController::diagnostics_monitor_loop() {
     uint32_t last_encoded = 0;
     uint32_t last_audio_drops = 0;
     ULONGLONG last_video_progress_ms = GetTickCount64();
+    const ULONGLONG diagnostics_start_ms = last_video_progress_ms;
+    ULONGLONG last_resource_sample_ms = last_video_progress_ms;
+    uint64_t last_process_cpu_100ns = 0;
+    const bool have_initial_cpu_sample = process_cpu_time_100ns(last_process_cpu_100ns);
+    bool have_previous_cpu_sample = have_initial_cpu_sample;
+    SYSTEM_INFO system_info{};
+    GetSystemInfo(&system_info);
+    const uint32_t logical_processors = (std::max)(1u,
+        static_cast<uint32_t>(system_info.dwNumberOfProcessors));
+    uint32_t last_captured_frames = 0;
+    uint32_t last_written_frames = 0;
+    uint32_t last_duplicate_frames = 0;
+    uint32_t last_dropped_frames = 0;
+    uint32_t last_capture_queue_drops = 0;
 
     while (diagnostics_monitor_running_.load(std::memory_order_acquire)) {
         if (diagnostics_wait_cv_.wait_for(wait_lock, kMonitorInterval, [this]() {
@@ -460,6 +515,135 @@ void SessionController::diagnostics_monitor_loop() {
         wait_lock.unlock();
         const uint64_t write_started = muxer_ ? muxer_->active_write_started_ms() : 0;
         const uint64_t now_ms = GetTickCount64();
+        const uint64_t resource_interval_ms = now_ms >= last_resource_sample_ms
+            ? now_ms - last_resource_sample_ms : 0;
+        uint64_t process_cpu_pct_milli = 0;
+        bool process_cpu_sample_available = false;
+        uint64_t current_process_cpu_100ns = 0;
+        if (process_cpu_time_100ns(current_process_cpu_100ns)) {
+            const uint64_t elapsed_ms = now_ms - last_resource_sample_ms;
+            if (have_previous_cpu_sample && elapsed_ms > 0 &&
+                current_process_cpu_100ns >= last_process_cpu_100ns) {
+                const uint64_t cpu_delta_100ns = current_process_cpu_100ns - last_process_cpu_100ns;
+                const double denominator = static_cast<double>(elapsed_ms) * 10'000.0 * logical_processors;
+                process_cpu_pct_milli = static_cast<uint64_t>(
+                    (static_cast<double>(cpu_delta_100ns) * 100'000.0 / denominator) + 0.5);
+                process_cpu_sample_available = true;
+            }
+            last_process_cpu_100ns = current_process_cpu_100ns;
+            have_previous_cpu_sample = true;
+        } else {
+            have_previous_cpu_sample = false;
+        }
+        last_resource_sample_ms = now_ms;
+
+        PROCESS_MEMORY_COUNTERS_EX process_memory{};
+        process_memory.cb = sizeof(process_memory);
+        const bool process_memory_available = GetProcessMemoryInfo(
+            GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&process_memory),
+            sizeof(process_memory)) != FALSE;
+        MEMORYSTATUSEX system_memory{};
+        system_memory.dwLength = sizeof(system_memory);
+        const bool system_memory_available = GlobalMemoryStatusEx(&system_memory) != FALSE;
+        SYSTEM_POWER_STATUS power_status{};
+        const bool power_status_available = GetSystemPowerStatus(&power_status) != FALSE;
+
+        const uint64_t mb = 1024ull * 1024ull;
+        const bool gpu_memory_available = gpu_memory_sample_available_.load(std::memory_order_relaxed);
+        const uint64_t gpu_local_usage_mb = gpu_local_usage_bytes_.load(std::memory_order_relaxed) / mb;
+        const uint64_t gpu_local_budget_mb = gpu_local_budget_bytes_.load(std::memory_order_relaxed) / mb;
+        const uint64_t gpu_nonlocal_usage_mb = gpu_nonlocal_usage_bytes_.load(std::memory_order_relaxed) / mb;
+        const uint64_t gpu_nonlocal_budget_mb = gpu_nonlocal_budget_bytes_.load(std::memory_order_relaxed) / mb;
+        const uint64_t gpu_sample_tick_ms = gpu_memory_sample_tick_ms_.load(std::memory_order_relaxed);
+        const uint64_t gpu_sample_age_ms = gpu_memory_available && now_ms >= gpu_sample_tick_ms
+            ? now_ms - gpu_sample_tick_ms : 0;
+        const uint32_t captured_frames = capture_ ? capture_->frames_captured() : 0;
+        const uint32_t written_frames = frames_encoded_.load(std::memory_order_relaxed);
+        const uint32_t dropped_frames = capture_ ? capture_->frames_dropped() : 0;
+        const uint32_t capture_queue_drops = capture_ ? capture_->queue_drops() : 0;
+        const auto live_telemetry = telemetry_.snapshot(0, false);
+        const uint32_t capture_fps_milli = resource_interval_ms > 0
+            ? static_cast<uint32_t>((static_cast<uint64_t>(captured_frames - last_captured_frames) * 1'000'000ull) / resource_interval_ms)
+            : 0;
+        const uint32_t written_fps_milli = resource_interval_ms > 0
+            ? static_cast<uint32_t>((static_cast<uint64_t>(written_frames - last_written_frames) * 1'000'000ull) / resource_interval_ms)
+            : 0;
+        const uint32_t capture_drop_delta = dropped_frames - last_dropped_frames;
+        const uint32_t capture_queue_drop_delta = capture_queue_drops - last_capture_queue_drops;
+        const uint32_t duplicate_video_delta = live_telemetry.dup_frames - last_duplicate_frames;
+        const auto encoder_metrics = encoder_ ? encoder_->diagnostics_snapshot()
+                                              : VideoEncoder::DiagnosticsSnapshot{};
+        const auto encode_timing = video_encode_timing_.snapshot();
+        const auto video_mux_timing = video_mux_timing_.snapshot();
+        const auto audio_mux_timing = audio_mux_timing_.snapshot();
+        const uint64_t audio_pool_reuses = audio_pool_reuse_count_.load(std::memory_order_relaxed);
+        const uint64_t audio_pool_fallbacks = audio_pool_fallback_allocation_count_.load(std::memory_order_relaxed);
+        wchar_t resource_event[2048]{};
+        _snwprintf_s(resource_event, _countof(resource_event), _TRUNCATE,
+            L"event=resource_sample elapsed_s=%llu "
+            L"process_cpu_available=%u process_cpu_pct_milli=%llu cpu_scope=process_normalized_to_logical_processors "
+            L"process_memory_available=%u process_private_mb=%llu process_working_set_mb=%llu "
+            L"system_memory_available=%u system_memory_load_pct=%lu system_physical_total_mb=%llu system_physical_available_mb=%llu "
+            L"power_status_available=%u power_source=%s battery_percent=%d battery_state=%s "
+            L"gpu_memory_scope=adapter gpu_memory_available=%u gpu_memory_age_ms=%llu "
+            L"gpu_local_used_mb=%llu gpu_local_budget_mb=%llu "
+            L"gpu_nonlocal_used_mb=%llu gpu_nonlocal_budget_mb=%llu "
+            L"capture_frames=%u capture_fps_milli=%u capture_drop_delta=%u capture_queue_drop_delta=%u "
+            L"video_samples_written=%u video_write_fps_milli=%u duplicate_video_delta=%u "
+            L"mft_input_offered=%llu mft_input_accepted=%llu mft_input_not_accepted=%llu "
+            L"mft_input_deferred_no_event=%llu mft_input_errors=%llu mft_output_samples=%llu mft_output_waits=%llu "
+            L"encode_timing_samples=%llu encode_avg_us=%llu encode_max_us=%llu "
+            L"video_mux_samples=%llu video_mux_avg_us=%llu video_mux_max_us=%llu "
+            L"audio_mux_samples=%llu audio_mux_avg_us=%llu audio_mux_max_us=%llu "
+            L"audio_pool_reuses=%llu audio_pool_fallback_allocations=%llu",
+            static_cast<unsigned long long>((now_ms - diagnostics_start_ms) / 1000),
+            process_cpu_sample_available ? 1u : 0u,
+            static_cast<unsigned long long>(process_cpu_pct_milli),
+            process_memory_available ? 1u : 0u,
+            static_cast<unsigned long long>(process_memory_available ? process_memory.PrivateUsage / mb : 0),
+            static_cast<unsigned long long>(process_memory_available ? process_memory.WorkingSetSize / mb : 0),
+            system_memory_available ? 1u : 0u,
+            system_memory_available ? system_memory.dwMemoryLoad : 0,
+            static_cast<unsigned long long>(system_memory_available ? system_memory.ullTotalPhys / mb : 0),
+            static_cast<unsigned long long>(system_memory_available ? system_memory.ullAvailPhys / mb : 0),
+            power_status_available ? 1u : 0u,
+            power_status_available ? power_source_label(power_status.ACLineStatus) : L"unknown",
+            power_status_available && power_status.BatteryLifePercent != 255
+                ? static_cast<int>(power_status.BatteryLifePercent) : -1,
+            power_status_available ? battery_state_label(power_status.BatteryFlag) : L"unknown",
+            gpu_memory_available ? 1u : 0u,
+            static_cast<unsigned long long>(gpu_sample_age_ms),
+            static_cast<unsigned long long>(gpu_local_usage_mb),
+            static_cast<unsigned long long>(gpu_local_budget_mb),
+            static_cast<unsigned long long>(gpu_nonlocal_usage_mb),
+            static_cast<unsigned long long>(gpu_nonlocal_budget_mb),
+            captured_frames, capture_fps_milli, capture_drop_delta, capture_queue_drop_delta,
+            written_frames, written_fps_milli, duplicate_video_delta,
+            static_cast<unsigned long long>(encoder_metrics.input_samples_offered),
+            static_cast<unsigned long long>(encoder_metrics.input_samples_accepted),
+            static_cast<unsigned long long>(encoder_metrics.input_samples_not_accepted),
+            static_cast<unsigned long long>(encoder_metrics.input_samples_deferred_without_event),
+            static_cast<unsigned long long>(encoder_metrics.input_errors),
+            static_cast<unsigned long long>(encoder_metrics.output_samples_produced),
+            static_cast<unsigned long long>(encoder_metrics.output_waits_for_input),
+            static_cast<unsigned long long>(encode_timing.samples),
+            static_cast<unsigned long long>(encode_timing.samples ? encode_timing.total_us / encode_timing.samples : 0),
+            static_cast<unsigned long long>(encode_timing.max_us),
+            static_cast<unsigned long long>(video_mux_timing.samples),
+            static_cast<unsigned long long>(video_mux_timing.samples ? video_mux_timing.total_us / video_mux_timing.samples : 0),
+            static_cast<unsigned long long>(video_mux_timing.max_us),
+            static_cast<unsigned long long>(audio_mux_timing.samples),
+            static_cast<unsigned long long>(audio_mux_timing.samples ? audio_mux_timing.total_us / audio_mux_timing.samples : 0),
+            static_cast<unsigned long long>(audio_mux_timing.max_us),
+            static_cast<unsigned long long>(audio_pool_reuses),
+            static_cast<unsigned long long>(audio_pool_fallbacks));
+        diagnostics_.write_event(resource_event);
+        last_captured_frames = captured_frames;
+        last_written_frames = written_frames;
+        last_duplicate_frames = live_telemetry.dup_frames;
+        last_dropped_frames = dropped_frames;
+        last_capture_queue_drops = capture_queue_drops;
+
         const uint32_t encoded_now = frames_encoded_.load(std::memory_order_relaxed);
         const bool recording = machine_.is_recording();
         if (!recording || encoded_now != last_encoded) {
@@ -645,12 +829,34 @@ void SessionController::encode_loop() {
     size_t audio_pool_cursor = 0;
     AudioTimelineMixer audio_mixer;
 
-    auto has_external_refs = [](IUnknown* obj) -> bool {
-        if (!obj) return false;
-        const ULONG refs = obj->AddRef();
-        obj->Release();
-        // refs includes this temporary AddRef and the pool's ComPtr reference.
-        return refs > 2;
+    auto encode_frame_timed = [this](ID3D11Texture2D* texture, int64_t pts,
+                                     ComPtr<IMFSample>& output) {
+        const auto started = std::chrono::steady_clock::now();
+        const bool produced = encoder_->encode_frame(texture, pts, output);
+        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        video_encode_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
+        return produced;
+    };
+    auto write_video_timed = [this](IMFSample* sample) {
+        const auto started = std::chrono::steady_clock::now();
+        const bool written = muxer_->write_video(sample);
+        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        video_mux_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
+        return written;
+    };
+    auto write_audio_timed = [this](IMFSample* sample) {
+        const auto started = std::chrono::steady_clock::now();
+        const bool written = muxer_->write_audio(sample);
+        const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        audio_mux_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
+        return written;
+    };
+
+    auto has_external_refs = [](IUnknown* obj, ULONG owned_refs) -> bool {
+        return has_external_com_references(obj, owned_refs);
     };
 
     auto acquire_audio_sample = [&](DWORD required_bytes,
@@ -660,9 +866,16 @@ void SessionController::encode_loop() {
         for (size_t attempt = 0; attempt < pool_size; ++attempt) {
             const size_t idx = (audio_pool_cursor + attempt) % pool_size;
             auto& slot = audio_sample_pool[idx];
-            const bool reusable = !slot.sample ||
-                (!has_external_refs(slot.sample.Get()) && !has_external_refs(slot.buffer.Get()));
+            const bool sample_external = slot.sample && has_external_refs(slot.sample.Get(), 1);
+            // The slot owns one buffer reference and AddBuffer adds another
+            // while the pooled sample remains attached to this buffer.
+            const ULONG buffer_owned_refs = slot.sample ? 2u : 1u;
+            const bool buffer_external = slot.buffer &&
+                has_external_refs(slot.buffer.Get(), buffer_owned_refs);
+            const bool reusable = !sample_external && !buffer_external;
             if (!reusable) continue;
+            const bool reused_existing_storage = slot.sample && slot.buffer &&
+                                                 slot.capacity >= required_bytes;
 
             HRESULT hr = S_OK;
             if (!slot.sample) {
@@ -692,11 +905,15 @@ void SessionController::encode_loop() {
 
             out_sample = slot.sample;
             out_buffer = slot.buffer;
+            if (reused_existing_storage) {
+                audio_pool_reuse_count_.fetch_add(1, std::memory_order_relaxed);
+            }
             audio_pool_cursor = (idx + 1) % pool_size;
             return true;
         }
 
         // Fallback: transient allocation when all pooled samples are in flight.
+        audio_pool_fallback_allocation_count_.fetch_add(1, std::memory_order_relaxed);
         HRESULT hr = MFCreateSample(&out_sample);
         if (FAILED(hr)) {
             SR_LOG_ERROR(L"MFCreateSample (transient audio) failed: 0x%08X", hr);
@@ -763,9 +980,9 @@ void SessionController::encode_loop() {
                 int64_t dup_pts = last_paced_pts + (paced_pts - last_paced_pts) / 2;
                 ComPtr<IMFSample> dup_sample;
                 diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-                if (encoder_->encode_frame(last_texture.Get(), dup_pts, dup_sample)) {
+                if (encode_frame_timed(last_texture.Get(), dup_pts, dup_sample)) {
                     diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                    if (muxer_->write_video(dup_sample.Get())) {
+                    if (write_video_timed(dup_sample.Get())) {
                         frames_encoded_.fetch_add(1, std::memory_order_relaxed);
                         telemetry_.on_frame_encoded();
                         telemetry_.on_duplicate_inserted();
@@ -785,9 +1002,9 @@ void SessionController::encode_loop() {
             // Encode current frame
             ComPtr<IMFSample> encoded;
             diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-            if (encoder_->encode_frame(frame.texture.Get(), paced_pts, encoded)) {
+            if (encode_frame_timed(frame.texture.Get(), paced_pts, encoded)) {
                 diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                if (muxer_->write_video(encoded.Get())) {
+                if (write_video_timed(encoded.Get())) {
                     frames_encoded_.fetch_add(1, std::memory_order_relaxed);
                     telemetry_.on_frame_encoded();
                 } else {
@@ -815,9 +1032,9 @@ void SessionController::encode_loop() {
                 pacer_.pace_frame(repeat_pts, false, &paced_pts);
                 ComPtr<IMFSample> encoded;
                 diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-                if (encoder_->encode_frame(last_texture.Get(), paced_pts, encoded)) {
+                if (encode_frame_timed(last_texture.Get(), paced_pts, encoded)) {
                     diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                    if (muxer_->write_video(encoded.Get())) {
+                    if (write_video_timed(encoded.Get())) {
                         frames_encoded_.fetch_add(1, std::memory_order_relaxed);
                         telemetry_.on_frame_encoded();
                         telemetry_.on_duplicate_inserted();
@@ -861,7 +1078,7 @@ void SessionController::encode_loop() {
                             static_cast<int64_t>(mixed->frames) * 10'000'000LL /
                             static_cast<int64_t>(kAudioOutputRate));
                         diagnostics_stage_.store(DiagnosticsStage::MuxingAudio, std::memory_order_relaxed);
-                        if (muxer_->write_audio(sample.Get())) {
+                        if (write_audio_timed(sample.Get())) {
                             audio_written_.fetch_add(1, std::memory_order_relaxed);
                             telemetry_.on_audio_written();
                         } else {
@@ -901,17 +1118,6 @@ void SessionController::encode_loop() {
         }
 
         if (now_ms - last_mem_sample_ms >= 5000) {
-            PROCESS_MEMORY_COUNTERS_EX mem{};
-            mem.cb = sizeof(mem);
-            if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&mem), sizeof(mem))) {
-                const uint64_t ws_mb = static_cast<uint64_t>(mem.WorkingSetSize / (1024ull * 1024ull));
-                const uint64_t private_mb = static_cast<uint64_t>(mem.PrivateUsage / (1024ull * 1024ull));
-                if (private_mb >= 700) {
-                    SR_LOG_WARN(L"[Perf] High process memory: private=%llu MB, working_set=%llu MB", private_mb, ws_mb);
-                } else {
-                    SR_LOG_INFO(L"[Perf] Process memory: private=%llu MB, working_set=%llu MB", private_mb, ws_mb);
-                }
-            }
             if (perf_adapter3) {
                 DXGI_QUERY_VIDEO_MEMORY_INFO local_info{};
                 DXGI_QUERY_VIDEO_MEMORY_INFO nonlocal_info{};
@@ -920,13 +1126,12 @@ void SessionController::encode_loop() {
                 const HRESULT hr_nonlocal = perf_adapter3->QueryVideoMemoryInfo(
                     0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonlocal_info);
                 if (SUCCEEDED(hr_local) && SUCCEEDED(hr_nonlocal)) {
-                    const uint64_t local_current_mb = local_info.CurrentUsage / (1024ull * 1024ull);
-                    const uint64_t local_budget_mb  = local_info.Budget / (1024ull * 1024ull);
-                    const uint64_t shared_current_mb = nonlocal_info.CurrentUsage / (1024ull * 1024ull);
-                    const uint64_t shared_budget_mb  = nonlocal_info.Budget / (1024ull * 1024ull);
-                    SR_LOG_INFO(
-                        L"[Perf] GPU memory: local=%llu/%llu MB, shared=%llu/%llu MB",
-                        local_current_mb, local_budget_mb, shared_current_mb, shared_budget_mb);
+                    gpu_local_usage_bytes_.store(local_info.CurrentUsage, std::memory_order_relaxed);
+                    gpu_local_budget_bytes_.store(local_info.Budget, std::memory_order_relaxed);
+                    gpu_nonlocal_usage_bytes_.store(nonlocal_info.CurrentUsage, std::memory_order_relaxed);
+                    gpu_nonlocal_budget_bytes_.store(nonlocal_info.Budget, std::memory_order_relaxed);
+                    gpu_memory_sample_tick_ms_.store(now_ms, std::memory_order_relaxed);
+                    gpu_memory_sample_available_.store(true, std::memory_order_relaxed);
                 }
             }
             last_mem_sample_ms = now_ms;
@@ -950,7 +1155,7 @@ void SessionController::encode_loop() {
         sample->SetSampleDuration(
             static_cast<int64_t>(mixed->frames) * 10'000'000LL /
             static_cast<int64_t>(kAudioOutputRate));
-        if (muxer_->write_audio(sample.Get())) {
+        if (write_audio_timed(sample.Get())) {
             audio_written_.fetch_add(1, std::memory_order_relaxed);
             telemetry_.on_audio_written();
         } else {

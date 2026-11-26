@@ -94,6 +94,36 @@ public:
     std::wstring output_path() const { return current_output_path_; }
 
 private:
+    struct StageTimingSnapshot {
+        uint64_t samples = 0;
+        uint64_t total_us = 0;
+        uint64_t max_us = 0;
+    };
+
+    struct StageTimingCounters {
+        void record(uint64_t duration_us) {
+            samples.fetch_add(1, std::memory_order_relaxed);
+            total_us.fetch_add(duration_us, std::memory_order_relaxed);
+            uint64_t current_max = max_us.load(std::memory_order_relaxed);
+            while (duration_us > current_max &&
+                   !max_us.compare_exchange_weak(current_max, duration_us,
+                                                 std::memory_order_relaxed)) {}
+        }
+        StageTimingSnapshot snapshot() const {
+            return { samples.load(std::memory_order_relaxed),
+                     total_us.load(std::memory_order_relaxed),
+                     max_us.load(std::memory_order_relaxed) };
+        }
+        void reset() {
+            samples.store(0, std::memory_order_relaxed);
+            total_us.store(0, std::memory_order_relaxed);
+            max_us.store(0, std::memory_order_relaxed);
+        }
+        std::atomic<uint64_t> samples{ 0 };
+        std::atomic<uint64_t> total_us{ 0 };
+        std::atomic<uint64_t> max_us{ 0 };
+    };
+
     enum class DiagnosticsStage : uint32_t {
         Starting,
         WaitingForFrame,
@@ -158,6 +188,21 @@ private:
     std::atomic<uint32_t> video_write_failures_{ 0 };
     std::atomic<bool> output_failure_reported_{ false };
     std::atomic<uint32_t> audio_written_ { 0 };
+    StageTimingCounters video_encode_timing_;
+    StageTimingCounters video_mux_timing_;
+    StageTimingCounters audio_mux_timing_;
+    std::atomic<uint64_t> audio_pool_reuse_count_{ 0 };
+    std::atomic<uint64_t> audio_pool_fallback_allocation_count_{ 0 };
+
+    // Adapter-wide DXGI memory snapshots, refreshed by the encode thread.
+    // These are deliberately labeled as adapter totals in diagnostics; DXGI's
+    // QueryVideoMemoryInfo values are not per-process GPU allocations.
+    std::atomic<bool> gpu_memory_sample_available_{ false };
+    std::atomic<uint64_t> gpu_memory_sample_tick_ms_{ 0 };
+    std::atomic<uint64_t> gpu_local_usage_bytes_{ 0 };
+    std::atomic<uint64_t> gpu_local_budget_bytes_{ 0 };
+    std::atomic<uint64_t> gpu_nonlocal_usage_bytes_{ 0 };
+    std::atomic<uint64_t> gpu_nonlocal_budget_bytes_{ 0 };
 
     // Output path for current recording
     std::wstring current_output_path_;

@@ -409,6 +409,14 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
                                ID3D11Device* d3d_device,
                                ID3D11DeviceContext* d3d_context)
 {
+    input_samples_offered_.store(0, std::memory_order_relaxed);
+    input_samples_accepted_.store(0, std::memory_order_relaxed);
+    input_samples_not_accepted_.store(0, std::memory_order_relaxed);
+    input_samples_deferred_without_event_.store(0, std::memory_order_relaxed);
+    input_errors_.store(0, std::memory_order_relaxed);
+    output_samples_produced_.store(0, std::memory_order_relaxed);
+    output_waits_for_input_.store(0, std::memory_order_relaxed);
+
     d3d_device_  = d3d_device;
     d3d_context_ = d3d_context;
     if (dxgi_mgr) dxgi_mgr_ = dxgi_mgr;
@@ -507,6 +515,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                                  ComPtr<IMFSample>& out_sample)
 {
     if (!initialized_ || !mft_) return false;
+    input_samples_offered_.fetch_add(1, std::memory_order_relaxed);
 
     auto recover_stalled_hardware = [&]() {
         constexpr ULONGLONG kOutputStallLimitMs = 5'000;
@@ -630,16 +639,23 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             --hw_need_input_events_;
         }
         if (FAILED(hr) && hr != MF_E_NOTACCEPTING) {
+            input_errors_.fetch_add(1, std::memory_order_relaxed);
             SR_LOG_ERROR(L"ProcessInput failed: 0x%08X", hr);
             if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
             return false;
         }
         if (SUCCEEDED(hr)) {
+            input_samples_accepted_.fetch_add(1, std::memory_order_relaxed);
             pending_video_pts_.push_back(pts);
+        } else if (hr == MF_E_NOTACCEPTING) {
+            input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
         }
-    } else if (hw_have_output_events_ == 0) {
-        if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
-        return false;
+    } else {
+        input_samples_deferred_without_event_.fetch_add(1, std::memory_order_relaxed);
+        if (hw_have_output_events_ == 0) {
+            if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
+            return false;
+        }
     }
 
     if (hw_async_mft_) {
@@ -671,6 +687,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
 
         if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+            output_waits_for_input_.fetch_add(1, std::memory_order_relaxed);
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
             if (recover_stalled_hardware()) return encode_frame(nv12_texture, pts, out_sample);
@@ -747,6 +764,7 @@ bool VideoEncoder::switch_to_software_fallback() {
 
 void VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) {
     if (!sample) return;
+    output_samples_produced_.fetch_add(1, std::memory_order_relaxed);
 
     int64_t output_pts = fallback_pts;
     if (!pending_video_pts_.empty()) {
