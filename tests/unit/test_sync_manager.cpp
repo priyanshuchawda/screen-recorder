@@ -123,6 +123,23 @@ TEST_F(SyncManagerTest, PTSSubtractsPauseDuration) {
     EXPECT_GE(delta_ms, 0)  << "PTS should not go backwards";
 }
 
+TEST_F(SyncManagerTest, NowPtsUsedByIdleFrameSchedulingRemovesPauseTime) {
+    sync_.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const int64_t before_pause = sync_.now_pts();
+
+    sync_.pause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Same clock closure used by stop while paused and resume.
+    sync_.resume();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    const int64_t after_resume = sync_.now_pts();
+    const int64_t delta_ms = hns_to_ms(after_resume - before_pause);
+    EXPECT_GE(delta_ms, 0);
+    EXPECT_LT(delta_ms, 80) << "A resumed idle-frame timestamp must exclude the pause interval";
+}
+
 // T019: Multiple pause/resume cycles accumulate correctly
 TEST_F(SyncManagerTest, MultiplePauseCyclesAccumulate) {
     sync_.start();

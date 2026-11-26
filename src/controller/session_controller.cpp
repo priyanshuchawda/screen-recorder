@@ -3,6 +3,7 @@
 
 #include "controller/session_controller.h"
 #include "controller/audio_write_schedule.h"
+#include "controller/recording_outcome.h"
 #include "capture/capture_engine.h"
 #include "audio/audio_engine.h"
 #include "audio/audio_mixer.h"
@@ -168,6 +169,7 @@ bool SessionController::start() {
     // ---------------------------------------------------------------
     current_partial_path_ = storage_ ? storage_->generateFilename() : L"ScreenRec.partial.mp4";
     current_output_path_  = StorageManager::partialToFinal(current_partial_path_);
+    diagnostic_log_dropped_at_start_ = persistent_log_dropped_count();
     if (diagnostics_.open_for_output(current_output_path_)) {
         SR_LOG_INFO(L"Diagnostics log -> %s", diagnostics_.path().c_str());
     } else {
@@ -303,7 +305,10 @@ bool SessionController::start() {
     // ---------------------------------------------------------------
     frames_encoded_.store(0, std::memory_order_relaxed);
     video_write_failures_.store(0, std::memory_order_relaxed);
+    audio_write_failures_.store(0, std::memory_order_relaxed);
+    audio_source_start_failures_.store(0, std::memory_order_relaxed);
     output_failure_reported_.store(false, std::memory_order_relaxed);
+    stopping_from_pause_.store(false, std::memory_order_relaxed);
     audio_written_.store(0,  std::memory_order_relaxed);
     gpu_memory_sample_available_.store(false, std::memory_order_relaxed);
     gpu_memory_sample_tick_ms_.store(0, std::memory_order_relaxed);
@@ -348,10 +353,15 @@ bool SessionController::start() {
         return false;
     }
     diagnostics_.write_event(L"event=start_stage stage=capture state=complete");
-    diagnostics_.write_event(audio_->start()
+    const bool microphone_started = audio_->start();
+    const bool loopback_started = loopback_audio_->start();
+    audio_source_start_failures_.store(
+        static_cast<uint32_t>(!microphone_started) + static_cast<uint32_t>(!loopback_started),
+        std::memory_order_relaxed);
+    diagnostics_.write_event(microphone_started
         ? L"event=start_stage stage=microphone state=complete"
         : L"event=start_stage stage=microphone state=unavailable");
-    diagnostics_.write_event(loopback_audio_->start()
+    diagnostics_.write_event(loopback_started
         ? L"event=start_stage stage=loopback state=complete"
         : L"event=start_stage stage=loopback state=unavailable");
 
@@ -375,9 +385,20 @@ bool SessionController::start() {
 }
 
 bool SessionController::stop() {
+    const bool was_paused = machine_.is_paused();
+    if (was_paused) stopping_from_pause_.store(true, std::memory_order_release);
     bool was_recording = machine_.is_recording() || machine_.is_paused();
 
-    if (!machine_.transition(SessionEvent::Stop)) return false;
+    if (!machine_.transition(SessionEvent::Stop)) {
+        stopping_from_pause_.store(false, std::memory_order_release);
+        return false;
+    }
+    if (was_paused) {
+        // Close the active pause interval. The encode worker discards any
+        // captured media accumulated during pause while draining the queues.
+        sync_.resume();
+        diagnostics_.write_event(L"event=stop_requested_while_paused pause_clock_closed=1");
+    }
     notify_status(L"Stopping...");
     diagnostics_.write_event(L"event=stop_requested");
 
@@ -412,6 +433,7 @@ bool SessionController::stop() {
     bool encoder_drain_ok = true;
     uint64_t encoder_drain_ms = 0;
     uint64_t encoder_pending_inputs = 0;
+    VideoEncoder::DiagnosticsSnapshot encoder_final_state{};
     size_t encoder_drain_samples = 0;
     if (was_recording) {
         diagnostics_stage_.store(DiagnosticsStage::FlushingEncoder, std::memory_order_relaxed);
@@ -421,8 +443,8 @@ bool SessionController::stop() {
         encoder_drain_ok = encoder_->flush(leftover);
         encoder_drain_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - drain_started).count());
-        const auto encoder_state = encoder_->diagnostics_snapshot();
-        encoder_pending_inputs = encoder_state.pending_inputs;
+        encoder_final_state = encoder_->diagnostics_snapshot();
+        encoder_pending_inputs = encoder_final_state.pending_inputs;
         encoder_drain_samples = leftover.size();
         diagnostics_.write_event(L"event=stop_stage stage=encoder_flush state=" +
                                  std::wstring(encoder_drain_ok ? L"complete" : L"incomplete") +
@@ -467,13 +489,7 @@ bool SessionController::stop() {
     // Revert process priority to normal when not recording
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
 
-    if (finalized && !encoder_drain_ok) {
-        notify_error(L"The MP4 was saved, but the encoder did not confirm a complete drain. Check the diagnostics file; the ending may be incomplete.");
-    }
-
     SessionDiagnostics::StopInfo diagnostics_stop;
-    diagnostics_stop.status = !finalized ? L"finalize_failed_partial_kept"
-        : (!encoder_drain_ok ? L"encoder_drain_incomplete_file_finalized" : L"complete");
     diagnostics_stop.encoder_mode = encoder_mode_label(encoder_->mode());
     diagnostics_stop.frames_captured = capture_->frames_captured();
     diagnostics_stop.frames_encoded = frames_encoded_.load();
@@ -481,12 +497,55 @@ bool SessionController::stop() {
     diagnostics_stop.queue_drops = capture_->queue_drops();
     diagnostics_stop.video_write_failures = video_write_failures_.load();
     diagnostics_stop.audio_queue_drops = audio_->queue_drops() + loopback_audio_->queue_drops();
+    diagnostics_stop.audio_write_failures = audio_write_failures_.load();
+    diagnostics_stop.audio_source_start_failures = audio_source_start_failures_.load();
     diagnostics_stop.audio_packets = audio_written_.load();
     diagnostics_stop.encoder_drain_complete = encoder_drain_ok;
     diagnostics_stop.encoder_pending_inputs = encoder_pending_inputs;
+    diagnostics_stop.encoder_inputs_offered = encoder_final_state.input_samples_offered;
+    diagnostics_stop.encoder_inputs_accepted = encoder_final_state.input_samples_accepted;
+    diagnostics_stop.encoder_outputs_produced = encoder_final_state.output_samples_produced;
+    diagnostics_stop.encoder_inputs_not_accepted = encoder_final_state.input_samples_not_accepted;
+    diagnostics_stop.encoder_input_errors = encoder_final_state.input_errors;
+    diagnostics_stop.encoder_inputs_deferred = encoder_final_state.input_samples_deferred_without_event;
+    diagnostics_stop.encoder_inputs_abandoned = encoder_final_state.pending_inputs_abandoned;
+    diagnostics_stop.encoder_inputs_retried = encoder_final_state.input_samples_retried;
+    diagnostics_stop.encoder_timestamp_errors = encoder_final_state.output_timestamp_errors;
     diagnostics_stop.encoder_drain_samples = encoder_drain_samples;
     diagnostics_stop.encoder_drain_ms = encoder_drain_ms;
     diagnostics_stop.finalize_ms = finalize_ms;
+
+    // Wait for queued session events so logger failures are reflected in the
+    // outcome. The diagnostic writer itself is bounded and this wait is bounded.
+    if (!flush_persistent_log(std::chrono::seconds(2))) {
+        diagnostics_stop.diagnostic_log_dropped = 1;
+    } else {
+        const uint64_t dropped_now = persistent_log_dropped_count();
+        diagnostics_stop.diagnostic_log_dropped = dropped_now >= diagnostic_log_dropped_at_start_
+            ? dropped_now - diagnostic_log_dropped_at_start_ : dropped_now;
+    }
+
+    RecordingOutcomeInputs outcome_input;
+    outcome_input.finalized = finalized;
+    outcome_input.encoder_drain_complete = encoder_drain_ok;
+    outcome_input.frame_drops = diagnostics_stop.frames_dropped;
+    outcome_input.video_write_failures = diagnostics_stop.video_write_failures;
+    outcome_input.audio_queue_drops = diagnostics_stop.audio_queue_drops;
+    outcome_input.audio_write_failures = diagnostics_stop.audio_write_failures;
+    outcome_input.audio_source_start_failures = diagnostics_stop.audio_source_start_failures;
+    outcome_input.encoder_inputs_not_accepted = diagnostics_stop.encoder_inputs_not_accepted;
+    outcome_input.encoder_input_errors = diagnostics_stop.encoder_input_errors;
+    outcome_input.encoder_inputs_deferred = diagnostics_stop.encoder_inputs_deferred;
+    outcome_input.encoder_inputs_abandoned = diagnostics_stop.encoder_inputs_abandoned;
+    outcome_input.encoder_timestamp_errors = diagnostics_stop.encoder_timestamp_errors;
+    outcome_input.encoder_pending_inputs = diagnostics_stop.encoder_pending_inputs;
+    outcome_input.warnings = diagnostics_stop.diagnostic_log_dropped;
+    const RecordingOutcome outcome = classify_recording_outcome(outcome_input);
+    diagnostics_stop.status = recording_outcome_name(outcome);
+    if (outcome == RecordingOutcome::Incomplete) {
+        notify_error(L"The MP4 was finalized, but diagnostics found possible missing or invalid media. Review its diagnostics file before relying on it.");
+    }
+
     diagnostics_.write_stop(diagnostics_stop);
     SR_LOG_INFO(L"Recording stopped. Encoded: %u frames, audio pkts: %u",
                 frames_encoded_.load(), audio_written_.load());
@@ -496,6 +555,7 @@ bool SessionController::stop() {
 
     clear_persistent_log_path();
     machine_.transition(SessionEvent::Finalized);
+    stopping_from_pause_.store(false, std::memory_order_release);
     notify_status(L"Idle");
     return true;
 }
@@ -874,6 +934,17 @@ uint32_t SessionController::active_fps() const {
                     : (encoder_ ? encoder_->output_fps() : 0);
 }
 
+EncoderProfile SessionController::active_encoder_profile() const {
+    EncoderProfile profile{};
+    if (encoder_) {
+        profile.width = encoder_->output_width();
+        profile.height = encoder_->output_height();
+        profile.bitrate_bps = encoder_->output_bitrate();
+        profile.fps = active_fps();
+    }
+    return profile;
+}
+
 // T037: Build a full telemetry snapshot for the debug overlay
 TelemetrySnapshot SessionController::telemetry_snapshot() const {
     uint32_t enc_mode = 0;
@@ -1025,7 +1096,8 @@ void SessionController::encode_loop() {
             auto& frame = *opt_frame;
 
             // Skip frames while paused
-            if (machine_.is_paused()) {
+            if (machine_.is_paused() ||
+                stopping_from_pause_.load(std::memory_order_acquire)) {
                 continue;
             }
 
@@ -1092,7 +1164,7 @@ void SessionController::encode_loop() {
             // Keep the video timeline advancing so the sink sees both streams
             // progress and the last desktop image remains visible.
             const int64_t interval = 10'000'000LL / (std::max)(1u, target_fps);
-            const int64_t now_pts = QPCClock::instance().now_hns() - sync_.anchor_100ns();
+            const int64_t now_pts = sync_.now_pts();
             const int64_t next_pts = last_paced_pts + interval;
             if (now_pts >= next_pts + interval / 2) {
                 const int64_t repeat_pts = idle_repeat_pts(now_pts, last_paced_pts, interval);
@@ -1119,10 +1191,16 @@ void SessionController::encode_loop() {
         {
             diagnostics_stage_.store(DiagnosticsStage::MixingAudio, std::memory_order_relaxed);
             while (auto packet = audio_queue_->try_pop()) {
-                if (!machine_.is_paused()) audio_mixer.push(std::move(*packet), true);
+                if (!machine_.is_paused() &&
+                    !stopping_from_pause_.load(std::memory_order_acquire)) {
+                    audio_mixer.push(std::move(*packet), true);
+                }
             }
             while (auto packet = loopback_queue_->try_pop()) {
-                if (!machine_.is_paused()) audio_mixer.push(std::move(*packet), false);
+                if (!machine_.is_paused() &&
+                    !stopping_from_pause_.load(std::memory_order_acquire)) {
+                    audio_mixer.push(std::move(*packet), false);
+                }
             }
 
             // A fixed four blocks per video write cannot catch up after a slow
@@ -1131,7 +1209,9 @@ void SessionController::encode_loop() {
             for (unsigned blocks = 0; blocks < 200; ++blocks) {
                 auto mixed = audio_mixer.take();
                 if (!mixed) break;
-                write_mixed_audio(*mixed);
+                if (!write_mixed_audio(*mixed)) {
+                    audio_write_failures_.fetch_add(1, std::memory_order_relaxed);
+                }
                 if (!continue_audio_pass(blocks + 1, mixed->pts,
                                          last_paced_pts, have_last_frame)) break;
             }
@@ -1166,7 +1246,9 @@ void SessionController::encode_loop() {
     // Capture is stopped before this thread is joined; flush the mixer reorder
     // window so the final microphone/system audio samples reach the MP4.
     while (auto mixed = audio_mixer.take(true)) {
-        write_mixed_audio(*mixed);
+        if (!write_mixed_audio(*mixed)) {
+            audio_write_failures_.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 }
 

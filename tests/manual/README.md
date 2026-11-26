@@ -36,6 +36,8 @@ Remove-Item Env:SR_PROBE_STALL_AUDIO
 
 Pass `15` as the optional third argument to use the 360p/15 fps profile;
 omit it to use 1080p/60 fps. The watchdog should report `event=mux_write_stalled`, request a stop, and
-finalize after the injected delay returns. The delay is compiled only into the
-probe target. A permanently blocked operating-system call cannot be safely
+finalize after the injected delay returns. The delay is compiled only into a
+separate probe-only copy of the recording core, never the production app. The
+probe exits with a failure if the requested injection was not actually triggered.
+A permanently blocked operating-system call cannot be safely
 interrupted by this watchdog; the partial file may still require recovery.

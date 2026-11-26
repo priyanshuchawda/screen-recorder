@@ -2,6 +2,7 @@
 // T015: Writes to .partial.mp4, renames to .mp4 on successful finalize
 
 #include "storage/mux_writer.h"
+#include "storage/probe_fault_injection.h"
 #include "utils/logging.h"
 
 #include <mfapi.h>
@@ -193,10 +194,8 @@ bool MuxWriter::write_audio(IMFSample* sample) {
     active_write_started_ms_.store(start, std::memory_order_release);
 #ifdef SR_LOCAL_RECORDING_PROBE
     // Explicit fault injection, compiled only into the disposable local probe.
-    static bool injected = false;
-    wchar_t value[2]{};
-    if (!injected && GetEnvironmentVariableW(L"SR_PROBE_STALL_AUDIO", value, 2) == 1 && value[0] == L'1') {
-        injected = true;
+    if (try_trigger_probe_audio_stall()) {
+        SR_LOG_WARN(L"[ProbeFault] Injecting requested 18-second audio writer stall");
         Sleep(18'000);
     }
 #endif

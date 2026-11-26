@@ -217,7 +217,6 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
     hw_need_input_events_ = 0;
     hw_have_output_events_ = 0;
     hw_drain_complete_ = false;
-    pending_video_pts_.clear();
 
     MFT_REGISTER_TYPE_INFO out_info{ MFMediaType_Video, MFVideoFormat_H264 };
     IMFActivate** activates = nullptr;
@@ -333,7 +332,6 @@ bool VideoEncoder::try_init_sw(const EncoderProfile& profile,
     hw_need_input_events_ = 0;
     hw_have_output_events_ = 0;
     hw_drain_complete_ = false;
-    pending_video_pts_.clear();
 
     MFT_REGISTER_TYPE_INFO out_info{ MFMediaType_Video, MFVideoFormat_H264 };
     IMFActivate** activates = nullptr;
@@ -423,8 +421,10 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     output_waits_for_input_.store(0, std::memory_order_relaxed);
     pending_input_count_.store(0, std::memory_order_relaxed);
     pending_input_high_watermark_.store(0, std::memory_order_relaxed);
+    pending_inputs_abandoned_.store(0, std::memory_order_relaxed);
     input_samples_retried_.store(0, std::memory_order_relaxed);
     output_timestamp_errors_.store(0, std::memory_order_relaxed);
+    pending_video_pts_.clear();
 
     d3d_device_  = d3d_device;
     d3d_context_ = d3d_context;
@@ -812,6 +812,13 @@ bool VideoEncoder::switch_to_software_fallback() {
     const uint32_t width = out_width_;
     const uint32_t height = out_height_;
     const uint32_t fps = out_fps_;
+
+    const uint64_t abandoned = abandon_pending_encoder_inputs(
+        pending_video_pts_, pending_input_count_, pending_inputs_abandoned_);
+    if (abandoned != 0) {
+        SR_LOG_ERROR(L"Encoder fallback abandoned %llu accepted input frame(s) without output",
+                     static_cast<unsigned long long>(abandoned));
+    }
 
     mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
     mft_.Reset();

@@ -7,6 +7,7 @@
 #include <atomic>
 #include "controller/session_controller.h"
 #include "storage/storage_manager.h"
+#include "storage/probe_fault_injection.h"
 
 static LRESULT CALLBACK probe_window(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     switch (message) {
@@ -43,6 +44,14 @@ int wmain(int argc, wchar_t** argv) {
     }
     const int seconds = _wtoi(argv[2]);
     if (seconds < 1 || seconds > 3600) return 2;
+#ifdef SR_LOCAL_RECORDING_PROBE
+    wchar_t stall_value[2]{};
+    const bool stall_requested =
+        GetEnvironmentVariableW(L"SR_PROBE_STALL_AUDIO", stall_value, 2) == 1 &&
+        stall_value[0] == L'1';
+#else
+    const bool stall_requested = false;
+#endif
     if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) return 3;
     WNDCLASSW cls{};
     cls.lpfnWndProc = probe_window;
@@ -90,6 +99,10 @@ int wmain(int argc, wchar_t** argv) {
             Sleep(10);
         }
         if (!controller.stop()) result = 8;
+        if (stall_requested && !sr::probe_audio_stall_was_triggered()) {
+            std::fwprintf(stderr, L"FAIL: requested audio writer stall was not triggered.\n");
+            result = 9;
+        }
         std::fwprintf(stdout, L"Stopped; captured=%u encoded=%u dropped=%u audio_packets=%u\n",
                       controller.frames_captured(), controller.frames_encoded(),
                       controller.frames_dropped(), controller.audio_packets_written());

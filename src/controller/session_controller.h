@@ -88,6 +88,7 @@ public:
     uint32_t frames_encoded()   const;
     uint32_t audio_packets_written() const;
     uint32_t active_fps() const;
+    EncoderProfile active_encoder_profile() const;
 
     // T037: Rich telemetry snapshot for debug overlay
     TelemetrySnapshot telemetry_snapshot() const;
@@ -198,8 +199,12 @@ private:
     // Counters (legacy — kept for backwards-compat; TelemetryStore is canonical)
     std::atomic<uint32_t> frames_encoded_{ 0 };
     std::atomic<uint32_t> video_write_failures_{ 0 };
+    std::atomic<uint32_t> audio_write_failures_{ 0 };
+    std::atomic<uint32_t> audio_source_start_failures_{ 0 };
     std::atomic<bool> output_failure_reported_{ false };
+    std::atomic<bool> stopping_from_pause_{ false };
     std::atomic<uint32_t> audio_written_ { 0 };
+    uint64_t diagnostic_log_dropped_at_start_ = 0;
     StageTimingCounters video_encode_timing_;
     StageTimingCounters video_mux_timing_;
     StageTimingCounters audio_mux_timing_;

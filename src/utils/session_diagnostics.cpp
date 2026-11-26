@@ -34,13 +34,19 @@ std::wstring SessionDiagnostics::format_start_summary(const StartInfo& info) {
 }
 
 std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
-    wchar_t buf[1536]{};
+    wchar_t buf[2048]{};
     _snwprintf_s(buf, _countof(buf), _TRUNCATE,
                  L"event=session_stop status=%s encoder_mode_end=%s "
                  L"frames_captured=%u frames_encoded=%u frames_dropped=%u "
-                 L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u audio_packets=%u "
-                 L"encoder_drain_complete=%u encoder_pending_inputs=%llu encoder_drain_samples=%llu "
-                 L"encoder_drain_ms=%llu finalize_ms=%llu",
+                 L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u "
+                 L"audio_write_failures=%u audio_source_start_failures=%u audio_packets=%u "
+                 L"encoder_drain_complete=%u encoder_pending_inputs=%llu "
+                 L"encoder_inputs_offered=%llu encoder_inputs_accepted=%llu encoder_outputs_produced=%llu "
+                 L"encoder_drain_samples=%llu "
+                 L"encoder_inputs_not_accepted=%llu encoder_input_errors=%llu "
+                 L"encoder_inputs_deferred=%llu encoder_inputs_abandoned=%llu encoder_inputs_retried=%llu "
+                 L"encoder_timestamp_errors=%llu encoder_drain_ms=%llu finalize_ms=%llu "
+                 L"diagnostic_log_dropped=%llu",
                  info.status.empty() ? L"unknown" : info.status.c_str(),
                  info.encoder_mode.empty() ? L"unknown" : info.encoder_mode.c_str(),
                  info.frames_captured,
@@ -49,12 +55,24 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  info.queue_drops,
                  info.video_write_failures,
                  info.audio_queue_drops,
+                 info.audio_write_failures,
+                 info.audio_source_start_failures,
                  info.audio_packets,
                  info.encoder_drain_complete ? 1u : 0u,
                  static_cast<unsigned long long>(info.encoder_pending_inputs),
+                 static_cast<unsigned long long>(info.encoder_inputs_offered),
+                 static_cast<unsigned long long>(info.encoder_inputs_accepted),
+                 static_cast<unsigned long long>(info.encoder_outputs_produced),
                  static_cast<unsigned long long>(info.encoder_drain_samples),
+                 static_cast<unsigned long long>(info.encoder_inputs_not_accepted),
+                 static_cast<unsigned long long>(info.encoder_input_errors),
+                 static_cast<unsigned long long>(info.encoder_inputs_deferred),
+                 static_cast<unsigned long long>(info.encoder_inputs_abandoned),
+                 static_cast<unsigned long long>(info.encoder_inputs_retried),
+                 static_cast<unsigned long long>(info.encoder_timestamp_errors),
                  static_cast<unsigned long long>(info.encoder_drain_ms),
-                 static_cast<unsigned long long>(info.finalize_ms));
+                 static_cast<unsigned long long>(info.finalize_ms),
+                 static_cast<unsigned long long>(info.diagnostic_log_dropped));
     return buf;
 }
 

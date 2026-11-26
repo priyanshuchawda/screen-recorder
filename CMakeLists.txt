@@ -52,9 +52,10 @@ list(APPEND APP_SRC
     src/app.rc
 )
 
-# Compile the shared recording engine once and link it into the app, tests and
-# manual probe. This keeps the tested implementation identical to production.
-add_library(screen_recorder_core STATIC
+# Compile the production recording engine once and link it into the app/tests.
+# The manual probe gets a separate copy below so test-only fault injection can
+# never leak into the application binary.
+set(SCREEN_RECORDER_CORE_SOURCES
     ${CTRL_SRC}
     ${CAPTURE_SRC}
     ${AUDIO_SRC}
@@ -63,6 +64,8 @@ add_library(screen_recorder_core STATIC
     ${STORAGE_SRC}
     ${UTIL_SRC}
 )
+
+add_library(screen_recorder_core STATIC ${SCREEN_RECORDER_CORE_SOURCES})
 target_include_directories(screen_recorder_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(screen_recorder_core PUBLIC ${WIN_LIBS})
 
@@ -92,8 +95,16 @@ add_executable(recording_probe EXCLUDE_FROM_ALL
     tests/manual/recording_probe.cpp
 )
 target_include_directories(recording_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(recording_probe PRIVATE screen_recorder_core psapi)
 target_compile_definitions(recording_probe PRIVATE SR_LOCAL_RECORDING_PROBE)
+
+# Fault injection must be compiled into the mux writer translation unit, which
+# belongs to the library. Keep this probe-only copy isolated from the production
+# core so the app cannot contain or activate the simulated writer stall.
+add_library(screen_recorder_probe_core STATIC ${SCREEN_RECORDER_CORE_SOURCES})
+target_include_directories(screen_recorder_probe_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(screen_recorder_probe_core PUBLIC ${WIN_LIBS})
+target_compile_definitions(screen_recorder_probe_core PRIVATE SR_LOCAL_RECORDING_PROBE)
+target_link_libraries(recording_probe PRIVATE screen_recorder_probe_core psapi)
 
 # Packaging
 set(CPACK_PACKAGE_NAME "ScreenRecorder")

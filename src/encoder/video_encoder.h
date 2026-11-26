@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <vector>
 #include "utils/render_frame.h"
+#include "encoder/pending_input_accounting.h"
 
 namespace sr {
 
@@ -37,6 +38,7 @@ public:
         uint64_t output_waits_for_input = 0;
         uint64_t pending_inputs = 0;
         uint64_t pending_inputs_high_watermark = 0;
+        uint64_t pending_inputs_abandoned = 0;
         uint64_t input_samples_retried = 0;
         uint64_t output_timestamp_errors = 0;
     };
@@ -81,6 +83,7 @@ public:
             output_waits_for_input_.load(std::memory_order_relaxed),
             pending_input_count_.load(std::memory_order_relaxed),
             pending_input_high_watermark_.load(std::memory_order_relaxed),
+            pending_inputs_abandoned_.load(std::memory_order_relaxed),
             input_samples_retried_.load(std::memory_order_relaxed),
             output_timestamp_errors_.load(std::memory_order_relaxed)
         };
@@ -128,6 +131,7 @@ private:
     std::deque<int64_t> pending_video_pts_;
     std::atomic<uint64_t> pending_input_count_{ 0 };
     std::atomic<uint64_t> pending_input_high_watermark_{ 0 };
+    std::atomic<uint64_t> pending_inputs_abandoned_{ 0 };
 
     // Session counters distinguish accepted MFT input from produced output.
     // A submitted input may legitimately produce output on a later call.

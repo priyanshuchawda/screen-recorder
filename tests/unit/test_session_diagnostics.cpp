@@ -43,18 +43,34 @@ TEST(SessionDiagnosticsTest, StartSummaryIncludesHardwareProfileAndPowerState) {
 
 TEST(SessionDiagnosticsTest, StopSummaryMarksIncompleteEncoderDrain) {
     sr::SessionDiagnostics::StopInfo info;
-    info.status = L"encoder_drain_incomplete_file_finalized";
+    info.status = L"incomplete";
     info.encoder_mode = L"HW";
     info.encoder_drain_complete = false;
     info.encoder_pending_inputs = 4;
     info.encoder_drain_samples = 2;
     info.encoder_drain_ms = 3000;
     info.finalize_ms = 45;
+    info.encoder_inputs_abandoned = 3;
+    info.encoder_inputs_offered = 12;
+    info.encoder_inputs_accepted = 10;
+    info.encoder_outputs_produced = 9;
+    info.encoder_inputs_retried = 2;
+    info.audio_write_failures = 1;
+    info.audio_source_start_failures = 2;
+    info.diagnostic_log_dropped = 2;
 
     const std::wstring summary = sr::SessionDiagnostics::format_stop_summary(info);
-    EXPECT_NE(summary.find(L"status=encoder_drain_incomplete_file_finalized"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"status=incomplete"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_drain_complete=0"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_pending_inputs=4"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_drain_ms=3000"), std::wstring::npos);
     EXPECT_NE(summary.find(L"finalize_ms=45"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_inputs_abandoned=3"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_inputs_offered=12"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_inputs_accepted=10"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_outputs_produced=9"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_inputs_retried=2"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"audio_write_failures=1"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"audio_source_start_failures=2"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"diagnostic_log_dropped=2"), std::wstring::npos);
 }
