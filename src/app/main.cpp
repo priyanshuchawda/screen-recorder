@@ -43,6 +43,9 @@
 #define ID_LABEL_PROFILE 1011
 #define ID_BTN_RESOLUTION 1012
 #define ID_TIMER_UPDATE  1
+static constexpr UINT kIdleUiRefreshMs = 2000;
+static constexpr UINT kActiveUiRefreshMs = 500;
+static constexpr ULONGLONG kPowerProfileRefreshMs = 5000;
 
 // Custom messages for marshalling background thread callbacks to UI thread
 #define WM_SR_STATUS  (WM_USER + 1)
@@ -157,6 +160,7 @@ static void UpdateProfileLabel()
 {
     if (!g_lbl_profile) return;
     const bool idle = g_controller.state() == sr::SessionState::Idle;
+    bool battery_limited = false;
     sr::EncoderProfile active_profile{};
     if (idle) {
         const auto resolution = sr::recording_resolution_for_height(g_settings.resolution_height);
@@ -164,16 +168,24 @@ static void UpdateProfileLabel()
         active_profile.height = resolution.height;
         active_profile.fps = g_settings.fps;
         active_profile.bitrate_bps = g_settings.bitrate_bps;
+        const bool on_ac_power = sr::PowerModeDetector::is_on_ac_power();
+        battery_limited = !on_ac_power && !g_settings.is_high_quality();
+        if (battery_limited) {
+            active_profile = sr::PowerModeDetector::clamp_for_battery(active_profile);
+        }
     } else {
         active_profile = g_controller.active_encoder_profile();
     }
     wchar_t prof_buf[96];
+    const auto bitrate_label = sr::format_bitrate_mbps(active_profile.bitrate_bps);
+    const wchar_t* suffix = battery_limited ? L" | Battery limit" :
+        (idle && g_settings.is_high_quality() ? L" | HQ" : L"");
     _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
-        L"%ufps | %ux%u | %uMbps%s",
+        L"%ufps | %ux%u | %s%s",
         active_profile.fps ? active_profile.fps : g_settings.fps,
         active_profile.width, active_profile.height,
-        active_profile.bitrate_bps / 1'000'000,
-        idle && g_settings.is_high_quality() ? L" | HQ" : L"");
+        bitrate_label.c_str(),
+        suffix);
     SetWindowTextW(g_lbl_profile, prof_buf);
 }
 
@@ -591,7 +603,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         ApplyUIFont(hwnd);
         LayoutMainWindow(hwnd);
 
-        SetTimer(hwnd, ID_TIMER_UPDATE, 250, nullptr);
+        SetTimer(hwnd, ID_TIMER_UPDATE, kIdleUiRefreshMs, nullptr);
         UpdateUI();
         break;
     }
@@ -675,7 +687,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     case WM_TIMER:
         if (wParam == ID_TIMER_UPDATE) {
             UpdateUI();
-            g_camera_overlay.refresh_power_profile();
+            const auto state = g_controller.state();
+            const bool active = state != sr::SessionState::Idle || g_stop_flow.stop_in_progress();
+            const UINT desired_interval = active ? kActiveUiRefreshMs : kIdleUiRefreshMs;
+            static UINT current_interval = kIdleUiRefreshMs;
+            if (desired_interval != current_interval) {
+                SetTimer(hwnd, ID_TIMER_UPDATE, desired_interval, nullptr);
+                current_interval = desired_interval;
+            }
+
+            static ULONGLONG next_power_refresh_ms = 0;
+            const ULONGLONG now_ms = GetTickCount64();
+            if (now_ms >= next_power_refresh_ms) {
+                g_camera_overlay.refresh_power_profile();
+                next_power_refresh_ms = now_ms + kPowerProfileRefreshMs;
+            }
         }
         break;
 
@@ -908,9 +934,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
     }
 #endif
 
-    // T033: Process priority is managed dynamically:
-    // - NORMAL_PRIORITY_CLASS when idle (saves battery)
-    // - ABOVE_NORMAL_PRIORITY_CLASS during recording (set by SessionController::start())
+    // Keep the process at normal priority. Audio deadlines are handled by the
+    // audio worker's MMCSS policy instead of elevating the whole application.
     SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
 
     SR_LOG_INFO(L"ScreenRecorder starting...");

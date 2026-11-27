@@ -330,16 +330,14 @@ TEST_F(T032_AudioResamplerTest, ShutdownTwiceIsSafe) {
 // =============================================================================
 // T033 — Thread / Process Priority Tests
 // =============================================================================
-TEST(T033_ThreadPriority, ProcessPriorityIsAtLeastAboveNormal) {
-    // wWinMain calls SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS).
-    // Verify the API works and the call is safe in tests.
+TEST(T033_ThreadPriority, ProcessPriorityCanBeQueriedAndPreserved) {
+    // The application keeps normal process priority; verify the current class
+    // can be read and set without changing the test process's scheduling class.
     DWORD current = GetPriorityClass(GetCurrentProcess());
     EXPECT_NE(current, 0u) << "GetPriorityClass failed";
-    // Verify the API used in main.cpp works
-    BOOL ok = SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    BOOL ok = SetPriorityClass(GetCurrentProcess(), current);
     EXPECT_TRUE(ok);
-    // Restore
-    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+    EXPECT_EQ(GetPriorityClass(GetCurrentProcess()), current);
 }
 
 TEST(T033_ThreadPriority, SetThreadPriorityAboveNormalWorks) {

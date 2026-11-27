@@ -12,6 +12,14 @@
 
 namespace sr {
 
+inline std::wstring format_bitrate_mbps(uint32_t bitrate_bps) {
+    // Round to the nearest tenth so low-resolution presets such as 1.5 Mbps
+    // remain distinguishable from a true 1 Mbps profile in the UI.
+    const uint64_t tenths = (static_cast<uint64_t>(bitrate_bps) + 50'000u) / 100'000u;
+    return std::to_wstring(tenths / 10u) + L"." +
+           std::to_wstring(tenths % 10u) + L" Mbps";
+}
+
 struct AppSettings {
     uint32_t fps = 30;
     uint32_t resolution_height = 480;

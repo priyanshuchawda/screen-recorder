@@ -310,21 +310,22 @@ LRESULT CALLBACK CameraOverlay::HostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPAR
 
 void CameraOverlay::apply_preview_tuning() {
     const bool high_quality = high_quality_.load(std::memory_order_relaxed);
+    const bool on_battery = on_battery_.load(std::memory_order_relaxed);
     if (!should_reapply_preview_tuning(preview_tuning_applied_,
                                        preview_tuning_on_battery_,
                                        preview_tuning_high_quality_,
-                                       on_battery_,
+                                       on_battery,
                                        high_quality)) {
         return;
     }
 
-    const int interval = preview_interval_ms_for_profile(on_battery_, high_quality);
+    const int interval = preview_interval_ms_for_profile(on_battery, high_quality);
     capture_interval_ms_.store(interval, std::memory_order_relaxed);
     preview_tuning_applied_ = true;
-    preview_tuning_on_battery_ = on_battery_;
+    preview_tuning_on_battery_ = on_battery;
     preview_tuning_high_quality_ = high_quality;
     SR_LOG_INFO(L"CameraOverlay: %s preview target ~%u fps",
-                use_high_quality_preview(on_battery_, high_quality) ? L"HQ" : L"efficiency",
+                use_high_quality_preview(on_battery, high_quality) ? L"HQ" : L"efficiency",
                 interval > 0 ? static_cast<unsigned>(1000 / interval) : 0u);
 }
 
@@ -506,7 +507,8 @@ void CameraOverlay::capture_loop() {
     UINT32 chosen_fps_num = 30;
     UINT32 chosen_fps_den = 1;
     const bool high_quality = high_quality_.load(std::memory_order_relaxed);
-    if (!choose_camera_format(reader.Get(), on_battery_, high_quality,
+    const bool on_battery = on_battery_.load(std::memory_order_relaxed);
+    if (!choose_camera_format(reader.Get(), on_battery, high_quality,
                               chosen_w, chosen_h, chosen_fps_num, chosen_fps_den)) {
         SR_LOG_WARN(L"CameraOverlay: choose_camera_format failed, forcing RGB32 output type");
         // Fallback: manually request RGB32 output without specifying resolution
@@ -519,7 +521,7 @@ void CameraOverlay::capture_loop() {
     } else {
         const double chosen_fps = static_cast<double>(chosen_fps_num) / static_cast<double>(chosen_fps_den ? chosen_fps_den : 1);
         SR_LOG_INFO(L"CameraOverlay: %s preview format %ux%u @ %.2f fps (RGB32)",
-                    use_high_quality_preview(on_battery_, high_quality) ? L"HQ" : L"efficiency",
+                    use_high_quality_preview(on_battery, high_quality) ? L"HQ" : L"efficiency",
                     chosen_w, chosen_h, chosen_fps);
     }
 
@@ -739,7 +741,7 @@ bool CameraOverlay::start(HWND owner) {
                  SWP_SHOWWINDOW | SWP_NOACTIVATE);
     resize_capture_to_client();
 
-    on_battery_ = detect_on_battery();
+    on_battery_.store(detect_on_battery(), std::memory_order_relaxed);
     preview_tuning_applied_ = false;
     apply_preview_tuning();
     capture_thread_ = std::thread(&CameraOverlay::capture_loop, this);
@@ -758,7 +760,7 @@ void CameraOverlay::set_high_quality(bool enabled) {
 
 void CameraOverlay::refresh_power_profile() {
     if (!running_) return;
-    on_battery_ = detect_on_battery();
+    on_battery_.store(detect_on_battery(), std::memory_order_relaxed);
     apply_preview_tuning();
 }
 

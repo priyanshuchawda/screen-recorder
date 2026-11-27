@@ -107,22 +107,11 @@ SessionController::~SessionController() {
         encoder_->shutdown();
         muxer_->abort();
     }
-    restore_process_priority();
     if (mf_initialized_) {
         probe_.dxgi_device_manager.Reset();
         MFShutdown();
         mf_initialized_ = false;
     }
-}
-
-void SessionController::restore_process_priority() {
-    if (!process_priority_changed_) return;
-    if (original_process_priority_class_ != 0 &&
-        !SetPriorityClass(GetCurrentProcess(), original_process_priority_class_)) {
-        SR_LOG_WARN(L"Could not restore process priority class %u: %u",
-                    original_process_priority_class_, GetLastError());
-    }
-    process_priority_changed_ = false;
 }
 
 void SessionController::rollback_startup(const wchar_t* reason) {
@@ -152,7 +141,6 @@ void SessionController::rollback_startup(const wchar_t* reason) {
     while (loopback_queue_ && loopback_queue_->try_pop()) {}
 
     stop_diagnostics_monitor();
-    restore_process_priority();
     diagnostics_.write_event(L"event=startup_rollback state=complete");
     flush_persistent_log(std::chrono::seconds(2));
     clear_persistent_log_path();
@@ -229,19 +217,6 @@ bool SessionController::start() {
     pipeline_stall_events_.store(0, std::memory_order_relaxed);
 
     diagnostics_stage_.store(DiagnosticsStage::Starting, std::memory_order_relaxed);
-
-    // Preserve the application's prior priority so every exit path restores
-    // the same scheduling class rather than assuming it was Normal.
-    original_process_priority_class_ = GetPriorityClass(GetCurrentProcess());
-    process_priority_changed_ = false;
-    if (original_process_priority_class_ != 0 &&
-        original_process_priority_class_ != ABOVE_NORMAL_PRIORITY_CLASS) {
-        process_priority_changed_ = SetPriorityClass(
-            GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) != FALSE;
-        if (!process_priority_changed_) {
-            SR_LOG_WARN(L"Could not raise recording process priority: %u", GetLastError());
-        }
-    }
 
     notify_status(L"Starting...");
 
@@ -585,8 +560,6 @@ bool SessionController::stop() {
     diagnostics_stage_.store(DiagnosticsStage::Complete, std::memory_order_relaxed);
     diagnostics_.write_event(L"event=stop_complete");
     stop_diagnostics_monitor();
-
-    restore_process_priority();
 
     SessionDiagnostics::StopInfo diagnostics_stop;
     diagnostics_stop.encoder_mode = encoder_mode_label(encoder_->mode());
