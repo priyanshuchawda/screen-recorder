@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 #include <windows.h>
 #include <mfapi.h>
+#include <algorithm>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -154,6 +156,149 @@ TEST_F(T032_AudioResamplerTest, ProcessProducesOutput_44100to48000) {
     // After 100ms of input, the resampler must have produced output.
     EXPECT_GT(out_pcm.size(), static_cast<size_t>(0))
         << "Resampler produced no output for 100ms of 44.1kHz input";
+}
+
+TEST_F(T032_AudioResamplerTest, ResamplerPreservesTenMillisecondDurationAt44100And96000) {
+    for (const uint32_t input_rate : {44'100u, 96'000u}) {
+        AudioResampler rs;
+        if (!rs.initialize(input_rate, 2, 16, 48'000)) {
+            GTEST_SKIP() << "Resampler unavailable for " << input_rate << " Hz";
+        }
+
+        const uint32_t input_frames_per_packet = input_rate / 100;
+        std::vector<uint8_t> input(
+            static_cast<size_t>(input_frames_per_packet) * 2 * sizeof(int16_t), 0);
+        std::vector<uint8_t> output;
+        for (int i = 0; i < 10; ++i) {
+            ASSERT_TRUE(rs.process(input.data(), static_cast<uint32_t>(input.size()), output));
+        }
+        std::vector<uint8_t> tail;
+        ASSERT_TRUE(rs.flush(tail));
+        output.insert(output.end(), tail.begin(), tail.end());
+
+        const size_t output_frames = output.size() / (2 * sizeof(int16_t));
+        EXPECT_NEAR(static_cast<double>(output_frames), 4'800.0, 1.0)
+            << "100 ms of " << input_rate << " Hz PCM must remain 100 ms at 48 kHz";
+    }
+}
+
+TEST_F(T032_AudioResamplerTest, RejectsNullInputWithoutDereferencingIt) {
+    AudioResampler rs;
+    ASSERT_TRUE(rs.initialize(44'100, 2, 16, 48'000));
+    std::vector<uint8_t> output;
+    EXPECT_FALSE(rs.process(nullptr, 1764, output));
+}
+
+TEST_F(T032_AudioResamplerTest, ResamplesSilentPacketsToCanonicalDuration) {
+    for (const uint32_t input_rate : {44'100u, 96'000u}) {
+        AudioResampler rs;
+        if (!rs.initialize(input_rate, 2, 16, 48'000)) {
+            GTEST_SKIP() << "Resampler unavailable for " << input_rate << " Hz";
+        }
+
+        const uint32_t input_frames = input_rate / 100;
+        const uint32_t input_bytes = input_frames * 2 * sizeof(int16_t);
+        std::vector<uint8_t> output;
+        for (int i = 0; i < 10; ++i) {
+            int64_t output_pts = -1;
+            ASSERT_TRUE(rs.process(nullptr, input_bytes, output, true,
+                                   2'000'000 + i * 100'000, &output_pts));
+        }
+        int64_t tail_pts = -1;
+        std::vector<uint8_t> tail;
+        ASSERT_TRUE(rs.flush(tail, &tail_pts));
+        output.insert(output.end(), tail.begin(), tail.end());
+
+        EXPECT_NEAR(static_cast<double>(output.size() / (2 * sizeof(int16_t))), 4'800.0, 1.0);
+        EXPECT_TRUE(std::all_of(output.begin(), output.end(),
+                                [](uint8_t sample_byte) { return sample_byte == 0; }));
+    }
+}
+
+TEST_F(T032_AudioResamplerTest, ResampledPacketTimestampsStayContinuous) {
+    AudioResampler rs;
+    if (!rs.initialize(44'100, 2, 16, 48'000)) {
+        GTEST_SKIP() << "Resampler unavailable";
+    }
+
+    constexpr int64_t kStartPts = 2'000'000;
+    constexpr int64_t kPacketDuration = 100'000;
+    const std::vector<uint8_t> input(441u * 2u * sizeof(int16_t), 0);
+    std::vector<uint8_t> output;
+    int64_t expected_next_pts = kStartPts;
+    bool have_output = false;
+    auto verify_packet = [&](size_t old_size, int64_t packet_pts) {
+        const size_t produced_bytes = output.size() - old_size;
+        if (produced_bytes == 0) return;
+        if (have_output) EXPECT_LE(std::llabs(packet_pts - expected_next_pts), 2LL);
+        else EXPECT_LE(std::llabs(packet_pts - kStartPts), 2LL);
+        const uint64_t frames = produced_bytes / (2u * sizeof(int16_t));
+        expected_next_pts = packet_pts + static_cast<int64_t>(frames * 10'000'000ULL / 48'000ULL);
+        have_output = true;
+    };
+
+    for (int i = 0; i < 10; ++i) {
+        const size_t old_size = output.size();
+        int64_t packet_pts = -1;
+        ASSERT_TRUE(rs.process(input.data(), static_cast<uint32_t>(input.size()), output,
+                               false, kStartPts + i * kPacketDuration, &packet_pts));
+        verify_packet(old_size, packet_pts);
+    }
+    const size_t old_size = output.size();
+    int64_t tail_pts = -1;
+    std::vector<uint8_t> tail;
+    ASSERT_TRUE(rs.flush(tail, &tail_pts));
+    output.insert(output.end(), tail.begin(), tail.end());
+    if (!tail.empty()) {
+        if (have_output) EXPECT_LE(std::llabs(tail_pts - expected_next_pts), 2LL);
+        else EXPECT_LE(std::llabs(tail_pts - kStartPts), 2LL);
+    }
+    EXPECT_TRUE(have_output || output.size() > old_size);
+}
+
+TEST(AudioResamplerRetryTest, DrainsAndRetriesTheSameRejectedInput) {
+    unsigned submit_attempts = 0;
+    unsigned drain_attempts = 0;
+    const HRESULT result = sr::audio_resampler_detail::submit_with_drain_retry(
+        [&]() -> HRESULT {
+            return ++submit_attempts == 1 ? MF_E_NOTACCEPTING : S_OK;
+        },
+        [&]() {
+            ++drain_attempts;
+            return true;
+        }, 3);
+    EXPECT_EQ(result, S_OK);
+    EXPECT_EQ(submit_attempts, 2u);
+    EXPECT_EQ(drain_attempts, 1u);
+}
+
+TEST(AudioResamplerRetryTest, StopsAfterBoundedRetriesIfMftKeepsRejecting) {
+    unsigned submit_attempts = 0;
+    unsigned drain_attempts = 0;
+    const HRESULT result = sr::audio_resampler_detail::submit_with_drain_retry(
+        [&]() -> HRESULT {
+            ++submit_attempts;
+            return MF_E_NOTACCEPTING;
+        },
+        [&]() {
+            ++drain_attempts;
+            return true;
+        }, 3);
+    EXPECT_EQ(result, MF_E_NOTACCEPTING);
+    EXPECT_EQ(submit_attempts, 3u);
+    EXPECT_EQ(drain_attempts, 2u);
+}
+
+TEST(AudioResamplerRetryTest, DoesNotRetryAfterOutputDrainFailure) {
+    unsigned submit_attempts = 0;
+    const HRESULT result = sr::audio_resampler_detail::submit_with_drain_retry(
+        [&]() -> HRESULT {
+            ++submit_attempts;
+            return MF_E_NOTACCEPTING;
+        },
+        []() { return false; }, 3);
+    EXPECT_EQ(result, E_FAIL);
+    EXPECT_EQ(submit_attempts, 1u);
 }
 
 TEST_F(T032_AudioResamplerTest, PassthroughProcessJustCopiesData) {

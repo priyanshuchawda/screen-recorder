@@ -20,6 +20,7 @@ struct RecordingOutcomeInputs {
     uint64_t capture_texture_acquisition_failures = 0;
     uint64_t video_write_failures = 0;
     uint64_t audio_queue_drops = 0;
+    uint64_t audio_resampler_failures = 0;
     uint64_t audio_write_failures = 0;
     uint64_t audio_source_start_failures = 0;
     uint64_t encoder_inputs_not_accepted = 0;
@@ -41,6 +42,7 @@ inline RecordingOutcome classify_recording_outcome(
         input.capture_texture_acquisition_failures != 0 ||
         input.video_write_failures != 0 ||
         input.audio_queue_drops != 0 ||
+        input.audio_resampler_failures != 0 ||
         input.audio_write_failures != 0 ||
         input.audio_source_start_failures != 0 ||
         input.encoder_input_errors != 0 ||

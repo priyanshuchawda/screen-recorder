@@ -40,7 +40,8 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"frames_captured=%u frames_encoded=%u frames_dropped=%u "
                  L"capture_resize_failures=%u capture_texture_acquisition_failures=%u "
                  L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u "
-                 L"audio_write_failures=%u audio_source_start_failures=%u audio_packets=%u "
+                 L"audio_resampler_failures=%u audio_write_failures=%u "
+                 L"audio_source_start_failures=%u audio_packets=%u "
                  L"encoder_drain_complete=%u encoder_pending_inputs=%llu "
                  L"encoder_deferred_inputs_pending=%llu encoder_deferred_inputs_high_watermark=%llu "
                  L"encoder_inputs_offered=%llu encoder_inputs_accepted=%llu encoder_outputs_produced=%llu "
@@ -59,6 +60,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  info.queue_drops,
                  info.video_write_failures,
                  info.audio_queue_drops,
+                 info.audio_resampler_failures,
                  info.audio_write_failures,
                  info.audio_source_start_failures,
                  info.audio_packets,

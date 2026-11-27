@@ -124,6 +124,9 @@ public:
     uint32_t bits_per_sample() const { return bits_per_sample_ == 32 ? 32u : 16u; }
     bool is_float() const { return is_float_; }
     uint32_t queue_drops() const { return queue_drops_.load(std::memory_order_relaxed); }
+    uint32_t resampler_failures() const {
+        return resampler_failures_.load(std::memory_order_relaxed);
+    }
 
     // Native device rate (before resampling) — for diagnostics
     uint32_t native_sample_rate() const { return sample_rate_; }
@@ -159,6 +162,7 @@ private:
     std::atomic<bool> running_{ false };
     std::atomic<bool> muted_  { false };
     std::atomic<uint32_t> queue_drops_{ 0 };
+    std::atomic<uint32_t> resampler_failures_{ 0 };
     std::thread       thread_;
 
     int64_t  pts_anchor_100ns_ = 0;   // 100ns epoch offset

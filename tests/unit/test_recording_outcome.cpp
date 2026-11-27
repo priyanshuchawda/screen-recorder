@@ -80,6 +80,14 @@ TEST(RecordingOutcomeTest, MissingAudioSourceIsReportedAsIncomplete) {
     EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
 }
 
+TEST(RecordingOutcomeTest, AudioResamplerFailureMakesFinalizedRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.audio_resampler_failures = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
 TEST(RecordingOutcomeTest, FinalizeFailureTakesPrecedence) {
     sr::RecordingOutcomeInputs input;
     input.finalized = false;

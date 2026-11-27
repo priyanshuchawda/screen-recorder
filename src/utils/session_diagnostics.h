@@ -31,6 +31,7 @@ public:
         uint32_t queue_drops = 0;
         uint32_t video_write_failures = 0;
         uint32_t audio_queue_drops = 0;
+        uint32_t audio_resampler_failures = 0;
         uint32_t audio_write_failures = 0;
         uint32_t audio_source_start_failures = 0;
         uint32_t audio_packets = 0;

@@ -513,6 +513,8 @@ bool SessionController::stop() {
     diagnostics_stop.queue_drops = capture_->queue_drops();
     diagnostics_stop.video_write_failures = video_write_failures_.load();
     diagnostics_stop.audio_queue_drops = audio_->queue_drops() + loopback_audio_->queue_drops();
+    diagnostics_stop.audio_resampler_failures =
+        audio_->resampler_failures() + loopback_audio_->resampler_failures();
     diagnostics_stop.audio_write_failures = audio_write_failures_.load();
     diagnostics_stop.audio_source_start_failures = audio_source_start_failures_.load();
     diagnostics_stop.audio_packets = audio_written_.load();
@@ -551,6 +553,7 @@ bool SessionController::stop() {
     outcome_input.capture_texture_acquisition_failures = diagnostics_stop.capture_texture_acquisition_failures;
     outcome_input.video_write_failures = diagnostics_stop.video_write_failures;
     outcome_input.audio_queue_drops = diagnostics_stop.audio_queue_drops;
+    outcome_input.audio_resampler_failures = diagnostics_stop.audio_resampler_failures;
     outcome_input.audio_write_failures = diagnostics_stop.audio_write_failures;
     outcome_input.audio_source_start_failures = diagnostics_stop.audio_source_start_failures;
     outcome_input.encoder_inputs_not_accepted = diagnostics_stop.encoder_inputs_not_accepted;
