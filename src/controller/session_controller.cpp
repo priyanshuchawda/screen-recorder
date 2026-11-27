@@ -509,6 +509,29 @@ bool SessionController::stop() {
         encoder_final_state = encoder_->diagnostics_snapshot();
         encoder_pending_inputs = encoder_final_state.pending_inputs;
         encoder_drain_samples = leftover.size();
+        const auto event_wait = encoder_final_state.async_event_wait_us;
+        const auto queue_residence = encoder_final_state.async_input_queue_residence_us;
+        const auto process_input = encoder_final_state.async_process_input_us;
+        const auto process_output = encoder_final_state.async_process_output_us;
+        const auto output_latency = encoder_final_state.async_accept_to_output_us;
+        diagnostics_.write_event(
+            L"event=encoder_async_final need_input_events=" +
+            std::to_wstring(encoder_final_state.async_need_input_events) +
+            L" have_output_events=" + std::to_wstring(encoder_final_state.async_have_output_events) +
+            L" worker_wakeups=" + std::to_wstring(encoder_final_state.async_worker_wakeups) +
+            L" input_queue_high_watermark=" +
+            std::to_wstring(encoder_final_state.deferred_inputs_high_watermark) +
+            L" output_queue_high_watermark=" +
+            std::to_wstring(encoder_final_state.async_output_queue_high_watermark) +
+            L" output_buffer_capacity_high_watermark=" +
+            std::to_wstring(encoder_final_state.async_output_buffer_capacity_high_watermark) +
+            L" input_credit_high_watermark=" +
+            std::to_wstring(encoder_final_state.async_input_credit_high_watermark) +
+            L" event_wait_p95_us=" + std::to_wstring(event_wait.p95_upper_us) +
+            L" queue_residence_p95_us=" + std::to_wstring(queue_residence.p95_upper_us) +
+            L" process_input_p95_us=" + std::to_wstring(process_input.p95_upper_us) +
+            L" process_output_p95_us=" + std::to_wstring(process_output.p95_upper_us) +
+            L" accepted_to_output_p95_us=" + std::to_wstring(output_latency.p95_upper_us));
         diagnostics_.write_event(L"event=stop_stage stage=encoder_flush state=" +
                                  std::wstring(encoder_drain_ok ? L"complete" : L"incomplete") +
                                  L" samples=" + std::to_wstring(leftover.size()) +
@@ -907,6 +930,27 @@ void SessionController::diagnostics_monitor_loop() {
             static_cast<unsigned long long>(audio_mux_timing.p99_upper_us),
             static_cast<unsigned long long>(persistent_log_dropped_count()));
         diagnostics_.write_event(resource_event);
+        const auto async_wait = encoder_metrics.async_event_wait_us;
+        const auto async_queue_wait = encoder_metrics.async_input_queue_residence_us;
+        const auto async_input_time = encoder_metrics.async_process_input_us;
+        const auto async_output_time = encoder_metrics.async_process_output_us;
+        const auto async_output_latency = encoder_metrics.async_accept_to_output_us;
+        diagnostics_.write_event(
+            L"event=encoder_async_sample elapsed_s=" + std::to_wstring((now_ms - diagnostics_start_ms) / 1000) +
+            L" need_input_events=" + std::to_wstring(encoder_metrics.async_need_input_events) +
+            L" have_output_events=" + std::to_wstring(encoder_metrics.async_have_output_events) +
+            L" worker_wakeups=" + std::to_wstring(encoder_metrics.async_worker_wakeups) +
+            L" input_queue_depth=" + std::to_wstring(encoder_metrics.deferred_inputs_pending) +
+            L" input_queue_high_watermark=" + std::to_wstring(encoder_metrics.deferred_inputs_high_watermark) +
+            L" output_queue_high_watermark=" + std::to_wstring(encoder_metrics.async_output_queue_high_watermark) +
+            L" output_buffer_capacity_high_watermark=" +
+            std::to_wstring(encoder_metrics.async_output_buffer_capacity_high_watermark) +
+            L" input_credit_high_watermark=" + std::to_wstring(encoder_metrics.async_input_credit_high_watermark) +
+            L" event_wait_p95_us=" + std::to_wstring(async_wait.p95_upper_us) +
+            L" input_queue_residence_p95_us=" + std::to_wstring(async_queue_wait.p95_upper_us) +
+            L" process_input_p95_us=" + std::to_wstring(async_input_time.p95_upper_us) +
+            L" process_output_p95_us=" + std::to_wstring(async_output_time.p95_upper_us) +
+            L" accepted_to_output_p95_us=" + std::to_wstring(async_output_latency.p95_upper_us));
         last_captured_frames = captured_frames;
         last_written_frames = written_frames;
         last_duplicate_frames = live_telemetry.dup_frames;
@@ -1105,10 +1149,11 @@ void SessionController::encode_loop() {
 
     auto encode_frame_timed = [this](ID3D11Texture2D* texture, int64_t pts,
                                      std::shared_ptr<TextureSurfaceLease> surface_lease,
-                                     ComPtr<IMFSample>& output) {
+                                     ComPtr<IMFSample>& output, bool synthetic) {
         const auto before = encoder_->diagnostics_snapshot();
         const auto started = std::chrono::steady_clock::now();
-        const bool produced = encoder_->encode_frame(texture, pts, output, std::move(surface_lease));
+        const bool produced = encoder_->encode_frame(
+            texture, pts, output, std::move(surface_lease), synthetic);
         const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - started).count();
         video_encode_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
@@ -1142,6 +1187,38 @@ void SessionController::encode_loop() {
             std::chrono::steady_clock::now() - started).count();
         video_mux_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
         return written;
+    };
+    auto account_video_write = [this, &write_video_timed](IMFSample* sample, bool synthetic,
+                                                           uint64_t frame_id = 0) {
+        if (!sample) return false;
+        if (write_video_timed(sample)) {
+            frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+            telemetry_.on_frame_encoded();
+            if (synthetic) telemetry_.on_duplicate_inserted();
+            return true;
+        }
+        const uint32_t failures = video_write_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (failures == 1 || (failures % 120) == 0) {
+            SR_LOG_ERROR(L"Muxer rejected encoded video sample (frame_id=%llu total failures=%u)",
+                         static_cast<unsigned long long>(frame_id), failures);
+        }
+        diagnostics_.write_event(L"event=encoded_video_write_failed frame_id=" +
+                                 std::to_wstring(frame_id) +
+                                 L" synthetic=" + std::to_wstring(synthetic ? 1 : 0));
+        report_recording_loss(L"video_mux");
+        return false;
+    };
+    bool async_encoder_failure_reported = false;
+    auto drain_async_outputs = [this, &account_video_write, &async_encoder_failure_reported]() {
+        VideoEncoder::AsyncEncodedOutput output;
+        while (encoder_->try_pop_async_output(output)) {
+            account_video_write(output.sample.Get(), output.synthetic, output.frame_id);
+        }
+        if (encoder_->async_worker_failed() && !async_encoder_failure_reported) {
+            async_encoder_failure_reported = true;
+            diagnostics_.write_event(L"event=async_encoder_worker_failed");
+            report_recording_loss(L"encoder_async_worker");
+        }
     };
     auto write_audio_timed = [this](IMFSample* sample) {
         const auto started = std::chrono::steady_clock::now();
@@ -1219,6 +1296,7 @@ void SessionController::encode_loop() {
     while (encode_running_.load(std::memory_order_acquire) ||
            !frame_queue_->empty() || !audio_queue_->empty() || !loopback_queue_->empty())
     {
+        drain_async_outputs();
         if (pacer_reset_requested_.exchange(false, std::memory_order_acq_rel)) {
             pacer_.reset();
         }
@@ -1255,20 +1333,12 @@ void SessionController::encode_loop() {
                 int64_t dup_pts = last_paced_pts + (paced_pts - last_paced_pts) / 2;
                 ComPtr<IMFSample> dup_sample;
                 diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-                if (encode_frame_timed(last_texture.Get(), dup_pts, last_surface_lease, dup_sample)) {
+                if (encode_frame_timed(last_texture.Get(), dup_pts, last_surface_lease,
+                                       dup_sample, true) && dup_sample) {
                     diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                    if (write_video_timed(dup_sample.Get())) {
-                        frames_encoded_.fetch_add(1, std::memory_order_relaxed);
-                        telemetry_.on_frame_encoded();
-                        telemetry_.on_duplicate_inserted();
-                    } else {
-                        const uint32_t failures = video_write_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
-                        if (failures == 1 || (failures % 120) == 0) {
-                            SR_LOG_ERROR(L"Muxer rejected duplicate video sample (total failures=%u)", failures);
-                        }
-                        report_recording_loss(L"video_mux");
-                    }
+                    account_video_write(dup_sample.Get(), true, 0);
                 }
+                drain_async_outputs();
             }
 
             // Cache this texture (ComPtr copy AddRefs it) before encoding
@@ -1278,19 +1348,11 @@ void SessionController::encode_loop() {
             // Encode current frame
             ComPtr<IMFSample> encoded;
             diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-            if (encode_frame_timed(frame.texture.Get(), paced_pts, frame.surface_lease, encoded)) {
+            if (encode_frame_timed(frame.texture.Get(), paced_pts, frame.surface_lease, encoded, false) && encoded) {
                 diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                if (write_video_timed(encoded.Get())) {
-                    frames_encoded_.fetch_add(1, std::memory_order_relaxed);
-                    telemetry_.on_frame_encoded();
-                } else {
-                    const uint32_t failures = video_write_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
-                    if (failures == 1 || (failures % 120) == 0) {
-                        SR_LOG_ERROR(L"Muxer rejected video sample (total failures=%u)", failures);
-                    }
-                    report_recording_loss(L"video_mux");
-                }
+                account_video_write(encoded.Get(), false, 0);
             }
+            drain_async_outputs();
 
             have_last_frame = true;
             last_paced_pts  = paced_pts;
@@ -1308,17 +1370,12 @@ void SessionController::encode_loop() {
                 pacer_.pace_frame(repeat_pts, false, &paced_pts);
                 ComPtr<IMFSample> encoded;
                 diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-                if (encode_frame_timed(last_texture.Get(), paced_pts, last_surface_lease, encoded)) {
+                if (encode_frame_timed(last_texture.Get(), paced_pts, last_surface_lease,
+                                       encoded, true) && encoded) {
                     diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                    if (write_video_timed(encoded.Get())) {
-                        frames_encoded_.fetch_add(1, std::memory_order_relaxed);
-                        telemetry_.on_frame_encoded();
-                        telemetry_.on_duplicate_inserted();
-                    } else {
-                        video_write_failures_.fetch_add(1, std::memory_order_relaxed);
-                        report_recording_loss(L"video_mux");
-                    }
+                    account_video_write(encoded.Get(), true, 0);
                 }
+                drain_async_outputs();
                 last_paced_pts = paced_pts;
             }
         }
