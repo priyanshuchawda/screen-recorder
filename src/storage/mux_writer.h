@@ -37,7 +37,7 @@ struct MuxConfig {
 class MuxWriter {
 public:
     MuxWriter()  = default;
-    ~MuxWriter() { if (initialized_) finalize(); }
+    ~MuxWriter() { if (initialized_) finalize(); else abort(); }
 
     // Create the .partial.mp4 file and configure streams.
     // partial_path: e.g. "C:\...\ScreenRec_2026-02-28.partial.mp4"
@@ -54,6 +54,8 @@ public:
 
     // Finalize the writer; renames partial_path -> final_path on success
     bool finalize();
+    // Release partially initialized writer state without renaming its partial file.
+    void abort();
 
     bool        initialized()  const { return initialized_; }
     uint64_t    bytes_written()const { return bytes_written_; }

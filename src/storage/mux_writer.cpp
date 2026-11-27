@@ -31,6 +31,7 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
                             const std::wstring& final_path,
                             const MuxConfig& cfg)
 {
+    abort();
     partial_path_ = partial_path;
     final_path_   = final_path;
 
@@ -250,6 +251,24 @@ bool MuxWriter::finalize() {
     }
 
     return SUCCEEDED(hr);
+}
+
+void MuxWriter::abort() {
+    initialized_ = false;
+    active_write_started_ms_.store(0, std::memory_order_release);
+    sink_writer_.Reset();
+    if (lock_handle_ != INVALID_HANDLE_VALUE) {
+        CloseHandle(lock_handle_);
+        lock_handle_ = INVALID_HANDLE_VALUE;
+    }
+    video_stream_index_ = 0;
+    audio_stream_index_ = 1;
+    bytes_written_ = 0;
+    audio_write_count_ = 0;
+    last_video_pts_.store(-1, std::memory_order_relaxed);
+    last_audio_pts_.store(-1, std::memory_order_relaxed);
+    partial_path_.clear();
+    final_path_.clear();
 }
 
 } // namespace sr

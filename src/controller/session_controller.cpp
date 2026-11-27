@@ -19,6 +19,7 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <system_error>
 #include <dxgi1_4.h>
 #include <psapi.h>
 
@@ -94,11 +95,73 @@ SessionController::~SessionController() {
     if (!machine_.is_idle()) {
         encode_running_.store(false, std::memory_order_release);
         capture_->stop();
-        audio_->stop();
-        loopback_audio_->stop();
+        audio_->shutdown();
+        loopback_audio_->shutdown();
         if (encode_thread_.joinable()) encode_thread_.join();
-        muxer_->finalize();
+        encoder_->shutdown();
+        muxer_->abort();
+    } else {
+        capture_->stop();
+        audio_->shutdown();
+        loopback_audio_->shutdown();
+        encoder_->shutdown();
+        muxer_->abort();
     }
+    restore_process_priority();
+    if (mf_initialized_) {
+        probe_.dxgi_device_manager.Reset();
+        MFShutdown();
+        mf_initialized_ = false;
+    }
+}
+
+void SessionController::restore_process_priority() {
+    if (!process_priority_changed_) return;
+    if (original_process_priority_class_ != 0 &&
+        !SetPriorityClass(GetCurrentProcess(), original_process_priority_class_)) {
+        SR_LOG_WARN(L"Could not restore process priority class %u: %u",
+                    original_process_priority_class_, GetLastError());
+    }
+    process_priority_changed_ = false;
+}
+
+void SessionController::rollback_startup(const wchar_t* reason) {
+    // Claim the stopping transition before touching shared engines. This keeps
+    // a concurrent disk-space auto-stop from tearing down the same resources.
+    if (machine_.is_recording() || machine_.is_paused()) {
+        if (!machine_.transition(SessionEvent::Stop)) return;
+    } else if (machine_.is_stopping()) {
+        return;
+    }
+
+    diagnostics_.write_failure(reason ? reason : L"recording_start_failed");
+    diagnostics_.write_event(L"event=startup_rollback state=begin");
+    diagnostics_stage_.store(DiagnosticsStage::StoppingCapture, std::memory_order_relaxed);
+
+    if (storage_) storage_->stopDiskSpacePolling();
+    capture_->stop();
+    audio_->shutdown();
+    loopback_audio_->shutdown();
+    encode_running_.store(false, std::memory_order_release);
+    if (encode_thread_.joinable()) encode_thread_.join();
+    encoder_->shutdown();
+    muxer_->abort(); // Keep any partial file; never relabel an unvalidated startup output.
+
+    while (frame_queue_ && frame_queue_->try_pop()) {}
+    while (audio_queue_ && audio_queue_->try_pop()) {}
+    while (loopback_queue_ && loopback_queue_->try_pop()) {}
+
+    stop_diagnostics_monitor();
+    restore_process_priority();
+    diagnostics_.write_event(L"event=startup_rollback state=complete");
+    flush_persistent_log(std::chrono::seconds(2));
+    clear_persistent_log_path();
+    last_recording_outcome_.store(RecordingOutcome::FailedPartialKept,
+                                  std::memory_order_release);
+    if (machine_.is_stopping()) machine_.transition(SessionEvent::Finalized);
+    encode_running_.store(false, std::memory_order_release);
+    stopping_from_pause_.store(false, std::memory_order_release);
+    notify_status(L"Idle");
 }
 
 const wchar_t* SessionController::diagnostics_stage_label(DiagnosticsStage stage) {
@@ -131,16 +194,23 @@ bool SessionController::initialize(StorageManager* storage,
     on_error_  = std::move(on_error);
     on_stop_requested_ = std::move(on_stop_requested);
 
-    // Initialize Media Foundation
-    HRESULT hr = MFStartup(MF_VERSION);
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"MFStartup failed: 0x%08X", hr);
-        return false;
+    // Initialize Media Foundation once per controller lifetime. Balance the
+    // startup reference in the destructor, including probe-failure paths.
+    if (!mf_initialized_) {
+        const HRESULT hr = MFStartup(MF_VERSION);
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"MFStartup failed: 0x%08X", hr);
+            return false;
+        }
+        mf_initialized_ = true;
     }
 
     // Probe D3D11 + HW encoder
     if (!EncoderProbe::run(probe_)) {
         notify_error(L"D3D11 initialization failed");
+        probe_.dxgi_device_manager.Reset();
+        MFShutdown();
+        mf_initialized_ = false;
         return false;
     }
 
@@ -160,8 +230,18 @@ bool SessionController::start() {
 
     diagnostics_stage_.store(DiagnosticsStage::Starting, std::memory_order_relaxed);
 
-    // Elevate process priority during recording for smooth capture
-    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    // Preserve the application's prior priority so every exit path restores
+    // the same scheduling class rather than assuming it was Normal.
+    original_process_priority_class_ = GetPriorityClass(GetCurrentProcess());
+    process_priority_changed_ = false;
+    if (original_process_priority_class_ != 0 &&
+        original_process_priority_class_ != ABOVE_NORMAL_PRIORITY_CLASS) {
+        process_priority_changed_ = SetPriorityClass(
+            GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS) != FALSE;
+        if (!process_priority_changed_) {
+            SR_LOG_WARN(L"Could not raise recording process priority: %u", GetLastError());
+        }
+    }
 
     notify_status(L"Starting...");
 
@@ -207,9 +287,9 @@ bool SessionController::start() {
     }
 
     // T042: Apply base-mode power clamping before capture allocates output textures.
-    last_power_ac_ = PowerModeDetector::is_on_ac_power();
+    last_power_ac_.store(PowerModeDetector::is_on_ac_power(), std::memory_order_release);
     enc_prof = PowerModeDetector::clamp_for_quality_and_power_state(
-        enc_prof, last_power_ac_, high_quality_profile);
+        enc_prof, last_power_ac_.load(std::memory_order_acquire), high_quality_profile);
     active_high_quality_ = high_quality_profile;
 
     // ---------------------------------------------------------------
@@ -221,11 +301,8 @@ bool SessionController::start() {
                                {enc_prof.width, enc_prof.height},
                                enc_prof.fps))
     {
-        diagnostics_.write_failure(L"capture_engine_initialization_failed");
-        clear_persistent_log_path();
         notify_error(L"Capture engine initialization failed");
-        machine_.transition(SessionEvent::Stop);
-        machine_.transition(SessionEvent::Finalized);
+        rollback_startup(L"capture_engine_initialization_failed");
         return false;
     }
     capture_->set_sync_anchor_100ns(sync_.anchor_100ns());
@@ -261,11 +338,8 @@ bool SessionController::start() {
                                probe_.d3d_device.Get(),
                                probe_.d3d_context.Get()))
     {
-        diagnostics_.write_failure(L"video_encoder_initialization_failed");
-        clear_persistent_log_path();
         notify_error(L"Video encoder initialization failed");
-        machine_.transition(SessionEvent::Stop);
-        machine_.transition(SessionEvent::Finalized);
+        rollback_startup(L"video_encoder_initialization_failed");
         return false;
     }
 
@@ -283,11 +357,8 @@ bool SessionController::start() {
     mux_cfg.audio_is_float         = true;
 
     if (!muxer_->initialize(current_partial_path_, current_output_path_, mux_cfg)) {
-        diagnostics_.write_failure(L"mux_writer_initialization_failed");
-        clear_persistent_log_path();
         notify_error(L"Mux writer initialization failed");
-        machine_.transition(SessionEvent::Stop);
-        machine_.transition(SessionEvent::Finalized);
+        rollback_startup(L"mux_writer_initialization_failed");
         return false;
     }
 
@@ -297,7 +368,7 @@ bool SessionController::start() {
     diagnostics_start.probed_encoder_name =
         probe_.hw_encoder_available ? probe_.encoder_name : L"not available";
     diagnostics_start.encoder_mode = encoder_mode_label(encoder_->mode());
-    diagnostics_start.power_state = last_power_ac_ ? L"AC" : L"Battery";
+    diagnostics_start.power_state = last_power_ac_.load(std::memory_order_acquire) ? L"AC" : L"Battery";
     diagnostics_start.high_quality = high_quality_profile;
     diagnostics_start.width = encoder_->output_width();
     diagnostics_start.height = encoder_->output_height();
@@ -350,12 +421,19 @@ bool SessionController::start() {
     });
 
     encode_running_.store(true, std::memory_order_release);
-    encode_thread_ = std::thread(&SessionController::encode_loop, this);
+    try {
+        encode_thread_ = std::thread(&SessionController::encode_loop, this);
+    } catch (const std::system_error& e) {
+        encode_running_.store(false, std::memory_order_release);
+        SR_LOG_ERROR(L"Could not create recording pipeline thread: %S", e.what());
+        rollback_startup(L"encode_thread_creation_failed");
+        return false;
+    }
 
     if (!capture_->start()) {
         diagnostics_.write_event(L"event=start_stage stage=capture state=failed");
         notify_error(L"Capture start failed");
-        stop();
+        rollback_startup(L"capture_start_failed");
         return false;
     }
     diagnostics_.write_event(L"event=start_stage stage=capture state=complete");
@@ -371,19 +449,23 @@ bool SessionController::start() {
         ? L"event=start_stage stage=loopback state=complete"
         : L"event=start_stage stage=loopback state=unavailable");
 
-    // T031: Start async disk space polling — auto-stop on < 500 MB free
-    if (storage_) {
-        storage_->startDiskSpacePolling([this]() {
-            // Runs on poll thread — use atomic transition to safely trigger stop
-            if (!machine_.is_idle()) {
-                SR_LOG_WARN(L"Auto-stopping: disk space critically low");
-                notify_error(L"\u26A0 Disk space critically low! Recording auto-stopped.");
-                stop(); // safe: atomic state transitions; stopDiskSpacePolling detaches
-            }
-        });
+    try {
+        // T031: Start async disk space polling — auto-stop on < 500 MB free
+        if (storage_) {
+            storage_->startDiskSpacePolling([this]() {
+                if (!machine_.is_idle()) {
+                    SR_LOG_WARN(L"Auto-stopping: disk space critically low");
+                    notify_error(L"\u26A0 Disk space critically low! Recording auto-stopped.");
+                    stop();
+                }
+            });
+        }
+        start_diagnostics_monitor();
+    } catch (const std::system_error& e) {
+        SR_LOG_ERROR(L"Could not create recording monitor thread: %S", e.what());
+        rollback_startup(L"recording_monitor_thread_creation_failed");
+        return false;
     }
-
-    start_diagnostics_monitor();
     diagnostics_.write_event(L"event=recording_started");
     notify_status(L"Recording...");
     SR_LOG_INFO(L"Recording started -> %s", current_output_path_.c_str());
@@ -474,6 +556,9 @@ bool SessionController::stop() {
                 std::chrono::steady_clock::now() - mux_write_started).count();
             video_mux_timing_.record(static_cast<uint64_t>((std::max)(0LL, mux_write_us)));
         }
+        encoder_->shutdown();
+        encoder_final_state = encoder_->diagnostics_snapshot();
+        encoder_pending_inputs = encoder_final_state.pending_inputs;
         const auto drain_mux_timing = video_mux_timing_.snapshot();
         diagnostics_.write_event(L"event=encoder_drain_mux_timing samples=" +
             std::to_wstring(drain_mux_timing.samples) + L" total_us=" +
@@ -501,8 +586,7 @@ bool SessionController::stop() {
     diagnostics_.write_event(L"event=stop_complete");
     stop_diagnostics_monitor();
 
-    // Revert process priority to normal when not recording
-    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
+    restore_process_priority();
 
     SessionDiagnostics::StopInfo diagnostics_stop;
     diagnostics_stop.encoder_mode = encoder_mode_label(encoder_->mode());
@@ -546,6 +630,11 @@ bool SessionController::stop() {
     diagnostics_stop.encoder_drain_samples = encoder_drain_samples;
     diagnostics_stop.encoder_drain_ms = encoder_drain_ms;
     diagnostics_stop.finalize_ms = finalize_ms;
+
+    // Drop idle capture, audio endpoint and encoder state after their final
+    // counters have been captured. A later session initializes them afresh.
+    audio_->shutdown();
+    loopback_audio_->shutdown();
 
     // Wait for queued session events so logger failures are reflected in the
     // outcome. The diagnostic writer itself is bounded and this wait is bounded.
@@ -1002,7 +1091,7 @@ TelemetrySnapshot SessionController::telemetry_snapshot() const {
     // Update backlog counter from the live queue depth
     uint32_t backlog = frame_queue_ ? static_cast<uint32_t>(frame_queue_->size()) : 0;
     const_cast<TelemetryStore&>(telemetry_).set_backlog(backlog);
-    auto snapshot = telemetry_.snapshot(enc_mode, last_power_ac_);
+    auto snapshot = telemetry_.snapshot(enc_mode, last_power_ac_.load(std::memory_order_acquire));
     if (capture_) {
         snapshot.frames_captured = capture_->frames_captured();
         snapshot.frames_dropped += capture_->frames_dropped();
@@ -1287,8 +1376,8 @@ void SessionController::encode_loop() {
         // Keep this timestamp session-local so each recording starts fresh.
         if (now_ms - last_power_check_ms >= kPowerCheckIntervalMs) {
             bool on_ac = PowerModeDetector::is_on_ac_power();
-            if (on_ac != last_power_ac_) {
-                last_power_ac_ = on_ac;
+            if (on_ac != last_power_ac_.load(std::memory_order_acquire)) {
+                last_power_ac_.store(on_ac, std::memory_order_release);
                 SR_LOG_INFO(L"[Power] Switched to %s power", on_ac ? L"AC" : L"Battery");
                 // Keep capture work within the active power budget. The
                 // encoder's sample timestamps remain on the source clock.

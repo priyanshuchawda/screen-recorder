@@ -476,6 +476,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
                                ID3D11Device* d3d_device,
                                ID3D11DeviceContext* d3d_context)
 {
+    shutdown();
     input_samples_offered_.store(0, std::memory_order_relaxed);
     input_samples_accepted_.store(0, std::memory_order_relaxed);
     input_samples_not_accepted_.store(0, std::memory_order_relaxed);
@@ -551,6 +552,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
             return true;
         }
         SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
+        shutdown();
         return false;
     }
 
@@ -586,7 +588,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
         return true;
     }
     SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
-
+    shutdown();
     return false;
 }
 

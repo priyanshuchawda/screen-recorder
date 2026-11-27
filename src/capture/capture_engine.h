@@ -109,6 +109,11 @@ public:
     uint32_t height() const { return capture_height_; }
 
 private:
+    bool initialize_impl(ID3D11Device* device,
+                         ID3D11DeviceContext* context,
+                         FrameQueue* queue,
+                         RecordingResolution max_resolution,
+                         uint32_t target_fps);
     void set_frame_callback_stage(FrameCallbackStage stage) {
         if (stage != FrameCallbackStage::Idle) {
             frame_callback_started_ms_.store(GetTickCount64(), std::memory_order_relaxed);

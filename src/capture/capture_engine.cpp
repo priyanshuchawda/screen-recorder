@@ -396,6 +396,24 @@ bool CaptureEngine::initialize(ID3D11Device* device,
                                 RecordingResolution max_resolution,
                                 uint32_t target_fps)
 {
+    stop();
+    try {
+        if (initialize_impl(device, context, queue, max_resolution, target_fps)) return true;
+    } catch (const winrt::hresult_error& e) {
+        SR_LOG_ERROR(L"Capture engine initialization threw HRESULT 0x%08X", e.code().value);
+    } catch (...) {
+        SR_LOG_ERROR(L"Capture engine initialization threw an unknown exception");
+    }
+    stop();
+    return false;
+}
+
+bool CaptureEngine::initialize_impl(ID3D11Device* device,
+                                    ID3D11DeviceContext* context,
+                                    FrameQueue* queue,
+                                    RecordingResolution max_resolution,
+                                    uint32_t target_fps)
+{
     // WinRT apartment: multi-threaded (matches COM init in wWinMain)
     try { winrt::init_apartment(winrt::apartment_type::multi_threaded); }
     catch (...) {}  // already initialised is fine
@@ -529,7 +547,17 @@ bool CaptureEngine::start() {
     impl_->capture_cadence.reset();
 
     running_.store(true, std::memory_order_release);
-    impl_->session.StartCapture();
+    try {
+        impl_->session.StartCapture();
+    } catch (const winrt::hresult_error& e) {
+        running_.store(false, std::memory_order_release);
+        SR_LOG_ERROR(L"WGC StartCapture failed: 0x%08X", e.code().value);
+        return false;
+    } catch (...) {
+        running_.store(false, std::memory_order_release);
+        SR_LOG_ERROR(L"WGC StartCapture failed with an unknown exception");
+        return false;
+    }
     SR_LOG_INFO(L"WGC capture started");
     return true;
 }

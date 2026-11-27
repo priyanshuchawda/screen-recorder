@@ -165,6 +165,8 @@ private:
     void start_diagnostics_monitor();
     void stop_diagnostics_monitor();
     void diagnostics_monitor_loop();
+    void rollback_startup(const wchar_t* reason);
+    void restore_process_priority();
 
     // Shared state
     SessionMachine  machine_;
@@ -172,8 +174,11 @@ private:
     ProbeResult     probe_;
     FramePacer      pacer_;      // T038: frame pacing
     TelemetryStore  telemetry_;  // T037: live counters
-    bool            last_power_ac_ = true; // T042: last known power state
+    std::atomic<bool> last_power_ac_{ true }; // T042: published power source state
     bool            active_high_quality_ = false;
+    bool            mf_initialized_ = false;
+    DWORD           original_process_priority_class_ = 0;
+    bool            process_priority_changed_ = false;
 
     // Engines
     std::unique_ptr<CaptureEngine> capture_;

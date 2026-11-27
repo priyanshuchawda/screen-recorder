@@ -105,6 +105,8 @@ public:
 
     // Signal stop and join the capture thread
     void stop();
+    // Release all endpoint, client, event, notification and resampler state.
+    void shutdown();
 
     // Toggle mute: when muted, zeroed PCM is pushed instead of real audio
     void set_muted(bool muted) { muted_.store(muted, std::memory_order_relaxed); }
@@ -136,6 +138,7 @@ public:
     void set_sync_manager(SyncManager* sync) { sync_manager_ = sync; }
 
 private:
+    bool initialize_impl();
     void capture_loop();
 
     ComPtr<IMMDeviceEnumerator>  enumerator_;
@@ -157,9 +160,11 @@ private:
     // T032: device-invalidation notification
     AudioDeviceInvalidCallback device_invalid_cb_;
     AudioDeviceNotifier        notifier_;
+    bool                       notifier_registered_ = false;
 
     AudioCaptureMode           mode_ = AudioCaptureMode::Microphone;
     std::atomic<bool> running_{ false };
+    bool              initialized_ = false;
     std::atomic<bool> muted_  { false };
     std::atomic<uint32_t> queue_drops_{ 0 };
     std::atomic<uint32_t> resampler_failures_{ 0 };

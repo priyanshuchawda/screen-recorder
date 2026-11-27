@@ -15,15 +15,35 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <exception>
+#include <system_error>
 #pragma comment(lib, "avrt.lib")
 
 namespace sr {
 
 bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
+    shutdown();
     queue_ = queue;
     mode_  = mode;
+    bool initialized = false;
+    try {
+        initialized = queue_ && initialize_impl();
+    } catch (const std::exception& e) {
+        SR_LOG_ERROR(L"AudioEngine initialization exception: %S", e.what());
+    } catch (...) {
+        SR_LOG_ERROR(L"AudioEngine initialization failed with an unknown exception");
+    }
+    if (!initialized) {
+        shutdown();
+        return false;
+    }
+    initialized_ = true;
+    return true;
+}
 
-    const bool is_loopback = (mode == AudioCaptureMode::Loopback);
+bool AudioEngine::initialize_impl() {
+
+    const bool is_loopback = (mode_ == AudioCaptureMode::Loopback);
     const wchar_t* mode_name = is_loopback ? L"Loopback" : L"Microphone";
 
     // Create device enumerator
@@ -155,7 +175,12 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
             notifier_.setup(dev_id, device_invalid_cb_, flow);
             CoTaskMemFree(dev_id);
         }
-        enumerator_->RegisterEndpointNotificationCallback(&notifier_);
+    hr = enumerator_->RegisterEndpointNotificationCallback(&notifier_);
+    notifier_registered_ = SUCCEEDED(hr);
+    if (FAILED(hr)) {
+        SR_LOG_WARN(L"[%s] RegisterEndpointNotificationCallback failed: 0x%08X",
+                    mode_name, hr);
+    }
     }
 
     SR_LOG_INFO(L"[%s] AudioEngine initialized", mode_name);
@@ -164,6 +189,14 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
 }
 
 bool AudioEngine::start() {
+    if (!initialized_ || !audio_client_ || !capture_client_ || !event_handle_) {
+        SR_LOG_ERROR(L"AudioEngine::start rejected: endpoint initialization did not complete");
+        return false;
+    }
+    if (running_.load(std::memory_order_acquire) || thread_.joinable()) {
+        SR_LOG_ERROR(L"AudioEngine::start rejected: capture is already active");
+        return false;
+    }
     sample_count_ = 0;
     queue_drops_.store(0, std::memory_order_relaxed);
     resampler_failures_.store(0, std::memory_order_relaxed);
@@ -187,7 +220,14 @@ bool AudioEngine::start() {
         return false;
     }
 
-    thread_ = std::thread(&AudioEngine::capture_loop, this);
+    try {
+        thread_ = std::thread(&AudioEngine::capture_loop, this);
+    } catch (const std::system_error& e) {
+        running_.store(false, std::memory_order_release);
+        audio_client_->Stop();
+        SR_LOG_ERROR(L"Audio capture thread creation failed: %S", e.what());
+        return false;
+    }
     return true;
 }
 
@@ -199,20 +239,19 @@ void AudioEngine::stop() {
     if (thread_.joinable()) {
         thread_.join();
     }
-    if (audio_client_) {
-        audio_client_->Stop();
-    }
+    if (audio_client_) audio_client_->Stop();
     if (event_handle_) {
         CloseHandle(event_handle_);
         event_handle_ = nullptr;
     }
     // Unregister device notification (T032)
-    if (enumerator_) {
+    if (enumerator_ && notifier_registered_) {
         enumerator_->UnregisterEndpointNotificationCallback(&notifier_);
+        notifier_registered_ = false;
     }
     // Drain the resampler tail into the still-live packet queue before the
     // encode worker performs its final audio-mixer flush.
-    if (!resampler_.is_passthrough()) {
+    if (initialized_ && !resampler_.is_passthrough()) {
         std::vector<uint8_t> tail;
         int64_t tail_pts = 0;
         const bool flush_ok = resampler_.flush(tail, &tail_pts);
@@ -239,8 +278,27 @@ void AudioEngine::stop() {
                              drops);
             }
         }
-        resampler_.shutdown();
     }
+    resampler_.shutdown();
+}
+
+void AudioEngine::shutdown() {
+    stop();
+    if (event_handle_) {
+        CloseHandle(event_handle_);
+        event_handle_ = nullptr;
+    }
+    capture_client_.Reset();
+    audio_client_.Reset();
+    device_.Reset();
+    enumerator_.Reset();
+    queue_ = nullptr;
+    initialized_ = false;
+    sample_rate_ = 48'000;
+    channels_ = 2;
+    bits_per_sample_ = 16;
+    is_float_ = false;
+    block_align_ = 4;
 }
 
 void AudioEngine::capture_loop() {

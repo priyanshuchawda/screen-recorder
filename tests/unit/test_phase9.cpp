@@ -24,6 +24,7 @@
 #include "capture/capture_cadence.h"
 #include "controller/audio_write_schedule.h"
 #include "audio/audio_engine.h"
+#include "storage/mux_writer.h"
 
 TEST(AudioQueueRecovery, BuffersTwentySecondsOfTenMillisecondPackets) {
     EXPECT_GE(sr::AudioQueue::capacity(), 2000u);
@@ -534,4 +535,16 @@ TEST(AudioMixerBoundsTest, EnforcesPacketCountCapForTinyPackets) {
     EXPECT_EQ(stats.loopback_packets, sr::AudioTimelineMixer::kMaxBufferedPackets);
     EXPECT_EQ(stats.dropped_packets, 88u);
     EXPECT_LE(stats.loopback_bytes, sr::AudioTimelineMixer::kMaxBufferedBytes);
+}
+
+TEST(AudioEngineStartupTest, RejectsStartBeforeSuccessfulInitialization) {
+    sr::AudioEngine engine;
+    EXPECT_FALSE(engine.start());
+}
+
+TEST(MuxWriterStartupTest, AbortBeforeInitializationIsSafeAndIdempotent) {
+    sr::MuxWriter writer;
+    writer.abort();
+    writer.abort();
+    EXPECT_FALSE(writer.initialized());
 }
