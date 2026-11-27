@@ -44,6 +44,10 @@ public:
         uint64_t pending_inputs_abandoned = 0;
         uint64_t input_samples_retried = 0;
         uint64_t output_timestamp_errors = 0;
+        uint64_t input_preparation_errors = 0;
+        uint64_t output_errors = 0;
+        uint64_t scheduler_errors = 0;
+        uint64_t input_accounting_errors = 0;
     };
 
     VideoEncoder()  = default;
@@ -90,7 +94,11 @@ public:
             deferred_input_high_watermark_.load(std::memory_order_relaxed),
             pending_inputs_abandoned_.load(std::memory_order_relaxed),
             input_samples_retried_.load(std::memory_order_relaxed),
-            output_timestamp_errors_.load(std::memory_order_relaxed)
+            output_timestamp_errors_.load(std::memory_order_relaxed),
+            input_preparation_errors_.load(std::memory_order_relaxed),
+            output_errors_.load(std::memory_order_relaxed),
+            scheduler_errors_.load(std::memory_order_relaxed),
+            input_accounting_errors_.load(std::memory_order_relaxed)
         };
     }
 
@@ -162,6 +170,10 @@ private:
     std::atomic<uint64_t> output_waits_for_input_{ 0 };
     std::atomic<uint64_t> input_samples_retried_{ 0 };
     std::atomic<uint64_t> output_timestamp_errors_{ 0 };
+    std::atomic<uint64_t> input_preparation_errors_{ 0 };
+    std::atomic<uint64_t> output_errors_{ 0 };
+    std::atomic<uint64_t> scheduler_errors_{ 0 };
+    std::atomic<uint64_t> input_accounting_errors_{ 0 };
 
     // Pre-allocated staging texture for SW encoder path (avoids per-frame alloc)
     ComPtr<ID3D11Texture2D> staging_tex_;

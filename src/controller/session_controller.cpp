@@ -627,6 +627,10 @@ bool SessionController::stop() {
     diagnostics_stop.encoder_inputs_abandoned = encoder_final_state.pending_inputs_abandoned;
     diagnostics_stop.encoder_inputs_retried = encoder_final_state.input_samples_retried;
     diagnostics_stop.encoder_timestamp_errors = encoder_final_state.output_timestamp_errors;
+    diagnostics_stop.encoder_input_preparation_errors = encoder_final_state.input_preparation_errors;
+    diagnostics_stop.encoder_output_errors = encoder_final_state.output_errors;
+    diagnostics_stop.encoder_scheduler_errors = encoder_final_state.scheduler_errors;
+    diagnostics_stop.encoder_input_accounting_errors = encoder_final_state.input_accounting_errors;
     diagnostics_stop.encoder_drain_samples = encoder_drain_samples;
     diagnostics_stop.encoder_drain_ms = encoder_drain_ms;
     diagnostics_stop.finalize_ms = finalize_ms;
@@ -664,6 +668,10 @@ bool SessionController::stop() {
     outcome_input.encoder_inputs_deferred = diagnostics_stop.encoder_inputs_deferred;
     outcome_input.encoder_inputs_abandoned = diagnostics_stop.encoder_inputs_abandoned;
     outcome_input.encoder_timestamp_errors = diagnostics_stop.encoder_timestamp_errors;
+    outcome_input.encoder_input_preparation_errors = diagnostics_stop.encoder_input_preparation_errors;
+    outcome_input.encoder_output_errors = diagnostics_stop.encoder_output_errors;
+    outcome_input.encoder_scheduler_errors = diagnostics_stop.encoder_scheduler_errors;
+    outcome_input.encoder_input_accounting_errors = diagnostics_stop.encoder_input_accounting_errors;
     outcome_input.encoder_pending_inputs = diagnostics_stop.encoder_pending_inputs;
     outcome_input.warnings = diagnostics_stop.diagnostic_log_dropped +
         pipeline_stall_events_.load(std::memory_order_relaxed);
@@ -1125,16 +1133,31 @@ void SessionController::encode_loop() {
     auto encode_frame_timed = [this](ID3D11Texture2D* texture, int64_t pts,
                                      std::shared_ptr<TextureSurfaceLease> surface_lease,
                                      ComPtr<IMFSample>& output) {
-        const uint64_t abandoned_before = encoder_->diagnostics_snapshot().pending_inputs_abandoned;
+        const auto before = encoder_->diagnostics_snapshot();
         const auto started = std::chrono::steady_clock::now();
         const bool produced = encoder_->encode_frame(texture, pts, output, std::move(surface_lease));
         const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - started).count();
         video_encode_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
-        const uint64_t abandoned_after = encoder_->diagnostics_snapshot().pending_inputs_abandoned;
-        if (abandoned_after > abandoned_before) {
-            diagnostics_.write_event(L"event=encoder_inputs_abandoned count=" +
-                std::to_wstring(abandoned_after - abandoned_before));
+        const auto after = encoder_->diagnostics_snapshot();
+        const uint64_t abandoned_delta = after.pending_inputs_abandoned - before.pending_inputs_abandoned;
+        const uint64_t preparation_delta = after.input_preparation_errors - before.input_preparation_errors;
+        const uint64_t input_error_delta = after.input_errors - before.input_errors;
+        const uint64_t output_error_delta = after.output_errors - before.output_errors;
+        const uint64_t scheduler_error_delta = after.scheduler_errors - before.scheduler_errors;
+        const uint64_t accounting_error_delta = after.input_accounting_errors - before.input_accounting_errors;
+        const uint64_t timestamp_error_delta = after.output_timestamp_errors - before.output_timestamp_errors;
+        if (abandoned_delta != 0 || preparation_delta != 0 || input_error_delta != 0 ||
+            output_error_delta != 0 || scheduler_error_delta != 0 ||
+            accounting_error_delta != 0 || timestamp_error_delta != 0) {
+            diagnostics_.write_event(L"event=encoder_frame_failure abandoned=" +
+                std::to_wstring(abandoned_delta) + L" preparation=" +
+                std::to_wstring(preparation_delta) + L" input=" +
+                std::to_wstring(input_error_delta) + L" output=" +
+                std::to_wstring(output_error_delta) + L" scheduler=" +
+                std::to_wstring(scheduler_error_delta) + L" accounting=" +
+                std::to_wstring(accounting_error_delta) + L" timestamp=" +
+                std::to_wstring(timestamp_error_delta));
             report_recording_loss(L"encoder_input");
         }
         return produced;

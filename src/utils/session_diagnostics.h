@@ -53,6 +53,10 @@ public:
         uint64_t encoder_inputs_abandoned = 0;
         uint64_t encoder_inputs_retried = 0;
         uint64_t encoder_timestamp_errors = 0;
+        uint64_t encoder_input_preparation_errors = 0;
+        uint64_t encoder_output_errors = 0;
+        uint64_t encoder_scheduler_errors = 0;
+        uint64_t encoder_input_accounting_errors = 0;
         uint64_t encoder_drain_samples = 0;
         uint64_t encoder_drain_ms = 0;
         uint64_t finalize_ms = 0;

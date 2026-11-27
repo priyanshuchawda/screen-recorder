@@ -30,6 +30,10 @@ struct RecordingOutcomeInputs {
     uint64_t encoder_inputs_deferred = 0;
     uint64_t encoder_inputs_abandoned = 0;
     uint64_t encoder_timestamp_errors = 0;
+    uint64_t encoder_input_preparation_errors = 0;
+    uint64_t encoder_output_errors = 0;
+    uint64_t encoder_scheduler_errors = 0;
+    uint64_t encoder_input_accounting_errors = 0;
     uint64_t encoder_pending_inputs = 0;
     uint64_t warnings = 0;
 };
@@ -52,6 +56,10 @@ inline RecordingOutcome classify_recording_outcome(
         input.encoder_input_errors != 0 ||
         input.encoder_inputs_abandoned != 0 ||
         input.encoder_timestamp_errors != 0 ||
+        input.encoder_input_preparation_errors != 0 ||
+        input.encoder_output_errors != 0 ||
+        input.encoder_scheduler_errors != 0 ||
+        input.encoder_input_accounting_errors != 0 ||
         input.encoder_pending_inputs != 0;
     if (media_loss) return RecordingOutcome::Incomplete;
     return input.warnings != 0

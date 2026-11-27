@@ -51,7 +51,9 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"encoder_drain_samples=%llu "
                  L"encoder_inputs_not_accepted=%llu encoder_input_errors=%llu "
                  L"encoder_inputs_deferred=%llu encoder_inputs_abandoned=%llu encoder_inputs_retried=%llu "
-                 L"encoder_timestamp_errors=%llu encoder_drain_ms=%llu finalize_ms=%llu "
+                 L"encoder_timestamp_errors=%llu encoder_input_preparation_errors=%llu "
+                 L"encoder_output_errors=%llu encoder_scheduler_errors=%llu "
+                 L"encoder_input_accounting_errors=%llu encoder_drain_ms=%llu finalize_ms=%llu "
                  L"diagnostic_log_dropped=%llu",
                  info.status.empty() ? L"unknown" : info.status.c_str(),
                  info.encoder_mode.empty() ? L"unknown" : info.encoder_mode.c_str(),
@@ -86,6 +88,10 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  static_cast<unsigned long long>(info.encoder_inputs_abandoned),
                  static_cast<unsigned long long>(info.encoder_inputs_retried),
                  static_cast<unsigned long long>(info.encoder_timestamp_errors),
+                 static_cast<unsigned long long>(info.encoder_input_preparation_errors),
+                 static_cast<unsigned long long>(info.encoder_output_errors),
+                 static_cast<unsigned long long>(info.encoder_scheduler_errors),
+                 static_cast<unsigned long long>(info.encoder_input_accounting_errors),
                  static_cast<unsigned long long>(info.encoder_drain_ms),
                  static_cast<unsigned long long>(info.finalize_ms),
                  static_cast<unsigned long long>(info.diagnostic_log_dropped));

@@ -97,6 +97,38 @@ TEST(RecordingOutcomeTest, AudioMixerOverflowMakesFinalizedRecordingIncomplete) 
     EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
 }
 
+TEST(RecordingOutcomeTest, EncoderInputPreparationFailureMakesRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.encoder_input_preparation_errors = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
+TEST(RecordingOutcomeTest, EncoderOutputFailureMakesRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.encoder_output_errors = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
+TEST(RecordingOutcomeTest, EncoderSchedulerFailureMakesRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.encoder_scheduler_errors = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
+TEST(RecordingOutcomeTest, EncoderTimestampLedgerFailureMakesRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.encoder_input_accounting_errors = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
 TEST(RecordingOutcomeTest, FinalizeFailureTakesPrecedence) {
     sr::RecordingOutcomeInputs input;
     input.finalized = false;
