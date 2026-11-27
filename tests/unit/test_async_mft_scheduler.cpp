@@ -110,6 +110,33 @@ Microsoft::WRL::ComPtr<IMFMediaEvent> make_event(MediaEventType type) {
 
 } // namespace
 
+TEST(AsyncMftStallWatchdogTest, StartsDeadlineOnNewWorkAndResetsAfterIdle) {
+    using Clock = sr::AsyncMftStallWatchdog::Clock;
+    const auto start = Clock::time_point{};
+    sr::AsyncMftStallWatchdog watchdog(std::chrono::seconds(5));
+
+    EXPECT_FALSE(watchdog.until_stalled(false, start).has_value());
+    ASSERT_TRUE(watchdog.until_stalled(true, start).has_value());
+    EXPECT_EQ(*watchdog.until_stalled(true, start + std::chrono::seconds(4)),
+              std::chrono::seconds(1));
+    EXPECT_EQ(*watchdog.until_stalled(true, start + std::chrono::seconds(5)),
+              std::chrono::milliseconds::zero());
+
+    EXPECT_FALSE(watchdog.until_stalled(false, start + std::chrono::minutes(2)).has_value());
+    EXPECT_EQ(*watchdog.until_stalled(true, start + std::chrono::minutes(2)),
+              std::chrono::seconds(5));
+}
+
+TEST(AsyncMftStallWatchdogTest, ProgressRestartsThePendingWorkDeadline) {
+    using Clock = sr::AsyncMftStallWatchdog::Clock;
+    const auto start = Clock::time_point{};
+    sr::AsyncMftStallWatchdog watchdog(std::chrono::seconds(5));
+    watchdog.until_stalled(true, start);
+    watchdog.mark_progress(start + std::chrono::seconds(4));
+    EXPECT_EQ(*watchdog.until_stalled(true, start + std::chrono::seconds(8)),
+              std::chrono::seconds(1));
+}
+
 TEST(AsyncMftSchedulerTest, QueuedInputWaitsForNeedInputCredit) {
     sr::AsyncMftScheduler<int, int> scheduler;
 
@@ -159,6 +186,22 @@ TEST(AsyncMftSchedulerTest, RejectedInputRemainsQueuedForANewCredit) {
     EXPECT_EQ(retry->input, 9);
 }
 
+TEST(AsyncMftSchedulerTest, ReservedSubmissionSlotKeepsRejectedInputRetryable) {
+    sr::AsyncMftScheduler<int, int> scheduler(4, 1, 4, 16);
+    for (int input : {1, 2, 3, 4}) ASSERT_TRUE(scheduler.enqueue_input(input));
+    scheduler.grant_input(0);
+    auto request = scheduler.take_input_request();
+    ASSERT_TRUE(request.has_value());
+    EXPECT_EQ(request->input, 1);
+
+    // The slot vacated by the in-flight submission stays reserved until the
+    // MFT accepts it or the exact rejected input is returned to the queue.
+    EXPECT_FALSE(scheduler.enqueue_input(5));
+    EXPECT_TRUE(scheduler.retry_input_front(std::move(request->input)));
+    EXPECT_FALSE(scheduler.failed());
+    EXPECT_EQ(scheduler.input_count(), 4u);
+}
+
 TEST(AsyncMftSchedulerTest, OutputQueueEnforcesPacketAndByteBoundsWithoutConsumingRejectedOutput) {
     sr::AsyncMftScheduler<int, int> scheduler(4, 4, 2, 5);
     int first = 1;
@@ -174,6 +217,20 @@ TEST(AsyncMftSchedulerTest, OutputQueueEnforcesPacketAndByteBoundsWithoutConsumi
 
     ASSERT_TRUE(scheduler.try_pop_output().has_value());
     EXPECT_TRUE(scheduler.publish_output(oversized_for_remaining_budget, 1));
+}
+
+TEST(AsyncMftSchedulerTest, FailedShutdownCanReleaseBufferedOutputsAndCapacity) {
+    sr::AsyncMftScheduler<int, int> scheduler(1, 1, 2, 16);
+    int first = 1;
+    int second = 2;
+    ASSERT_TRUE(scheduler.publish_output(first, sizeof(first)));
+    ASSERT_TRUE(scheduler.publish_output(second, sizeof(second)));
+    EXPECT_EQ(scheduler.output_count(), 2u);
+    EXPECT_EQ(scheduler.output_bytes(), 2 * sizeof(int));
+
+    EXPECT_EQ(scheduler.discard_outputs(), 2u);
+    EXPECT_EQ(scheduler.output_count(), 0u);
+    EXPECT_EQ(scheduler.output_bytes(), 0u);
 }
 
 TEST(AsyncMftSchedulerTest, OutputEventsAreConsumedOneAtATimeAndWakeWorker) {
@@ -291,20 +348,51 @@ TEST(AsyncMftSchedulerTest, IndefiniteWorkerWaitIsWokenByShutdown) {
     EXPECT_TRUE(returned.load(std::memory_order_acquire));
 }
 
-TEST(AsyncMftSchedulerTest, QueuedInputWithoutCreditDoesNotWakeIdleWorkerRepeatedly) {
+TEST(AsyncMftSchedulerTest, QueuedInputWakesIdleWorkerOnceThenWaitsForNeedInput) {
     sr::AsyncMftScheduler<int, int> scheduler;
-    ASSERT_TRUE(scheduler.enqueue_input(42));
     std::atomic<bool> returned{ false };
     std::thread worker([&] {
         scheduler.wait_for_work();
         returned.store(true, std::memory_order_release);
     });
-
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    EXPECT_FALSE(returned.load(std::memory_order_acquire));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    ASSERT_TRUE(scheduler.enqueue_input(42));
+    for (int attempt = 0; attempt < 100 && !returned.load(std::memory_order_acquire); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool woke_for_input = returned.load(std::memory_order_acquire);
+    EXPECT_FALSE(scheduler.wait_for_work(std::chrono::milliseconds(1)));
     scheduler.grant_input(0);
     worker.join();
-    EXPECT_TRUE(returned.load(std::memory_order_acquire));
+    EXPECT_TRUE(woke_for_input);
+    EXPECT_TRUE(scheduler.wait_for_work(std::chrono::milliseconds(1)));
+}
+
+TEST(AsyncMftSchedulerTest, OutputAndWorkerWaitersAreNotifiedByTheirOwnPredicates) {
+    sr::AsyncMftScheduler<int, int> scheduler;
+    std::atomic<bool> worker_woke{ false };
+    std::atomic<bool> consumer_woke{ false };
+    std::thread worker([&] {
+        worker_woke.store(scheduler.wait_for_work(std::chrono::milliseconds(250)),
+                          std::memory_order_release);
+    });
+    std::thread consumer([&] {
+        consumer_woke.store(scheduler.wait_for_output_or_terminal(std::chrono::milliseconds(250)),
+                            std::memory_order_release);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    int output = 7;
+    ASSERT_TRUE(scheduler.publish_output(output, sizeof(output)));
+    for (int attempt = 0; attempt < 100 && !consumer_woke.load(std::memory_order_acquire); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool consumer_woke_for_output = consumer_woke.load(std::memory_order_acquire);
+    const bool worker_stayed_asleep = !worker_woke.load(std::memory_order_acquire);
+    scheduler.stop();
+    worker.join();
+    consumer.join();
+    EXPECT_TRUE(consumer_woke_for_output);
+    EXPECT_TRUE(worker_stayed_asleep);
 }
 
 TEST(FakeAsyncMftTest, DelayedOutputsResolveMultipleAcceptedInputsInOrder) {
@@ -402,12 +490,13 @@ TEST(MftAsyncEventCallbackTest, EndGetEventRearmsAndDrainCompleteStopsRearming) 
         Microsoft::WRL::Make<FakeEventGenerator>();
     ASSERT_TRUE(generator);
     ASSERT_HRESULT_SUCCEEDED(generator->initialize());
-    Scheduler scheduler;
+    auto scheduler_owner = std::make_shared<Scheduler>();
+    Scheduler& scheduler = *scheduler_owner;
     ASSERT_TRUE(scheduler.enqueue_input(31));
     Microsoft::WRL::ComPtr<sr::MftAsyncEventCallback<Scheduler>> callback =
         Microsoft::WRL::Make<sr::MftAsyncEventCallback<Scheduler>>();
     ASSERT_TRUE(callback);
-    ASSERT_HRESULT_SUCCEEDED(callback->start(generator.Get(), &scheduler));
+    ASSERT_HRESULT_SUCCEEDED(callback->start(generator.Get(), scheduler_owner));
 
     auto need_input = make_event(METransformNeedInput);
     ASSERT_TRUE(need_input);
@@ -438,6 +527,41 @@ TEST(MftAsyncEventCallbackTest, EndGetEventRearmsAndDrainCompleteStopsRearming) 
     EXPECT_EQ(scheduler.have_output_events_received(), 1u);
 
     callback->disarm();
+    generator->shutdown();
+}
+
+TEST(MftAsyncEventCallbackTest, LateEventUsesOnlyItsRetainedSchedulerGeneration) {
+    MfTestApartment apartment;
+    ASSERT_HRESULT_SUCCEEDED(apartment.initialize());
+
+    using Scheduler = sr::AsyncMftScheduler<int, int>;
+    Microsoft::WRL::ComPtr<FakeEventGenerator> generator =
+        Microsoft::WRL::Make<FakeEventGenerator>();
+    ASSERT_TRUE(generator);
+    ASSERT_HRESULT_SUCCEEDED(generator->initialize());
+    auto old_scheduler = std::make_shared<Scheduler>();
+    std::weak_ptr<Scheduler> old_generation = old_scheduler;
+    auto callback = Microsoft::WRL::Make<sr::MftAsyncEventCallback<Scheduler>>();
+    ASSERT_TRUE(callback);
+    ASSERT_HRESULT_SUCCEEDED(callback->start(generator.Get(), old_scheduler));
+    old_scheduler.reset(); // Callback ownership must keep its generation alive.
+    callback->disarm();
+
+    auto next_scheduler = std::make_shared<Scheduler>();
+    auto need_input = make_event(METransformNeedInput);
+    ASSERT_TRUE(need_input);
+    ASSERT_HRESULT_SUCCEEDED(need_input->SetUINT32(MF_EVENT_MFT_INPUT_STREAM_ID, 0));
+    ASSERT_HRESULT_SUCCEEDED(generator->queue(need_input.Get()));
+    ASSERT_TRUE(wait_until([&] {
+        auto old = old_generation.lock();
+        return old && old->need_input_events_received() == 1;
+    }));
+    EXPECT_EQ(next_scheduler->need_input_events_received(), 0u);
+    EXPECT_FALSE(old_generation.expired());
+    EXPECT_TRUE(callback->wait_quiescent(2000));
+
+    callback.Reset();
+    EXPECT_TRUE(wait_until([&] { return old_generation.expired(); }));
     generator->shutdown();
 }
 

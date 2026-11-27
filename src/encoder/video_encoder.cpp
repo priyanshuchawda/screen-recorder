@@ -34,7 +34,8 @@ static HRESULT SetUINT64Attr(IMFAttributes* a, REFGUID k, UINT64 v) {
     return a->SetUINT64(k, v);
 }
 
-static HRESULT CreateMftOutputSample(uint32_t sample_size, IMFSample** sample_out) {
+static HRESULT CreateMftOutputSample(uint32_t sample_size, uint32_t alignment,
+                                     IMFSample** sample_out) {
     if (!sample_out) return E_POINTER;
     *sample_out = nullptr;
 
@@ -44,7 +45,7 @@ static HRESULT CreateMftOutputSample(uint32_t sample_size, IMFSample** sample_ou
     HRESULT hr = MFCreateSample(&sample);
     if (FAILED(hr)) return hr;
 
-    hr = MFCreateMemoryBuffer(sample_size, &buffer);
+    hr = MFCreateAlignedMemoryBuffer(sample_size, alignment, &buffer);
     if (FAILED(hr)) return hr;
 
     hr = sample->AddBuffer(buffer.Get());
@@ -207,6 +208,18 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
         ComPtr<IMFTransform> mft;
         if (FAILED(activates[i]->ActivateObject(IID_PPV_ARGS(&mft)))) continue;
 
+        // Isolate events from a rejected candidate. A late callback retains
+        // this generation's scheduler and cannot mutate the next candidate.
+        try {
+            async_scheduler_ = std::make_shared<AsyncScheduler>(
+                kAsyncMftInputQueueCapacity, kAsyncMftMaxInFlightInputs,
+                kAsyncMftOutputQueueCapacity, kAsyncMftOutputQueueByteCapacity);
+        } catch (...) {
+            SR_LOG_ERROR(L"Could not allocate asynchronous MFT scheduler");
+            activates[i]->ShutdownObject();
+            continue;
+        }
+
         // Hardware MFTs are asynchronous by contract. Unlock them before
         // stream configuration and require both documented async interfaces.
         ComPtr<IMFAttributes> attrs;
@@ -275,6 +288,8 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
             (output_stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
         const uint32_t output_sample_size = output_stream_info.cbSize > 0
             ? output_stream_info.cbSize : (1 << 20);
+        const uint32_t output_sample_alignment = output_stream_info.cbAlignment != 0
+            ? output_stream_info.cbAlignment : MF_1_BYTE_ALIGNMENT;
 
         hr = mft->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
         if (SUCCEEDED(hr)) hr = mft->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
@@ -291,7 +306,7 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
             activates[i]->ShutdownObject();
             continue;
         }
-        hr = callback->start(events.Get(), &async_scheduler_);
+        hr = callback->start(events.Get(), async_scheduler_);
         if (FAILED(hr)) {
             SR_LOG_WARN(L"HW MFT '%s': BeginGetEvent failed (0x%08X)", name, hr);
             callback->disarm();
@@ -322,6 +337,7 @@ bool VideoEncoder::try_init_hw(const EncoderProfile& profile,
         hw_async_mft_ = true;
         mft_provides_output_samples_ = provides_output_samples;
         mft_output_sample_size_ = output_sample_size;
+        mft_output_sample_alignment_ = output_sample_alignment;
         last_output_tick_ms_ = GetTickCount64();
 
         if (!start_async_worker()) {
@@ -366,7 +382,7 @@ bool VideoEncoder::start_async_worker() {
 
 bool VideoEncoder::try_pop_async_output(AsyncEncodedOutput& output) {
     if (!hw_async_mft_) return false;
-    auto next = async_scheduler_.try_pop_output();
+    auto next = async_scheduler_->try_pop_output();
     if (!next) return false;
     output = std::move(*next);
     return true;
@@ -381,11 +397,11 @@ void VideoEncoder::async_worker_loop() {
     } com_guard{ com_initialized };
     if (FAILED(com_hr)) {
         scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
-        async_scheduler_.fail(com_hr);
+        async_scheduler_->fail(com_hr);
     }
 
     std::optional<AsyncEncodedOutput> blocked_output;
-    ULONGLONG last_progress_ms = GetTickCount64();
+    AsyncMftStallWatchdog watchdog(std::chrono::milliseconds(5'000));
 
     auto record_sample_time = [](IMFSample* sample, int64_t pts, uint32_t fps) {
         if (!sample) return E_POINTER;
@@ -401,22 +417,22 @@ void VideoEncoder::async_worker_loop() {
         HRESULT hr = GetSampleBufferCapacity(blocked_output->sample.Get(), &bytes);
         if (FAILED(hr)) {
             output_errors_.fetch_add(1, std::memory_order_relaxed);
-            async_scheduler_.fail(hr);
+            async_scheduler_->fail(hr);
             blocked_output.reset();
             return false;
         }
         if (bytes == 0) {
             output_errors_.fetch_add(1, std::memory_order_relaxed);
-            async_scheduler_.fail(E_UNEXPECTED);
+            async_scheduler_->fail(E_UNEXPECTED);
             blocked_output.reset();
             return false;
         }
-        if (async_scheduler_.publish_output(*blocked_output, bytes)) {
+        if (async_scheduler_->publish_output(*blocked_output, bytes)) {
             blocked_output.reset();
-            last_progress_ms = GetTickCount64();
+            watchdog.mark_progress(AsyncMftStallWatchdog::Clock::now());
             return true;
         }
-        if (async_scheduler_.failed()) {
+        if (async_scheduler_->failed()) {
             return false;
         }
         return true; // Keep the sample locally; output queue is applying backpressure.
@@ -424,7 +440,7 @@ void VideoEncoder::async_worker_loop() {
 
     while (SUCCEEDED(com_hr) && !async_worker_stopping_.load(std::memory_order_acquire)) {
         bool progressed = false;
-        if (async_scheduler_.failed()) break;
+        if (async_scheduler_->failed()) break;
 
         if (blocked_output) {
             const auto wait_started = std::chrono::steady_clock::now();
@@ -433,13 +449,13 @@ void VideoEncoder::async_worker_loop() {
                 DWORD output_bytes = 0;
                 const HRESULT length_hr = GetSampleBufferCapacity(blocked_output->sample.Get(), &output_bytes);
                 if (FAILED(length_hr) || output_bytes == 0) {
-                    async_scheduler_.fail(FAILED(length_hr) ? length_hr : E_UNEXPECTED);
+                    async_scheduler_->fail(FAILED(length_hr) ? length_hr : E_UNEXPECTED);
                     break;
                 }
                 const bool woke = [&] {
-                    async_scheduler_.wait_for_output_space(output_bytes);
+                    async_scheduler_->wait_for_output_space(output_bytes);
                     return !async_worker_stopping_.load(std::memory_order_acquire) &&
-                           !async_scheduler_.failed() && !async_scheduler_.stopped();
+                           !async_scheduler_->failed() && !async_scheduler_->stopped();
                 }();
                 async_event_wait_us_.record(static_cast<uint64_t>(std::chrono::duration_cast<
                     std::chrono::microseconds>(std::chrono::steady_clock::now() - wait_started).count()));
@@ -449,15 +465,15 @@ void VideoEncoder::async_worker_loop() {
             progressed = true;
         }
 
-        if (async_scheduler_.output_ready() && async_scheduler_.output_has_capacity() &&
-            async_scheduler_.take_output_event()) {
+        if (async_scheduler_->output_ready() && async_scheduler_->output_has_capacity() &&
+            async_scheduler_->take_output_event()) {
             MFT_OUTPUT_DATA_BUFFER output_buffer{};
             DWORD output_status = 0;
             if (!mft_provides_output_samples_) {
-                const HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &output_buffer.pSample);
+                const HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, mft_output_sample_alignment_, &output_buffer.pSample);
                 if (FAILED(alloc_hr)) {
                     output_errors_.fetch_add(1, std::memory_order_relaxed);
-                    async_scheduler_.fail(alloc_hr);
+                    async_scheduler_->fail(alloc_hr);
                     break;
                 }
             }
@@ -476,7 +492,7 @@ void VideoEncoder::async_worker_loop() {
                 if (output_buffer.pSample) output_buffer.pSample->Release();
                 if (output_buffer.pEvents) output_buffer.pEvents->Release();
                 output_errors_.fetch_add(1, std::memory_order_relaxed);
-                async_scheduler_.fail(MF_E_TRANSFORM_STREAM_CHANGE);
+                async_scheduler_->fail(MF_E_TRANSFORM_STREAM_CHANGE);
                 break;
             }
             if (output_hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
@@ -484,14 +500,14 @@ void VideoEncoder::async_worker_loop() {
                 if (output_buffer.pSample) output_buffer.pSample->Release();
                 if (output_buffer.pEvents) output_buffer.pEvents->Release();
                 output_errors_.fetch_add(1, std::memory_order_relaxed);
-                async_scheduler_.fail(E_UNEXPECTED); // Async MFTs signal readiness with NeedInput.
+                async_scheduler_->fail(E_UNEXPECTED); // Async MFTs signal readiness with NeedInput.
                 break;
             }
             if (FAILED(output_hr) || !output_buffer.pSample) {
                 if (output_buffer.pSample) output_buffer.pSample->Release();
                 if (output_buffer.pEvents) output_buffer.pEvents->Release();
                 output_errors_.fetch_add(1, std::memory_order_relaxed);
-                async_scheduler_.fail(FAILED(output_hr) ? output_hr : E_UNEXPECTED);
+                async_scheduler_->fail(FAILED(output_hr) ? output_hr : E_UNEXPECTED);
                 break;
             }
 
@@ -513,7 +529,7 @@ void VideoEncoder::async_worker_loop() {
                 output_timestamp_errors_.fetch_add(1, std::memory_order_relaxed);
                 SR_LOG_ERROR(L"Async encoder output timestamp did not match an accepted input (hr=0x%08X pts=%lld)",
                              output_time_hr, output_pts);
-                async_scheduler_.fail(E_UNEXPECTED);
+                async_scheduler_->fail(E_UNEXPECTED);
             } else {
                 // Match by the transform-preserved PTS when available. This
                 // keeps frame IDs correct even if an MFT reorders output;
@@ -529,21 +545,21 @@ void VideoEncoder::async_worker_loop() {
                 const HRESULT timestamp_hr = record_sample_time(encoded.sample.Get(), metadata.pts, out_fps_);
                 if (FAILED(timestamp_hr)) {
                     output_timestamp_errors_.fetch_add(1, std::memory_order_relaxed);
-                    async_scheduler_.fail(timestamp_hr);
+                    async_scheduler_->fail(timestamp_hr);
                 }
                 pending_input_count_.fetch_sub(1, std::memory_order_relaxed);
-                async_scheduler_.mark_output_produced();
+                async_scheduler_->mark_output_produced();
             }
-            if (async_scheduler_.failed()) break;
+            if (async_scheduler_->failed()) break;
             output_samples_produced_.fetch_add(1, std::memory_order_relaxed);
             last_output_tick_ms_ = GetTickCount64();
             blocked_output.emplace(std::move(encoded));
-            if (!publish_blocked_output() || async_scheduler_.failed()) break;
+            if (!publish_blocked_output() || async_scheduler_->failed()) break;
             progressed = true;
         }
 
-        if (async_scheduler_.input_ready()) {
-            auto request = async_scheduler_.take_input_request();
+        if (async_scheduler_->input_ready()) {
+            auto request = async_scheduler_->take_input_request();
             if (request) {
                 DeferredInput input = std::move(request->input);
                 const auto residence_us = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -571,7 +587,7 @@ void VideoEncoder::async_worker_loop() {
                     uint64_t high = pending_input_high_watermark_.load(std::memory_order_relaxed);
                     while (pending > high && !pending_input_high_watermark_.compare_exchange_weak(
                                high, pending, std::memory_order_relaxed)) {}
-                    async_scheduler_.mark_input_accepted();
+                    async_scheduler_->mark_input_accepted();
                     try {
                         async_pending_frames_.push_back({ input.frame_id, input.pts, input.synthetic,
                                                           std::chrono::steady_clock::now() });
@@ -581,48 +597,48 @@ void VideoEncoder::async_worker_loop() {
                         input_accounting_errors_.fetch_add(1, std::memory_order_relaxed);
                         pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
                         pending_input_count_.fetch_sub(1, std::memory_order_relaxed);
-                        async_scheduler_.fail(E_OUTOFMEMORY);
+                        async_scheduler_->fail(E_OUTOFMEMORY);
                         break;
                     }
-                    last_progress_ms = GetTickCount64();
+                    watchdog.mark_progress(AsyncMftStallWatchdog::Clock::now());
                 } else if (input_hr == MF_E_NOTACCEPTING) {
                     input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
                     if (!input.was_deferred) {
                         input.was_deferred = true;
                         input_samples_deferred_without_event_.fetch_add(1, std::memory_order_relaxed);
                     }
-                    if (!async_scheduler_.retry_input_front(std::move(input))) {
+                    if (!async_scheduler_->retry_input_front(std::move(input))) {
                         input_accounting_errors_.fetch_add(1, std::memory_order_relaxed);
-                        async_scheduler_.fail(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW));
+                        async_scheduler_->fail(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW));
                     }
                 } else {
                     input_errors_.fetch_add(1, std::memory_order_relaxed);
                     pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
-                    async_scheduler_.fail(input_hr);
+                    async_scheduler_->fail(input_hr);
                 }
                 progressed = true;
             }
         }
 
-        if (async_scheduler_.take_drain_command()) {
+        if (async_scheduler_->take_drain_command()) {
             HRESULT drain_hr = mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
             if (SUCCEEDED(drain_hr)) drain_hr = mft_->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
             if (FAILED(drain_hr)) {
                 scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
-                async_scheduler_.fail(drain_hr);
+                async_scheduler_->fail(drain_hr);
             }
             progressed = true;
         }
 
-        if (async_scheduler_.drain_complete() && async_scheduler_.output_events_pending() == 0 &&
+        if (async_scheduler_->drain_complete() && async_scheduler_->output_events_pending() == 0 &&
             !blocked_output && async_pending_frames_.empty()) {
-            async_scheduler_.signal_worker_drained();
+            async_scheduler_->signal_worker_drained();
             break;
         }
-        if (async_scheduler_.drain_complete() && async_scheduler_.output_events_pending() == 0 &&
+        if (async_scheduler_->drain_complete() && async_scheduler_->output_events_pending() == 0 &&
             !blocked_output && !async_pending_frames_.empty()) {
             input_accounting_errors_.fetch_add(1, std::memory_order_relaxed);
-            async_scheduler_.fail(E_FAIL);
+            async_scheduler_->fail(E_FAIL);
             break;
         }
         if (progressed) continue;
@@ -630,42 +646,39 @@ void VideoEncoder::async_worker_loop() {
         const auto wait_started = std::chrono::steady_clock::now();
         const bool has_pending_work =
             pending_input_count_.load(std::memory_order_relaxed) != 0 ||
-            async_scheduler_.input_count() != 0;
+            async_scheduler_->input_count() != 0;
         bool woke = true;
-        if (has_pending_work) {
-            constexpr ULONGLONG kStallTimeoutMs = 5'000;
-            const ULONGLONG elapsed_ms = GetTickCount64() - last_progress_ms;
-            const ULONGLONG remaining_ms = elapsed_ms >= kStallTimeoutMs
-                ? 0 : kStallTimeoutMs - elapsed_ms;
-            woke = async_scheduler_.wait_for_work(
-                std::chrono::milliseconds(remaining_ms));
+        const auto watchdog_wait = watchdog.until_stalled(
+            has_pending_work, AsyncMftStallWatchdog::Clock::now());
+        if (watchdog_wait) {
+            woke = async_scheduler_->wait_for_work(*watchdog_wait);
         } else {
-            async_scheduler_.wait_for_work();
+            async_scheduler_->wait_for_work();
         }
         async_event_wait_us_.record(static_cast<uint64_t>(std::chrono::duration_cast<
             std::chrono::microseconds>(std::chrono::steady_clock::now() - wait_started).count()));
         if (woke) async_worker_wakeups_.fetch_add(1, std::memory_order_relaxed);
-        if (!woke && has_pending_work) {
+        if (!woke && watchdog_wait) {
             scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
-            async_scheduler_.fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+            async_scheduler_->fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
         }
     }
 
-    if (async_scheduler_.failed()) {
+    if (async_scheduler_->failed()) {
         const uint64_t abandoned = static_cast<uint64_t>(async_pending_frames_.size());
         if (abandoned != 0) {
             pending_inputs_abandoned_.fetch_add(abandoned, std::memory_order_relaxed);
             pending_input_count_.fetch_sub(abandoned, std::memory_order_relaxed);
             async_pending_frames_.clear();
         }
-        const uint64_t queued = static_cast<uint64_t>(async_scheduler_.abandon_queued_inputs());
+        const uint64_t queued = static_cast<uint64_t>(async_scheduler_->abandon_queued_inputs());
         if (queued != 0) pending_inputs_abandoned_.fetch_add(queued, std::memory_order_relaxed);
         if (blocked_output) {
             output_errors_.fetch_add(1, std::memory_order_relaxed);
             blocked_output.reset();
         }
     }
-    async_scheduler_.signal_worker_drained();
+    async_scheduler_->signal_worker_drained();
 }
 
 // ---------------------------------------------------------------------------
@@ -724,9 +737,12 @@ bool VideoEncoder::try_init_sw(const EncoderProfile& profile,
         if (SUCCEEDED(hr)) {
             mft_provides_output_samples_ = (output_stream_info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
             mft_output_sample_size_ = output_stream_info.cbSize > 0 ? output_stream_info.cbSize : (1 << 20);
+            mft_output_sample_alignment_ = output_stream_info.cbAlignment != 0
+                ? output_stream_info.cbAlignment : MF_1_BYTE_ALIGNMENT;
         } else {
             mft_provides_output_samples_ = true;
             mft_output_sample_size_ = 1 << 20;
+            mft_output_sample_alignment_ = MF_1_BYTE_ALIGNMENT;
         }
 
         if (width == 1280) {
@@ -757,6 +773,15 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
                                ID3D11DeviceContext* d3d_context)
 {
     shutdown();
+    try {
+        // Never reset a scheduler that a timed-out callback may still own.
+        async_scheduler_ = std::make_shared<AsyncScheduler>(
+            kAsyncMftInputQueueCapacity, kAsyncMftMaxInFlightInputs,
+            kAsyncMftOutputQueueCapacity, kAsyncMftOutputQueueByteCapacity);
+    } catch (...) {
+        SR_LOG_ERROR(L"Could not allocate asynchronous encoder scheduler");
+        return false;
+    }
     input_samples_offered_.store(0, std::memory_order_relaxed);
     input_samples_accepted_.store(0, std::memory_order_relaxed);
     input_samples_not_accepted_.store(0, std::memory_order_relaxed);
@@ -774,7 +799,6 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     scheduler_errors_.store(0, std::memory_order_relaxed);
     input_accounting_errors_.store(0, std::memory_order_relaxed);
     pending_video_pts_.clear();
-    async_scheduler_.reset();
     async_pending_frames_.clear();
     async_worker_wakeups_.store(0, std::memory_order_relaxed);
     next_frame_id_.store(0, std::memory_order_relaxed);
@@ -896,7 +920,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     }
     const uint64_t frame_id = next_frame_id_.fetch_add(1, std::memory_order_relaxed) + 1;
     input_samples_offered_.fetch_add(1, std::memory_order_relaxed);
-    if (hw_async_mft_ && async_scheduler_.failed()) {
+    if (hw_async_mft_ && async_scheduler_->failed()) {
         input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
         pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
         return false;
@@ -1055,7 +1079,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         queued.synthetic = synthetic;
         queued.force_keyframe = force_keyframe;
         queued.queued_at = std::chrono::steady_clock::now();
-        if (!async_scheduler_.enqueue_input(std::move(queued))) {
+        if (!async_scheduler_->enqueue_input(std::move(queued))) {
             input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
             pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
             SR_LOG_ERROR(L"Async encoder input queue is full or closed; frame %llu was not accepted",
@@ -1119,7 +1143,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         DWORD status = 0;
 
         if (!mft_provides_output_samples_) {
-            HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
+            HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, mft_output_sample_alignment_, &out_buf.pSample);
             if (FAILED(alloc_hr)) {
                 SR_LOG_ERROR(L"Failed to allocate MFT output sample: 0x%08X", alloc_hr);
                 output_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -1262,7 +1286,7 @@ bool VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) 
 // ---------------------------------------------------------------------------
 // VideoEncoder::flush
 // ---------------------------------------------------------------------------
-bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
+bool VideoEncoder::flush(std::vector<AsyncEncodedOutput>& out_samples) {
     if (!initialized_ || !mft_) return false;
     if (hw_async_mft_) return async_drain_to(out_samples, 10'000);
 
@@ -1285,7 +1309,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
         DWORD status = 0;
 
         if (!mft_provides_output_samples_) {
-            HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
+            HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, mft_output_sample_alignment_, &out_buf.pSample);
             if (FAILED(alloc_hr)) {
                 SR_LOG_ERROR(L"Failed to allocate MFT flush output sample: 0x%08X", alloc_hr);
                 output_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -1308,9 +1332,10 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
         }
         if (out_buf.pSample) {
             if (!stamp_output_sample(out_buf.pSample, 0)) drain_ok = false;
-            ComPtr<IMFSample> s;
-            s.Attach(out_buf.pSample);
-            out_samples.push_back(std::move(s));
+            AsyncEncodedOutput output{};
+            output.sample.Attach(out_buf.pSample);
+            output.sample->GetSampleTime(&output.pts);
+            out_samples.push_back(std::move(output));
         }
         if (out_buf.pEvents) out_buf.pEvents->Release();
         if (!out_buf.pSample) {
@@ -1327,10 +1352,10 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
         pending_input_count_.load(std::memory_order_relaxed));
 }
 
-bool VideoEncoder::async_drain_to(std::vector<ComPtr<IMFSample>>& out_samples, DWORD timeout_ms) {
-    const size_t reserve_count = async_scheduler_.input_count() +
+bool VideoEncoder::async_drain_to(std::vector<AsyncEncodedOutput>& out_samples, DWORD timeout_ms) {
+    const size_t reserve_count = async_scheduler_->input_count() +
         static_cast<size_t>(pending_input_count_.load(std::memory_order_relaxed)) +
-        async_scheduler_.output_count() + 16;
+        async_scheduler_->output_count() + 16;
     try {
         if (reserve_count > out_samples.max_size() - out_samples.size()) return false;
         out_samples.reserve(out_samples.size() + reserve_count);
@@ -1339,19 +1364,19 @@ bool VideoEncoder::async_drain_to(std::vector<ComPtr<IMFSample>>& out_samples, D
         return false;
     }
 
-    async_scheduler_.request_drain();
+    async_scheduler_->request_drain();
     const ULONGLONG deadline = GetTickCount64() + timeout_ms;
     bool timed_out = false;
     while (GetTickCount64() < deadline) {
         AsyncEncodedOutput encoded;
         while (try_pop_async_output(encoded)) {
-            out_samples.push_back(std::move(encoded.sample));
+            out_samples.push_back(std::move(encoded));
         }
 
-        if (async_scheduler_.failed()) break;
-        if (async_scheduler_.worker_drained() && async_scheduler_.drain_complete() &&
-            async_scheduler_.output_events_pending() == 0 &&
-            async_scheduler_.input_count() == 0 &&
+        if (async_scheduler_->failed()) break;
+        if (async_scheduler_->worker_drained() && async_scheduler_->drain_complete() &&
+            async_scheduler_->output_events_pending() == 0 &&
+            async_scheduler_->input_count() == 0 &&
             pending_input_count_.load(std::memory_order_relaxed) == 0) {
             break;
         }
@@ -1359,40 +1384,43 @@ bool VideoEncoder::async_drain_to(std::vector<ComPtr<IMFSample>>& out_samples, D
         const ULONGLONG now_ms = GetTickCount64();
         if (now_ms >= deadline) break;
         const DWORD remaining = static_cast<DWORD>(deadline - now_ms);
-        async_scheduler_.wait_for_output_or_terminal(std::chrono::milliseconds(remaining));
+        async_scheduler_->wait_for_output_or_terminal(std::chrono::milliseconds(remaining));
     }
 
-    if (!async_scheduler_.drain_complete() && !async_scheduler_.failed()) {
+    if (!async_scheduler_->drain_complete() && !async_scheduler_->failed()) {
         timed_out = GetTickCount64() >= deadline;
         if (timed_out) {
             scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
-            async_scheduler_.fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+            async_scheduler_->fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
         }
     }
-    if (async_scheduler_.failed()) {
-        const uint64_t queued = static_cast<uint64_t>(async_scheduler_.abandon_queued_inputs());
+    if (async_scheduler_->failed()) {
+        const uint64_t queued = static_cast<uint64_t>(async_scheduler_->abandon_queued_inputs());
         if (queued != 0) pending_inputs_abandoned_.fetch_add(queued, std::memory_order_relaxed);
     }
 
+    // The deadline above bounds event waits, not a driver call already in
+    // progress. A vendor driver stuck inside ProcessInput/ProcessOutput cannot
+    // be safely force-killed here; do not detach a worker that owns this MFT.
     if (async_worker_.joinable()) async_worker_.join();
     AsyncEncodedOutput encoded;
     while (try_pop_async_output(encoded)) {
-        out_samples.push_back(std::move(encoded.sample));
+        out_samples.push_back(std::move(encoded));
     }
     if (hw_event_callback_ && !hw_event_callback_->wait_quiescent(3000)) {
         scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
-        async_scheduler_.fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+        async_scheduler_->fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
     }
 
     const uint64_t pending = pending_input_count_.load(std::memory_order_relaxed);
-    const bool drain_ok = !async_scheduler_.failed() && async_scheduler_.input_count() == 0 &&
-        async_scheduler_.output_events_pending() == 0 && pending == 0 && async_pending_frames_.empty();
+    const bool drain_ok = !async_scheduler_->failed() && async_scheduler_->input_count() == 0 &&
+        async_scheduler_->output_events_pending() == 0 && pending == 0 && async_pending_frames_.empty();
     if (!drain_ok && pending != 0) {
         pending_inputs_abandoned_.fetch_add(pending, std::memory_order_relaxed);
         pending_input_count_.store(0, std::memory_order_relaxed);
         async_pending_frames_.clear();
     }
-    return encoder_drain_succeeded(async_scheduler_.drain_complete(), timed_out, drain_ok,
+    return encoder_drain_succeeded(async_scheduler_->drain_complete(), timed_out, drain_ok,
                                    pending_input_count_.load(std::memory_order_relaxed));
 }
 
@@ -1433,11 +1461,14 @@ bool VideoEncoder::ensure_staging_texture(uint32_t width, uint32_t height) {
 // ---------------------------------------------------------------------------
 void VideoEncoder::shutdown() {
     async_worker_stopping_.store(true, std::memory_order_release);
-    async_scheduler_.stop();
+    async_scheduler_->stop();
     if (hw_event_callback_) hw_event_callback_->disarm();
 
     // Wait until the sole owner has stopped calling IMFTransform before
     // shutting down the MFT or releasing its event generator.
+    // Cooperative waits are woken below, but a driver call already in
+    // progress can still make this join wait indefinitely. Process isolation
+    // would be required to put a hard bound on a wedged vendor driver.
     if (async_worker_.joinable()) async_worker_.join();
 
     if (hw_shutdown_) {
@@ -1454,7 +1485,7 @@ void VideoEncoder::shutdown() {
         SR_LOG_ERROR(L"Timed out waiting for the asynchronous MFT event callback to stop");
     }
 
-    const uint64_t queued_inputs = static_cast<uint64_t>(async_scheduler_.abandon_queued_inputs());
+    const uint64_t queued_inputs = static_cast<uint64_t>(async_scheduler_->abandon_queued_inputs());
     if (queued_inputs != 0) pending_inputs_abandoned_.fetch_add(queued_inputs, std::memory_order_relaxed);
     if (hw_async_mft_) {
         const uint64_t pending_inputs = pending_input_count_.exchange(0, std::memory_order_relaxed);
@@ -1463,10 +1494,11 @@ void VideoEncoder::shutdown() {
         abandon_pending_encoder_inputs(pending_video_pts_, pending_input_count_, pending_inputs_abandoned_);
     }
     async_pending_frames_.clear();
-    if (async_scheduler_.output_count() != 0) {
-        output_errors_.fetch_add(async_scheduler_.output_count(), std::memory_order_relaxed);
+    const std::size_t discarded_outputs = async_scheduler_->discard_outputs();
+    if (discarded_outputs != 0) {
+        output_errors_.fetch_add(discarded_outputs, std::memory_order_relaxed);
         SR_LOG_ERROR(L"Encoder shutdown discarded %zu encoded packet(s) that were not drained to the muxer",
-                     async_scheduler_.output_count());
+                     discarded_outputs);
     }
 
     hw_event_callback_.Reset();

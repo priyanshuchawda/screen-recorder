@@ -501,7 +501,7 @@ bool SessionController::stop() {
     if (was_recording) {
         diagnostics_stage_.store(DiagnosticsStage::FlushingEncoder, std::memory_order_relaxed);
         diagnostics_.write_event(L"event=stop_stage stage=encoder_flush state=begin");
-        std::vector<ComPtr<IMFSample>> leftover;
+        std::vector<VideoEncoder::AsyncEncodedOutput> leftover;
         const auto drain_started = std::chrono::steady_clock::now();
         encoder_drain_ok = encoder_->flush(leftover);
         encoder_drain_ms = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -538,16 +538,22 @@ bool SessionController::stop() {
                                  L" pending_inputs=" + std::to_wstring(encoder_pending_inputs) +
                                  L" elapsed_ms=" + std::to_wstring(encoder_drain_ms));
         SR_LOG_INFO(L"Encoder flush produced %zu samples", leftover.size());
-        for (auto& s : leftover) {
+        for (auto& output : leftover) {
             const auto mux_write_started = std::chrono::steady_clock::now();
-            if (muxer_->write_video(s.Get())) {
+            if (muxer_->write_video(output.sample.Get())) {
                 frames_encoded_.fetch_add(1, std::memory_order_relaxed);
                 telemetry_.on_frame_encoded();
+                if (output.synthetic) telemetry_.on_duplicate_inserted();
             } else {
                 const uint32_t failures = video_write_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (failures == 1 || (failures % 120) == 0) {
-                    SR_LOG_ERROR(L"Muxer rejected encoded video sample (total failures=%u)", failures);
+                    SR_LOG_ERROR(L"Muxer rejected drained encoded video sample (frame_id=%llu total failures=%u)",
+                                 static_cast<unsigned long long>(output.frame_id), failures);
                 }
+                diagnostics_.write_event(L"event=encoded_video_write_failed frame_id=" +
+                                         std::to_wstring(output.frame_id) +
+                                         L" synthetic=" + std::to_wstring(output.synthetic ? 1 : 0) +
+                                         L" drain=1");
                 report_recording_loss(L"video_mux");
             }
             const auto mux_write_us = std::chrono::duration_cast<std::chrono::microseconds>(

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 
 namespace sr {
@@ -91,10 +92,10 @@ public:
         return FAILED(hr) ? hr : arm_hr;
     }
 
-    HRESULT start(IMFMediaEventGenerator* generator, Scheduler* scheduler) {
+    HRESULT start(IMFMediaEventGenerator* generator, std::shared_ptr<Scheduler> scheduler) {
         if (!generator || !scheduler) return E_POINTER;
         generator_ = generator;
-        scheduler_ = scheduler;
+        scheduler_ = std::move(scheduler);
         closing_.store(false, std::memory_order_release);
         return begin_get_event();
     }
@@ -134,7 +135,9 @@ private:
     }
 
     Microsoft::WRL::ComPtr<IMFMediaEventGenerator> generator_;
-    Scheduler* scheduler_ = nullptr;
+    // A late callback can outlive its encoder candidate/session. Keep that
+    // generation's scheduler alive until the MFT releases this callback.
+    std::shared_ptr<Scheduler> scheduler_;
     std::atomic<bool> closing_{ true };
     std::atomic<bool> pending_request_{ false };
     std::atomic<uint32_t> active_callbacks_{ 0 };
