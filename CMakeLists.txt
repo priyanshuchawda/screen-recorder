@@ -1,6 +1,19 @@
 cmake_minimum_required(VERSION 3.20)
 project(ScreenRecorder VERSION 0.3.17 LANGUAGES CXX)
 
+# Embed the source revision in recording diagnostics so hardware results can
+# be tied to the exact candidate. Fall back cleanly for source archives.
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE SCREEN_RECORDER_BUILD_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT SCREEN_RECORDER_BUILD_COMMIT)
+    set(SCREEN_RECORDER_BUILD_COMMIT "unknown")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -67,6 +80,9 @@ set(SCREEN_RECORDER_CORE_SOURCES
 
 add_library(screen_recorder_core STATIC ${SCREEN_RECORDER_CORE_SOURCES})
 target_include_directories(screen_recorder_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(screen_recorder_core PRIVATE
+    SR_BUILD_COMMIT=L"${SCREEN_RECORDER_BUILD_COMMIT}"
+)
 target_link_libraries(screen_recorder_core PUBLIC ${WIN_LIBS})
 
 add_executable(ScreenRecorder WIN32

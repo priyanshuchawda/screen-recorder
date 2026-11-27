@@ -20,6 +20,7 @@ TEST(SessionDiagnosticsTest, PathForOutputAppendsWhenSuffixIsDifferent) {
 
 TEST(SessionDiagnosticsTest, StartSummaryIncludesHardwareProfileAndPowerState) {
     sr::SessionDiagnostics::StartInfo info;
+    info.build_commit = L"abc123def456";
     info.output_path = L"C:\\Recordings\\ScreenRec.mp4";
     info.adapter_name = L"Intel(R) Iris(R) Xe Graphics";
     info.probed_encoder_name = L"Intel Quick Sync Video H.264 Encoder MFT";
@@ -34,6 +35,7 @@ TEST(SessionDiagnosticsTest, StartSummaryIncludesHardwareProfileAndPowerState) {
     const std::wstring summary = sr::SessionDiagnostics::format_start_summary(info);
 
     EXPECT_NE(summary.find(L"output=C:\\Recordings\\ScreenRec.mp4"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"build_commit=abc123def456"), std::wstring::npos);
     EXPECT_NE(summary.find(L"adapter=Intel(R) Iris(R) Xe Graphics"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_mode=HW"), std::wstring::npos);
     EXPECT_NE(summary.find(L"power=Battery"), std::wstring::npos);
