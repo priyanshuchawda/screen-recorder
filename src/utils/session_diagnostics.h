@@ -36,6 +36,8 @@ public:
         uint32_t audio_packets = 0;
         bool encoder_drain_complete = true;
         uint64_t encoder_pending_inputs = 0;
+        uint64_t encoder_deferred_inputs_pending = 0;
+        uint64_t encoder_deferred_inputs_high_watermark = 0;
         uint64_t encoder_inputs_offered = 0;
         uint64_t encoder_inputs_accepted = 0;
         uint64_t encoder_outputs_produced = 0;

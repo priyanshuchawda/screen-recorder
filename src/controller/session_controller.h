@@ -242,7 +242,7 @@ private:
 
     void notify_status(const std::wstring& msg);
     void notify_error (const std::wstring& msg);
-    void report_output_failure(const wchar_t* stream);
+    void report_recording_loss(const wchar_t* stage);
 };
 
 } // namespace sr

@@ -467,7 +467,7 @@ bool SessionController::stop() {
                 if (failures == 1 || (failures % 120) == 0) {
                     SR_LOG_ERROR(L"Muxer rejected encoded video sample (total failures=%u)", failures);
                 }
-                report_output_failure(L"video");
+                report_recording_loss(L"video_mux");
             }
             const auto mux_write_us = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - mux_write_started).count();
@@ -518,6 +518,8 @@ bool SessionController::stop() {
     diagnostics_stop.audio_packets = audio_written_.load();
     diagnostics_stop.encoder_drain_complete = encoder_drain_ok;
     diagnostics_stop.encoder_pending_inputs = encoder_pending_inputs;
+    diagnostics_stop.encoder_deferred_inputs_pending = encoder_final_state.deferred_inputs_pending;
+    diagnostics_stop.encoder_deferred_inputs_high_watermark = encoder_final_state.deferred_inputs_high_watermark;
     diagnostics_stop.encoder_inputs_offered = encoder_final_state.input_samples_offered;
     diagnostics_stop.encoder_inputs_accepted = encoder_final_state.input_samples_accepted;
     diagnostics_stop.encoder_outputs_produced = encoder_final_state.output_samples_produced;
@@ -747,7 +749,9 @@ void SessionController::diagnostics_monitor_loop() {
             L"video_samples_written=%u video_write_fps_milli=%u duplicate_video_delta=%u "
             L"mft_input_offered=%llu mft_input_accepted=%llu mft_input_not_accepted=%llu "
             L"mft_input_deferred_no_event=%llu mft_input_errors=%llu mft_output_samples=%llu mft_output_waits=%llu "
-            L"mft_input_pending=%llu mft_input_pending_high_watermark=%llu mft_input_retried=%llu mft_output_timestamp_errors=%llu "
+            L"mft_input_pending=%llu mft_input_pending_high_watermark=%llu "
+            L"mft_deferred_pending=%llu mft_deferred_high_watermark=%llu "
+            L"mft_input_retried=%llu mft_output_timestamp_errors=%llu "
             L"encode_timing_samples=%llu encode_avg_us=%llu encode_max_us=%llu encode_p50_us=%llu encode_p95_us=%llu encode_p99_us=%llu "
             L"video_mux_samples=%llu video_mux_avg_us=%llu video_mux_max_us=%llu video_mux_p50_us=%llu video_mux_p95_us=%llu video_mux_p99_us=%llu "
             L"audio_mux_samples=%llu audio_mux_avg_us=%llu audio_mux_max_us=%llu audio_mux_p50_us=%llu audio_mux_p95_us=%llu audio_mux_p99_us=%llu "
@@ -792,6 +796,8 @@ void SessionController::diagnostics_monitor_loop() {
             static_cast<unsigned long long>(encoder_metrics.output_waits_for_input),
             static_cast<unsigned long long>(encoder_metrics.pending_inputs),
             static_cast<unsigned long long>(encoder_metrics.pending_inputs_high_watermark),
+            static_cast<unsigned long long>(encoder_metrics.deferred_inputs_pending),
+            static_cast<unsigned long long>(encoder_metrics.deferred_inputs_high_watermark),
             static_cast<unsigned long long>(encoder_metrics.input_samples_retried),
             static_cast<unsigned long long>(encoder_metrics.output_timestamp_errors),
             static_cast<unsigned long long>(encode_timing.samples),
@@ -1013,11 +1019,18 @@ void SessionController::encode_loop() {
     auto encode_frame_timed = [this](ID3D11Texture2D* texture, int64_t pts,
                                      std::shared_ptr<TextureSurfaceLease> surface_lease,
                                      ComPtr<IMFSample>& output) {
+        const uint64_t abandoned_before = encoder_->diagnostics_snapshot().pending_inputs_abandoned;
         const auto started = std::chrono::steady_clock::now();
         const bool produced = encoder_->encode_frame(texture, pts, output, std::move(surface_lease));
         const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - started).count();
         video_encode_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
+        const uint64_t abandoned_after = encoder_->diagnostics_snapshot().pending_inputs_abandoned;
+        if (abandoned_after > abandoned_before) {
+            diagnostics_.write_event(L"event=encoder_inputs_abandoned count=" +
+                std::to_wstring(abandoned_after - abandoned_before));
+            report_recording_loss(L"encoder_input");
+        }
         return produced;
     };
     auto write_video_timed = [this](IMFSample* sample) {
@@ -1096,7 +1109,7 @@ void SessionController::encode_loop() {
             telemetry_.on_audio_written();
             return true;
         }
-        report_output_failure(L"audio");
+        report_recording_loss(L"audio_mux");
         return false;
     };
 
@@ -1151,7 +1164,7 @@ void SessionController::encode_loop() {
                         if (failures == 1 || (failures % 120) == 0) {
                             SR_LOG_ERROR(L"Muxer rejected duplicate video sample (total failures=%u)", failures);
                         }
-                        report_output_failure(L"video");
+                        report_recording_loss(L"video_mux");
                     }
                 }
             }
@@ -1173,7 +1186,7 @@ void SessionController::encode_loop() {
                     if (failures == 1 || (failures % 120) == 0) {
                         SR_LOG_ERROR(L"Muxer rejected video sample (total failures=%u)", failures);
                     }
-                    report_output_failure(L"video");
+                    report_recording_loss(L"video_mux");
                 }
             }
 
@@ -1201,7 +1214,7 @@ void SessionController::encode_loop() {
                         telemetry_.on_duplicate_inserted();
                     } else {
                         video_write_failures_.fetch_add(1, std::memory_order_relaxed);
-                        report_output_failure(L"video");
+                        report_recording_loss(L"video_mux");
                     }
                 }
                 last_paced_pts = paced_pts;
@@ -1282,10 +1295,10 @@ void SessionController::notify_error(const std::wstring& msg) {
     if (on_error_) on_error_(msg);
 }
 
-void SessionController::report_output_failure(const wchar_t* stream) {
+void SessionController::report_recording_loss(const wchar_t* stage) {
     if (output_failure_reported_.exchange(true, std::memory_order_acq_rel)) return;
-    diagnostics_.write_event(L"event=mux_write_failed stream=" + std::wstring(stream));
-    notify_error(L"Recording could not write media data. Stopping; check the saved recording and diagnostics.");
+    diagnostics_.write_event(L"event=recording_loss stage=" + std::wstring(stage));
+    notify_error(L"Recording detected unrecoverable media loss. Stopping; review the saved file and diagnostics.");
     if ((machine_.is_recording() || machine_.is_paused()) && on_stop_requested_) {
         on_stop_requested_();
     }

@@ -42,6 +42,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u "
                  L"audio_write_failures=%u audio_source_start_failures=%u audio_packets=%u "
                  L"encoder_drain_complete=%u encoder_pending_inputs=%llu "
+                 L"encoder_deferred_inputs_pending=%llu encoder_deferred_inputs_high_watermark=%llu "
                  L"encoder_inputs_offered=%llu encoder_inputs_accepted=%llu encoder_outputs_produced=%llu "
                  L"encoder_drain_samples=%llu "
                  L"encoder_inputs_not_accepted=%llu encoder_input_errors=%llu "
@@ -63,6 +64,8 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  info.audio_packets,
                  info.encoder_drain_complete ? 1u : 0u,
                  static_cast<unsigned long long>(info.encoder_pending_inputs),
+                 static_cast<unsigned long long>(info.encoder_deferred_inputs_pending),
+                 static_cast<unsigned long long>(info.encoder_deferred_inputs_high_watermark),
                  static_cast<unsigned long long>(info.encoder_inputs_offered),
                  static_cast<unsigned long long>(info.encoder_inputs_accepted),
                  static_cast<unsigned long long>(info.encoder_outputs_produced),

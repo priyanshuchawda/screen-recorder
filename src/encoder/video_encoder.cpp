@@ -125,6 +125,70 @@ bool VideoEncoder::pump_hw_events(uint32_t wait_ms) {
     }
 }
 
+DeferredSubmitSummary VideoEncoder::submit_deferred_inputs() {
+    auto summary = submit_ready_inputs(
+        deferred_inputs_, hw_need_input_events_, [this](DeferredInput& input) {
+            const HRESULT hr = mft_->ProcessInput(0, input.sample.Get(), 0);
+            if (SUCCEEDED(hr)) {
+                input_samples_accepted_.fetch_add(1, std::memory_order_relaxed);
+                pending_video_pts_.push_back(input.pts);
+                const uint64_t pending = pending_input_count_.fetch_add(1, std::memory_order_relaxed) + 1;
+                uint64_t high = pending_input_high_watermark_.load(std::memory_order_relaxed);
+                while (pending > high && !pending_input_high_watermark_.compare_exchange_weak(
+                           high, pending, std::memory_order_relaxed)) {}
+                if (input.was_deferred) {
+                    input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                }
+                return DeferredSubmitResult::Accepted;
+            }
+            if (hr == MF_E_NOTACCEPTING) {
+                input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
+                SR_LOG_WARN(L"Async encoder returned MF_E_NOTACCEPTING after a need-input event; retaining sample for retry");
+                return DeferredSubmitResult::NotAccepted;
+            }
+
+            input_errors_.fetch_add(1, std::memory_order_relaxed);
+            SR_LOG_ERROR(L"ProcessInput for deferred frame failed: 0x%08X", hr);
+            return DeferredSubmitResult::Failed;
+        });
+
+    if (summary.failed != 0) {
+        // A fatal ProcessInput error cannot be repaired by waiting for another
+        // event. Drop only that sample, account it, and keep later inputs queued.
+        deferred_inputs_.pop_front();
+        pending_inputs_abandoned_.fetch_add(summary.failed, std::memory_order_relaxed);
+    }
+    update_deferred_input_metrics();
+    return summary;
+}
+
+bool VideoEncoder::remove_deferred_input(IMFSample* sample) {
+    if (!sample) return false;
+    const bool removed = deferred_inputs_.erase_first([sample](const DeferredInput& pending) {
+        return pending.sample.Get() == sample;
+    });
+    if (removed) update_deferred_input_metrics();
+    return removed;
+}
+
+uint64_t VideoEncoder::abandon_deferred_inputs() noexcept {
+    const uint64_t count = static_cast<uint64_t>(deferred_inputs_.size());
+    deferred_inputs_.clear();
+    if (count != 0) {
+        pending_inputs_abandoned_.fetch_add(count, std::memory_order_relaxed);
+    }
+    update_deferred_input_metrics();
+    return count;
+}
+
+void VideoEncoder::update_deferred_input_metrics() noexcept {
+    const uint64_t pending = static_cast<uint64_t>(deferred_inputs_.size());
+    deferred_input_count_.store(pending, std::memory_order_relaxed);
+    uint64_t high = deferred_input_high_watermark_.load(std::memory_order_relaxed);
+    while (pending > high && !deferred_input_high_watermark_.compare_exchange_weak(
+               high, pending, std::memory_order_relaxed)) {}
+}
+
 // Configure output H.264 media type on the MFT
 static HRESULT ConfigureOutputType(IMFTransform* mft,
                                    uint32_t w, uint32_t h,
@@ -425,6 +489,9 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     input_samples_retried_.store(0, std::memory_order_relaxed);
     output_timestamp_errors_.store(0, std::memory_order_relaxed);
     pending_video_pts_.clear();
+    deferred_inputs_.reset();
+    deferred_input_count_.store(0, std::memory_order_relaxed);
+    deferred_input_high_watermark_.store(0, std::memory_order_relaxed);
 
     d3d_device_  = d3d_device;
     d3d_context_ = d3d_context;
@@ -533,7 +600,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     if (!initialized_ || !mft_) return false;
     input_samples_offered_.fetch_add(1, std::memory_order_relaxed);
 
-    auto recover_stalled_hardware = [&]() {
+    auto recover_stalled_hardware = [&](IMFSample* retry_sample = nullptr) {
         constexpr ULONGLONG kOutputStallLimitMs = 5'000;
         if (!hw_path_ || switched_to_sw_due_to_hw_errors_ ||
             last_output_tick_ms_ == 0 ||
@@ -542,6 +609,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
         SR_LOG_ERROR(L"Hardware encoder produced no output for %llu ms; switching to software fallback",
                      GetTickCount64() - last_output_tick_ms_);
+        if (retry_sample) remove_deferred_input(retry_sample);
         return switch_to_software_fallback();
     };
 
@@ -674,19 +742,38 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
     }
 
+    bool current_input_abandoned = false;
     if (hw_async_mft_) {
         pump_hw_events(0);
         if (hw_need_input_events_ == 0 && hw_have_output_events_ == 0) {
             pump_hw_events(5);
         }
-    }
-
-    // Feed to MFT. Async hardware MFTs must request input first.
-    if (!hw_async_mft_ || hw_need_input_events_ > 0) {
-        hr = mft_->ProcessInput(0, sample.Get(), 0);
-        if (SUCCEEDED(hr) && hw_async_mft_ && hw_need_input_events_ > 0) {
-            --hw_need_input_events_;
+        // Service older queued inputs first so the hardware encoder sees
+        // timestamps and frames in capture order.
+        submit_deferred_inputs();
+        DeferredInput current{ sample, pts, false };
+        if (!deferred_inputs_.try_push(std::move(current))) {
+            current_input_abandoned = true;
+            input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
+            pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
+            SR_LOG_ERROR(L"Deferred encoder input queue could not retain a frame (capacity=%zu or allocation failure)",
+                         kDeferredInputCapacity);
+        } else {
+            update_deferred_input_metrics();
+            submit_deferred_inputs();
+            if (auto* queued = deferred_inputs_.find_if([&sample](const DeferredInput& input) {
+                    return input.sample.Get() == sample.Get();
+                })) {
+                if (!queued->was_deferred) {
+                    queued->was_deferred = true;
+                    input_samples_deferred_without_event_.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
         }
+    } else {
+        // Synchronous MFTs retain the conventional ProcessInput/ProcessOutput
+        // handshake. A rejected sample is explicitly counted as abandoned.
+        hr = mft_->ProcessInput(0, sample.Get(), 0);
         if (FAILED(hr) && hr != MF_E_NOTACCEPTING) {
             input_errors_.fetch_add(1, std::memory_order_relaxed);
             SR_LOG_ERROR(L"ProcessInput failed: 0x%08X", hr);
@@ -706,15 +793,8 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                        high, pending, std::memory_order_relaxed)) {}
         } else if (hr == MF_E_NOTACCEPTING) {
             input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
-        }
-    } else {
-        input_samples_deferred_without_event_.fetch_add(1, std::memory_order_relaxed);
-        if (hw_have_output_events_ == 0) {
-            if (recover_stalled_hardware()) {
-                input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
-                return encode_frame(nv12_texture, pts, out_sample, surface_lease);
-            }
-            return false;
+            pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
+            SR_LOG_ERROR(L"Synchronous MFT rejected an input sample; it cannot be retried after this call");
         }
     }
 
@@ -726,7 +806,8 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     // return a sample for every input frame.
     while (true) {
         if (hw_async_mft_ && hw_have_output_events_ == 0) {
-            if (recover_stalled_hardware()) {
+            if (recover_stalled_hardware(sample.Get())) {
+                if (current_input_abandoned) return false;
                 input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
                 return encode_frame(nv12_texture, pts, out_sample, surface_lease);
             }
@@ -753,7 +834,12 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             output_waits_for_input_.fetch_add(1, std::memory_order_relaxed);
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
-            if (recover_stalled_hardware()) {
+            if (hw_async_mft_) {
+                pump_hw_events(0);
+                submit_deferred_inputs();
+            }
+            if (recover_stalled_hardware(sample.Get())) {
+                if (current_input_abandoned) return false;
                 input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
                 return encode_frame(nv12_texture, pts, out_sample, surface_lease);
             }
@@ -768,11 +854,13 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                     hw_output_fail_count_ >= 10 &&
                     !switched_to_sw_due_to_hw_errors_)
                 {
+                    remove_deferred_input(sample.Get());
                     if (switch_to_software_fallback()) {
                         switched_to_sw_due_to_hw_errors_ = true;
                         SR_LOG_WARN(L"HW encoder became unstable (0x8000FFFF, 10 consecutive failures). Switched to SW fallback for this session.");
                         if (out_buf.pSample) out_buf.pSample->Release();
                         if (out_buf.pEvents) out_buf.pEvents->Release();
+                        if (current_input_abandoned) return false;
                         input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
                         return encode_frame(nv12_texture, pts, out_sample, surface_lease);
                     }
@@ -780,7 +868,8 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             }
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
-            if (recover_stalled_hardware()) {
+            if (recover_stalled_hardware(sample.Get())) {
+                if (current_input_abandoned) return false;
                 input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
                 return encode_frame(nv12_texture, pts, out_sample, surface_lease);
             }
@@ -798,6 +887,10 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             last_output_tick_ms_ = GetTickCount64();
             out_sample.Attach(out_buf.pSample);
             if (out_buf.pEvents) out_buf.pEvents->Release();
+            if (hw_async_mft_) {
+                pump_hw_events(0);
+                submit_deferred_inputs();
+            }
             return true;
         }
 
@@ -815,9 +908,11 @@ bool VideoEncoder::switch_to_software_fallback() {
 
     const uint64_t abandoned = abandon_pending_encoder_inputs(
         pending_video_pts_, pending_input_count_, pending_inputs_abandoned_);
-    if (abandoned != 0) {
-        SR_LOG_ERROR(L"Encoder fallback abandoned %llu accepted input frame(s) without output",
-                     static_cast<unsigned long long>(abandoned));
+    const uint64_t deferred_abandoned = abandon_deferred_inputs();
+    if (abandoned != 0 || deferred_abandoned != 0) {
+        SR_LOG_ERROR(L"Encoder fallback abandoned %llu accepted and %llu deferred input frame(s)",
+                     static_cast<unsigned long long>(abandoned),
+                     static_cast<unsigned long long>(deferred_abandoned));
     }
 
     mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
@@ -884,8 +979,10 @@ bool VideoEncoder::stamp_output_sample(IMFSample* sample, int64_t fallback_pts) 
 // ---------------------------------------------------------------------------
 bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
     if (!initialized_ || !mft_) return false;
+    bool drain_ok = true;
     try {
-        const size_t pending = static_cast<size_t>(pending_input_count_.load(std::memory_order_relaxed));
+        const size_t pending = static_cast<size_t>(pending_input_count_.load(std::memory_order_relaxed)) +
+            deferred_inputs_.size();
         if (pending > out_samples.max_size() - out_samples.size()) {
             SR_LOG_ERROR(L"Encoder drain output count exceeds vector capacity limits");
             return false;
@@ -894,6 +991,74 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
     } catch (...) {
         SR_LOG_ERROR(L"Could not reserve output storage for encoder drain; no more output was requested");
         return false;
+    }
+
+    // An async MFT may still have frames waiting for METransformNeedInput.
+    // Deliver those frames before END_OF_STREAM; otherwise a clean drain could
+    // hide samples the application had captured but never submitted.
+    if (hw_async_mft_ && !deferred_inputs_.empty()) {
+        const ULONGLONG deferred_deadline = GetTickCount64() + 3000;
+        auto collect_one_async_output = [&]() -> bool {
+            MFT_OUTPUT_DATA_BUFFER out_buf{};
+            DWORD status = 0;
+            if (!mft_provides_output_samples_) {
+                const HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
+                if (FAILED(alloc_hr)) {
+                    SR_LOG_ERROR(L"Failed to allocate MFT output while submitting deferred inputs: 0x%08X",
+                                 alloc_hr);
+                    return false;
+                }
+            }
+
+            const HRESULT output_hr = mft_->ProcessOutput(0, 1, &out_buf, &status);
+            if (hw_have_output_events_ > 0) --hw_have_output_events_;
+            if (output_hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
+                output_waits_for_input_.fetch_add(1, std::memory_order_relaxed);
+                if (out_buf.pSample) out_buf.pSample->Release();
+                if (out_buf.pEvents) out_buf.pEvents->Release();
+                return true;
+            }
+            if (FAILED(output_hr)) {
+                SR_LOG_ERROR(L"ProcessOutput while submitting deferred inputs failed: 0x%08X", output_hr);
+                if (out_buf.pSample) out_buf.pSample->Release();
+                if (out_buf.pEvents) out_buf.pEvents->Release();
+                return false;
+            }
+            if (!out_buf.pSample) {
+                SR_LOG_ERROR(L"ProcessOutput completed without a sample for a pending HaveOutput event");
+                if (out_buf.pEvents) out_buf.pEvents->Release();
+                return false;
+            }
+
+            if (!stamp_output_sample(out_buf.pSample, 0)) drain_ok = false;
+            ComPtr<IMFSample> sample;
+            sample.Attach(out_buf.pSample);
+            out_samples.push_back(std::move(sample));
+            if (out_buf.pEvents) out_buf.pEvents->Release();
+            return true;
+        };
+
+        while (!deferred_inputs_.empty() && GetTickCount64() < deferred_deadline) {
+            if (!pump_hw_events(10)) drain_ok = false;
+            const auto submitted = submit_deferred_inputs();
+            if (submitted.failed != 0) drain_ok = false;
+            while (hw_have_output_events_ > 0) {
+                if (!collect_one_async_output()) {
+                    drain_ok = false;
+                    break;
+                }
+                if (!pump_hw_events(0)) drain_ok = false;
+                const auto retried = submit_deferred_inputs();
+                if (retried.failed != 0) drain_ok = false;
+            }
+        }
+
+        if (!deferred_inputs_.empty()) {
+            const uint64_t abandoned = abandon_deferred_inputs();
+            drain_ok = false;
+            SR_LOG_ERROR(L"Async MFT drain could not submit %llu deferred input frame(s) before timeout",
+                         static_cast<unsigned long long>(abandoned));
+        }
     }
 
     // Some MFTs only emit buffered output after explicit end-of-stream signal.
@@ -913,7 +1078,6 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
         hw_drain_complete_ = false;
         const ULONGLONG deadline = GetTickCount64() + 3000;
 
-        bool drain_ok = true;
         while ((!hw_drain_complete_ || hw_have_output_events_ > 0) && GetTickCount64() < deadline) {
             if (!pump_hw_events(10)) drain_ok = false;
 
@@ -971,7 +1135,6 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
             pending_input_count_.load(std::memory_order_relaxed));
     }
 
-    bool drain_ok = true;
     while (true) {
         MFT_OUTPUT_DATA_BUFFER out_buf{};
         DWORD status = 0;
@@ -1053,6 +1216,11 @@ bool VideoEncoder::ensure_staging_texture(uint32_t width, uint32_t height) {
 // VideoEncoder::shutdown
 // ---------------------------------------------------------------------------
 void VideoEncoder::shutdown() {
+    if (!deferred_inputs_.empty()) {
+        const uint64_t abandoned = abandon_deferred_inputs();
+        SR_LOG_ERROR(L"Encoder shutdown released %llu unsent deferred input frame(s)",
+                     static_cast<unsigned long long>(abandoned));
+    }
     if (mft_) {
         mft_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
         mft_.Reset();

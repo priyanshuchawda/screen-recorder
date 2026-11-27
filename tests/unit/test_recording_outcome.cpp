@@ -44,22 +44,31 @@ TEST(RecordingOutcomeTest, FinalizedContainerWithAbandonedEncoderInputsIsIncompl
     EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
 }
 
-TEST(RecordingOutcomeTest, EncoderInputDeferralIsReportedAsIncomplete) {
+TEST(RecordingOutcomeTest, DeferredEncoderInputIsNotLossUntilAbandoned) {
     sr::RecordingOutcomeInputs input;
     input.finalized = true;
     input.encoder_drain_complete = true;
     input.encoder_inputs_deferred = 1;
 
-    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Complete);
 }
 
-TEST(RecordingOutcomeTest, EncoderInputRejectionIsReportedAsIncomplete) {
+TEST(RecordingOutcomeTest, SuccessfullyRetriedEncoderInputsAreNotMediaLoss) {
+    sr::RecordingOutcomeInputs input{};
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.encoder_inputs_deferred = 423;
+    input.encoder_inputs_not_accepted = 3; // transient MFT backpressure, later accepted
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Complete);
+}
+
+TEST(RecordingOutcomeTest, TransientEncoderBackpressureIsNotLossUntilAbandoned) {
     sr::RecordingOutcomeInputs input;
     input.finalized = true;
     input.encoder_drain_complete = true;
     input.encoder_inputs_not_accepted = 1;
 
-    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Complete);
 }
 
 TEST(RecordingOutcomeTest, MissingAudioSourceIsReportedAsIncomplete) {

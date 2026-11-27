@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <vector>
 #include "utils/render_frame.h"
+#include "encoder/deferred_input_queue.h"
 #include "encoder/pending_input_accounting.h"
 
 namespace sr {
@@ -38,6 +39,8 @@ public:
         uint64_t output_waits_for_input = 0;
         uint64_t pending_inputs = 0;
         uint64_t pending_inputs_high_watermark = 0;
+        uint64_t deferred_inputs_pending = 0;
+        uint64_t deferred_inputs_high_watermark = 0;
         uint64_t pending_inputs_abandoned = 0;
         uint64_t input_samples_retried = 0;
         uint64_t output_timestamp_errors = 0;
@@ -83,6 +86,8 @@ public:
             output_waits_for_input_.load(std::memory_order_relaxed),
             pending_input_count_.load(std::memory_order_relaxed),
             pending_input_high_watermark_.load(std::memory_order_relaxed),
+            deferred_input_count_.load(std::memory_order_relaxed),
+            deferred_input_high_watermark_.load(std::memory_order_relaxed),
             pending_inputs_abandoned_.load(std::memory_order_relaxed),
             input_samples_retried_.load(std::memory_order_relaxed),
             output_timestamp_errors_.load(std::memory_order_relaxed)
@@ -96,6 +101,10 @@ private:
                            uint32_t fps, uint32_t bitrate_bps, bool use_hw);
     bool switch_to_software_fallback();
     bool pump_hw_events(uint32_t wait_ms);
+    DeferredSubmitSummary submit_deferred_inputs();
+    bool remove_deferred_input(IMFSample* sample);
+    uint64_t abandon_deferred_inputs() noexcept;
+    void update_deferred_input_metrics() noexcept;
     bool stamp_output_sample(IMFSample* sample, int64_t fallback_pts);
     void publish_configuration();
 
@@ -128,6 +137,15 @@ private:
     uint32_t    hw_have_output_events_ = 0;
     bool        hw_drain_complete_ = false;
     ULONGLONG   last_output_tick_ms_ = 0;
+    struct DeferredInput {
+        ComPtr<IMFSample> sample;
+        int64_t pts = 0;
+        bool was_deferred = false;
+    };
+    static constexpr size_t kDeferredInputCapacity = 4;
+    DeferredInputQueue<DeferredInput, kDeferredInputCapacity> deferred_inputs_;
+    std::atomic<uint64_t> deferred_input_count_{ 0 };
+    std::atomic<uint64_t> deferred_input_high_watermark_{ 0 };
     std::deque<int64_t> pending_video_pts_;
     std::atomic<uint64_t> pending_input_count_{ 0 };
     std::atomic<uint64_t> pending_input_high_watermark_{ 0 };

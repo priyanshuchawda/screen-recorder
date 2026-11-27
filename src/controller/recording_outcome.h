@@ -43,9 +43,7 @@ inline RecordingOutcome classify_recording_outcome(
         input.audio_queue_drops != 0 ||
         input.audio_write_failures != 0 ||
         input.audio_source_start_failures != 0 ||
-        input.encoder_inputs_not_accepted != 0 ||
         input.encoder_input_errors != 0 ||
-        input.encoder_inputs_deferred != 0 ||
         input.encoder_inputs_abandoned != 0 ||
         input.encoder_timestamp_errors != 0 ||
         input.encoder_pending_inputs != 0;
