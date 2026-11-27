@@ -58,6 +58,27 @@ struct MixedAudioBlock {
     std::vector<float> stereo;
 };
 
+struct AudioMixerStats {
+    uint64_t dropped_packets = 0;
+    uint64_t rejected_packets = 0;
+    size_t microphone_packets = 0;
+    size_t loopback_packets = 0;
+    size_t microphone_bytes = 0;
+    size_t loopback_bytes = 0;
+    size_t microphone_high_water_packets = 0;
+    size_t loopback_high_water_packets = 0;
+    size_t microphone_high_water_bytes = 0;
+    size_t loopback_high_water_bytes = 0;
+    int64_t microphone_high_water_duration_100ns = 0;
+    int64_t loopback_high_water_duration_100ns = 0;
+};
+
+struct AudioMixerPushResult {
+    bool accepted = false;
+    uint64_t dropped_packets = 0;
+    bool rejected = false;
+};
+
 // Stateful 10 ms mixer with a short reorder window. It aligns packets by PTS,
 // holds output briefly so the slower WASAPI endpoint can deliver its matching
 // packet, and emits monotonically timestamped float stereo blocks.
@@ -67,13 +88,27 @@ public:
     static constexpr uint32_t kBlockFrames = 480;
     static constexpr int64_t kBlock100ns = 100'000;
     static constexpr int64_t kReorderFrames = 1'440; // 30 ms
+    static constexpr uint32_t kMaxBufferedDurationMs = 2'000;
+    static constexpr size_t kMaxBufferedBytes = 4u * 1024u * 1024u;
+    static constexpr size_t kMaxBufferedPackets = 512;
+    static constexpr int64_t kMaxBufferedFrames =
+        static_cast<int64_t>(kOutputRate) * kMaxBufferedDurationMs / 1'000;
 
-    void push(AudioPacket packet, bool microphone) {
-        if (!valid(packet)) return;
+    AudioMixerPushResult push(AudioPacket packet, bool microphone) {
+        AudioMixerPushResult result;
+        if (!valid(packet) || packet.pts < 0 || packet.buffer.size() > kMaxBufferedBytes ||
+            packet.frame_count > static_cast<uint32_t>(kMaxBufferedFrames)) {
+            ++stats_.rejected_packets;
+            result.rejected = true;
+            return result;
+        }
         const int64_t start = to_frame(packet.pts);
         const int64_t end = start + duration_frames(packet);
-        if (end <= next_frame_) return;
-        latest_end_ = (std::max)(latest_end_, end);
+        if (end <= next_frame_) {
+            ++stats_.dropped_packets;
+            result.dropped_packets = 1;
+            return result;
+        }
         if (!initialized_) {
             next_frame_ = (start / kBlockFrames) * kBlockFrames;
             initialized_ = true;
@@ -81,7 +116,41 @@ public:
         } else if (!emitted_) {
             next_frame_ = (std::min)(next_frame_, (start / kBlockFrames) * kBlockFrames);
         }
-        (microphone ? microphone_ : loopback_).push_back(std::move(packet));
+        PacketQueue& queue = microphone ? microphone_ : loopback_;
+        const size_t packet_bytes = packet.buffer.size();
+        const auto insert_at = std::upper_bound(queue.packets.begin(), queue.packets.end(), packet,
+            [](const AudioPacket& incoming, const AudioPacket& queued) {
+                return incoming.pts < queued.pts;
+            });
+        queue.packets.insert(insert_at, std::move(packet));
+        queue.bytes += packet_bytes;
+
+        // Keep the most recent audio when a source falls behind. Any eviction
+        // is reported to the controller, which marks the recording incomplete
+        // and requests a safe stop rather than silently losing spoken content.
+        while (!within_limits(queue)) {
+            if (queue.packets.empty()) break;
+            queue.bytes -= queue.packets.front().buffer.size();
+            queue.packets.pop_front();
+            ++stats_.dropped_packets;
+            ++result.dropped_packets;
+        }
+        result.accepted = queue.bytes <= kMaxBufferedBytes && !queue.packets.empty();
+        if (!result.accepted && result.dropped_packets == 0) {
+            ++stats_.rejected_packets;
+            result.rejected = true;
+        }
+        latest_end_ = (std::max)(latest_end_, end);
+        update_high_water(queue, microphone);
+        if (result.dropped_packets != 0 && result.accepted) {
+            // The newly inserted packet may itself have been the oldest when
+            // timestamps arrived out of order. Confirm it remains queued.
+            result.accepted = std::any_of(queue.packets.begin(), queue.packets.end(),
+                [packet_bytes, start](const AudioPacket& queued) {
+                    return queued.buffer.size() == packet_bytes && to_frame(queued.pts) == start;
+                });
+        }
+        return result;
     }
 
     std::optional<MixedAudioBlock> take(bool flush = false) {
@@ -94,8 +163,8 @@ public:
         block.pts = frames_to_pts(next_frame_);
         block.frames = kBlockFrames;
         block.stereo.assign(static_cast<size_t>(kBlockFrames) * 2, 0.0f);
-        mix_source(microphone_, block, next_frame_, block_end, true);
-        mix_source(loopback_, block, next_frame_, block_end, false);
+        mix_source(microphone_.packets, block, next_frame_, block_end, true);
+        mix_source(loopback_.packets, block, next_frame_, block_end, false);
         limit(block.stereo);
 
         emitted_ = true;
@@ -109,7 +178,31 @@ public:
         return block;
     }
 
+    AudioMixerStats stats() const {
+        AudioMixerStats result = stats_;
+        result.microphone_packets = microphone_.packets.size();
+        result.loopback_packets = loopback_.packets.size();
+        result.microphone_bytes = microphone_.bytes;
+        result.loopback_bytes = loopback_.bytes;
+        return result;
+    }
+
+    void reset() {
+        microphone_ = {};
+        loopback_ = {};
+        next_frame_ = 0;
+        latest_end_ = 0;
+        initialized_ = false;
+        emitted_ = false;
+        stats_ = {};
+    }
+
 private:
+    struct PacketQueue {
+        std::deque<AudioPacket> packets;
+        size_t bytes = 0;
+    };
+
     static int64_t to_frame(int64_t pts) {
         return static_cast<int64_t>(std::llround(
             static_cast<long double>((std::max)(int64_t{0}, pts)) * kOutputRate /
@@ -124,8 +217,10 @@ private:
             (packet.bits_per_sample != 16 && !(packet.bits_per_sample == 32 && packet.is_float))) return false;
         const size_t bytes_per_frame = static_cast<size_t>(packet.channels) *
                                        (packet.bits_per_sample / 8);
-        return packet.frame_count > 0 && packet.buffer.size() >=
-            static_cast<size_t>(packet.frame_count) * bytes_per_frame;
+        return packet.frame_count > 0 && bytes_per_frame != 0 &&
+            static_cast<size_t>(packet.frame_count) <=
+                (std::numeric_limits<size_t>::max)() / bytes_per_frame &&
+            packet.buffer.size() >= static_cast<size_t>(packet.frame_count) * bytes_per_frame;
     }
     static int64_t duration_frames(const AudioPacket& packet) {
         return static_cast<int64_t>(std::llround(
@@ -162,10 +257,40 @@ private:
             }
         }
     }
-    static void discard_consumed(std::deque<AudioPacket>& packets, int64_t frame) {
-        while (!packets.empty() && to_frame(packets.front().pts) +
-               duration_frames(packets.front()) <= frame) {
-            packets.pop_front();
+    static int64_t queued_duration_frames(const PacketQueue& queue) {
+        if (queue.packets.empty()) return 0;
+        const int64_t start = to_frame(queue.packets.front().pts);
+        int64_t end = start;
+        for (const auto& packet : queue.packets) {
+            end = (std::max)(end, to_frame(packet.pts) + duration_frames(packet));
+        }
+        return (std::max)(int64_t{0}, end - start);
+    }
+    static bool within_limits(const PacketQueue& queue) {
+        return queue.packets.size() <= kMaxBufferedPackets &&
+            queue.bytes <= kMaxBufferedBytes &&
+            queued_duration_frames(queue) <= kMaxBufferedFrames;
+    }
+    void update_high_water(const PacketQueue& queue, bool microphone) {
+        const size_t packets = queue.packets.size();
+        const int64_t duration = queued_duration_frames(queue) * 10'000'000LL / kOutputRate;
+        if (microphone) {
+            stats_.microphone_high_water_packets = (std::max)(stats_.microphone_high_water_packets, packets);
+            stats_.microphone_high_water_bytes = (std::max)(stats_.microphone_high_water_bytes, queue.bytes);
+            stats_.microphone_high_water_duration_100ns =
+                (std::max)(stats_.microphone_high_water_duration_100ns, duration);
+        } else {
+            stats_.loopback_high_water_packets = (std::max)(stats_.loopback_high_water_packets, packets);
+            stats_.loopback_high_water_bytes = (std::max)(stats_.loopback_high_water_bytes, queue.bytes);
+            stats_.loopback_high_water_duration_100ns =
+                (std::max)(stats_.loopback_high_water_duration_100ns, duration);
+        }
+    }
+    static void discard_consumed(PacketQueue& queue, int64_t frame) {
+        while (!queue.packets.empty() && to_frame(queue.packets.front().pts) +
+               duration_frames(queue.packets.front()) <= frame) {
+            queue.bytes -= queue.packets.front().buffer.size();
+            queue.packets.pop_front();
         }
     }
     static void limit(std::vector<float>& samples) {
@@ -181,8 +306,9 @@ private:
         }
     }
 
-    std::deque<AudioPacket> microphone_;
-    std::deque<AudioPacket> loopback_;
+    PacketQueue microphone_;
+    PacketQueue loopback_;
+    AudioMixerStats stats_;
     int64_t next_frame_ = 0;
     int64_t latest_end_ = 0;
     bool initialized_ = false;

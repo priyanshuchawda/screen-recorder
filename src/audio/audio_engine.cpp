@@ -15,15 +15,35 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <exception>
+#include <system_error>
 #pragma comment(lib, "avrt.lib")
 
 namespace sr {
 
 bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
+    shutdown();
     queue_ = queue;
     mode_  = mode;
+    bool initialized = false;
+    try {
+        initialized = queue_ && initialize_impl();
+    } catch (const std::exception& e) {
+        SR_LOG_ERROR(L"AudioEngine initialization exception: %S", e.what());
+    } catch (...) {
+        SR_LOG_ERROR(L"AudioEngine initialization failed with an unknown exception");
+    }
+    if (!initialized) {
+        shutdown();
+        return false;
+    }
+    initialized_ = true;
+    return true;
+}
 
-    const bool is_loopback = (mode == AudioCaptureMode::Loopback);
+bool AudioEngine::initialize_impl() {
+
+    const bool is_loopback = (mode_ == AudioCaptureMode::Loopback);
     const wchar_t* mode_name = is_loopback ? L"Loopback" : L"Microphone";
 
     // Create device enumerator
@@ -155,7 +175,12 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
             notifier_.setup(dev_id, device_invalid_cb_, flow);
             CoTaskMemFree(dev_id);
         }
-        enumerator_->RegisterEndpointNotificationCallback(&notifier_);
+    hr = enumerator_->RegisterEndpointNotificationCallback(&notifier_);
+    notifier_registered_ = SUCCEEDED(hr);
+    if (FAILED(hr)) {
+        SR_LOG_WARN(L"[%s] RegisterEndpointNotificationCallback failed: 0x%08X",
+                    mode_name, hr);
+    }
     }
 
     SR_LOG_INFO(L"[%s] AudioEngine initialized", mode_name);
@@ -164,8 +189,17 @@ bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
 }
 
 bool AudioEngine::start() {
+    if (!initialized_ || !audio_client_ || !capture_client_ || !event_handle_) {
+        SR_LOG_ERROR(L"AudioEngine::start rejected: endpoint initialization did not complete");
+        return false;
+    }
+    if (running_.load(std::memory_order_acquire) || thread_.joinable()) {
+        SR_LOG_ERROR(L"AudioEngine::start rejected: capture is already active");
+        return false;
+    }
     sample_count_ = 0;
     queue_drops_.store(0, std::memory_order_relaxed);
+    resampler_failures_.store(0, std::memory_order_relaxed);
     mic_level_envelope_ = 0.0f;
     mic_gain_linear_ = 1.0f;
     LARGE_INTEGER qpc_now{}, qpc_frequency{};
@@ -186,7 +220,14 @@ bool AudioEngine::start() {
         return false;
     }
 
-    thread_ = std::thread(&AudioEngine::capture_loop, this);
+    try {
+        thread_ = std::thread(&AudioEngine::capture_loop, this);
+    } catch (const std::system_error& e) {
+        running_.store(false, std::memory_order_release);
+        audio_client_->Stop();
+        SR_LOG_ERROR(L"Audio capture thread creation failed: %S", e.what());
+        return false;
+    }
     return true;
 }
 
@@ -198,22 +239,66 @@ void AudioEngine::stop() {
     if (thread_.joinable()) {
         thread_.join();
     }
-    if (audio_client_) {
-        audio_client_->Stop();
-    }
+    if (audio_client_) audio_client_->Stop();
     if (event_handle_) {
         CloseHandle(event_handle_);
         event_handle_ = nullptr;
     }
     // Unregister device notification (T032)
-    if (enumerator_) {
+    if (enumerator_ && notifier_registered_) {
         enumerator_->UnregisterEndpointNotificationCallback(&notifier_);
+        notifier_registered_ = false;
     }
-    // Flush any buffered resampler tail
-    if (!resampler_.is_passthrough()) {
+    // Drain the resampler tail into the still-live packet queue before the
+    // encode worker performs its final audio-mixer flush.
+    if (initialized_ && !resampler_.is_passthrough()) {
         std::vector<uint8_t> tail;
-        resampler_.flush(tail);  // discard — no queue after stop
+        int64_t tail_pts = 0;
+        const bool flush_ok = resampler_.flush(tail, &tail_pts);
+        if (!flush_ok) {
+            const uint32_t failures = resampler_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+            SR_LOG_ERROR(L"[%s] Resampler final drain failed (total failures=%u)",
+                         mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone",
+                         failures);
+        }
+        if (!tail.empty() && queue_) {
+            AudioPacket packet;
+            packet.frame_count = block_align_ > 0
+                ? static_cast<uint32_t>(tail.size() / block_align_) : 0;
+            packet.pts = tail_pts;
+            packet.sample_rate = resampler_.output_rate();
+            packet.channels = channels_;
+            packet.bits_per_sample = static_cast<uint16_t>(bits_per_sample_);
+            packet.is_float = is_float_;
+            packet.buffer = std::move(tail);
+            if (!queue_->try_push(std::move(packet))) {
+                const uint32_t drops = queue_drops_.fetch_add(1, std::memory_order_relaxed) + 1;
+                SR_LOG_ERROR(L"[%s] Audio queue full while enqueuing resampler tail (total drops=%u)",
+                             mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone",
+                             drops);
+            }
+        }
     }
+    resampler_.shutdown();
+}
+
+void AudioEngine::shutdown() {
+    stop();
+    if (event_handle_) {
+        CloseHandle(event_handle_);
+        event_handle_ = nullptr;
+    }
+    capture_client_.Reset();
+    audio_client_.Reset();
+    device_.Reset();
+    enumerator_.Reset();
+    queue_ = nullptr;
+    initialized_ = false;
+    sample_rate_ = 48'000;
+    channels_ = 2;
+    bits_per_sample_ = 16;
+    is_float_ = false;
+    block_align_ = 4;
 }
 
 void AudioEngine::capture_loop() {
@@ -334,17 +419,38 @@ void AudioEngine::capture_loop() {
                 packet_mic_gain = mic_gain_linear_;
             }
 
-            // T032: resample if native rate != 48 kHz
+            // Convert all non-canonical rates, including silence and mute,
+            // through the same stateful resampler so packet duration and
+            // filter state remain continuous.
             const uint8_t* pkt_data = nullptr;
             uint32_t       pkt_bytes = byte_count;
+            int64_t packet_pts = pts;
 
-            if (!resampler_.is_passthrough() && !silence) {
+            if (!resampler_.is_passthrough()) {
                 resampled_buf.clear();
-                resampler_.process(data, byte_count, resampled_buf);
+                const bool resample_ok = resampler_.process(
+                    data, byte_count, resampled_buf, silence, pts, &packet_pts);
+                if (!resample_ok) {
+                    const uint32_t failures = resampler_failures_.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (failures == 1 || (failures % 100) == 0) {
+                        SR_LOG_ERROR(L"[%s] Audio resampling failed (total failures=%u)",
+                                     mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone",
+                                     failures);
+                    }
+                }
                 pkt_data  = resampled_buf.data();
                 pkt_bytes = static_cast<uint32_t>(resampled_buf.size());
             } else {
                 pkt_data = data;
+            }
+
+            // A resampler can legitimately buffer its first input while its
+            // filter warms up. Keep its timeline state and wait for real output
+            // instead of queuing a zero-frame packet.
+            if (pkt_bytes == 0) {
+                capture_client_->ReleaseBuffer(frames_available);
+                sample_count_ += static_cast<int64_t>(frames_available);
+                continue;
             }
 
             uint32_t resampled_frames = (block_align_ > 0)
@@ -353,7 +459,7 @@ void AudioEngine::capture_loop() {
 
             AudioPacket pkt;
             pkt.frame_count  = resampled_frames;
-            pkt.pts          = pts;
+            pkt.pts          = packet_pts;
             pkt.sample_rate  = sample_rate();
             pkt.channels     = channels_;
             pkt.bits_per_sample = static_cast<uint16_t>(bits_per_sample_);

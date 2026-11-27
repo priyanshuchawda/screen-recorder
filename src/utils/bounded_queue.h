@@ -40,7 +40,7 @@ public:
     // Non-blocking push. Returns false if queue is full (caller applies drop policy).
     // Thread-safe for multiple concurrent producers (mutex-protected).
     bool try_push(T&& item) {
-        std::lock_guard<std::mutex> lock(push_mutex_);
+        std::unique_lock<std::mutex> lock(push_mutex_);
         size_t head = head_.load(std::memory_order_relaxed);
         size_t next = (head + 1) % (Capacity + 1);
         if (next == tail_.load(std::memory_order_acquire)) {
@@ -49,6 +49,7 @@ public:
         buffer_[head] = std::move(item);
         head_.store(next, std::memory_order_release);
         update_high_watermark(size());
+        lock.unlock();
         cv_.notify_one();
         return true;
     }
@@ -57,6 +58,24 @@ public:
     // Safe against producers that use either push policy below.
     std::optional<T> try_pop() {
         std::lock_guard<std::mutex> lock(push_mutex_);
+        return pop_locked();
+    }
+
+    // Blocking pop with timeout. The queue mutex also protects the condition
+    // predicate, so a push cannot slip between the empty check and sleeping.
+    std::optional<T> wait_pop(std::chrono::milliseconds timeout) {
+        std::unique_lock<std::mutex> lock(push_mutex_);
+        if (!cv_.wait_for(lock, timeout, [this]() {
+                return head_.load(std::memory_order_acquire) !=
+                       tail_.load(std::memory_order_acquire);
+            })) {
+            return std::nullopt;
+        }
+        return pop_locked();
+    }
+
+private:
+    std::optional<T> pop_locked() {
         size_t tail = tail_.load(std::memory_order_relaxed);
         if (tail == head_.load(std::memory_order_acquire)) {
             return std::nullopt; // Empty
@@ -66,11 +85,13 @@ public:
         return item;
     }
 
+public:
+
     // Keep the newest item when full by dropping the oldest queued item.
     // Intended for real-time video, where a current frame is more useful than
     // encoding a stale backlog. Reports whether an old item was discarded.
     bool try_push_latest(T&& item, bool* dropped_oldest = nullptr) {
-        std::lock_guard<std::mutex> lock(push_mutex_);
+        std::unique_lock<std::mutex> lock(push_mutex_);
         size_t head = head_.load(std::memory_order_relaxed);
         size_t next = (head + 1) % (Capacity + 1);
         bool dropped = false;
@@ -84,22 +105,9 @@ public:
         head_.store(next, std::memory_order_release);
         update_high_watermark(size());
         if (dropped_oldest) *dropped_oldest = dropped;
+        lock.unlock();
         cv_.notify_one();
         return true;
-    }
-
-    // Blocking pop with timeout. Returns nullopt on timeout.
-    std::optional<T> wait_pop(std::chrono::milliseconds timeout) {
-        if (auto item = try_pop(); item.has_value()) {
-            return item;
-        }
-        std::unique_lock<std::mutex> lock(wait_mutex_);
-        const bool ready = cv_.wait_for(lock, timeout, [this]() {
-            return !empty();
-        });
-        if (!ready) return std::nullopt;
-        lock.unlock();
-        return try_pop();
     }
 
     // Current occupancy (approximate — head/tail may race)
@@ -145,7 +153,6 @@ private:
     alignas(64) std::atomic<size_t> tail_;
     std::atomic<size_t> high_watermark_{ 0 };
     std::mutex push_mutex_; // Serializes concurrent producers
-    std::mutex wait_mutex_;
     std::condition_variable cv_;
 };
 

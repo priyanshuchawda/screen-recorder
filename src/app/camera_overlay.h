@@ -121,7 +121,7 @@ private:
     UINT32 frame_height_ = 0;
 
     bool running_   = false;
-    bool on_battery_ = false;
+    std::atomic<bool> on_battery_{ false };
     bool preview_tuning_applied_ = false;
     bool preview_tuning_on_battery_ = false;
     bool preview_tuning_high_quality_ = false;

@@ -229,6 +229,12 @@ TEST(AppSettingsStaticTest, ComputeBitrateForResolutionPresets) {
     EXPECT_EQ(sr::AppSettings::compute_bitrate(60, 1080), 10'000'000u);
 }
 
+TEST(AppSettingsStaticTest, FormatBitrateShowsFractionalMegabits) {
+    EXPECT_EQ(sr::format_bitrate_mbps(1'500'000), L"1.5 Mbps");
+    EXPECT_EQ(sr::format_bitrate_mbps(4'000'000), L"4.0 Mbps");
+    EXPECT_EQ(sr::format_bitrate_mbps(10'000'000), L"10.0 Mbps");
+}
+
 TEST(AppSettingsStaticTest, SetResolutionRecomputesBitrate) {
     sr::AppSettings s;
     s.fps = 30;

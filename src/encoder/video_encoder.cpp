@@ -476,6 +476,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
                                ID3D11Device* d3d_device,
                                ID3D11DeviceContext* d3d_context)
 {
+    shutdown();
     input_samples_offered_.store(0, std::memory_order_relaxed);
     input_samples_accepted_.store(0, std::memory_order_relaxed);
     input_samples_not_accepted_.store(0, std::memory_order_relaxed);
@@ -488,6 +489,10 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     pending_inputs_abandoned_.store(0, std::memory_order_relaxed);
     input_samples_retried_.store(0, std::memory_order_relaxed);
     output_timestamp_errors_.store(0, std::memory_order_relaxed);
+    input_preparation_errors_.store(0, std::memory_order_relaxed);
+    output_errors_.store(0, std::memory_order_relaxed);
+    scheduler_errors_.store(0, std::memory_order_relaxed);
+    input_accounting_errors_.store(0, std::memory_order_relaxed);
     pending_video_pts_.clear();
     deferred_inputs_.reset();
     deferred_input_count_.store(0, std::memory_order_relaxed);
@@ -551,6 +556,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
             return true;
         }
         SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
+        shutdown();
         return false;
     }
 
@@ -586,7 +592,7 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
         return true;
     }
     SR_LOG_ERROR(L"[Encoder Fallback Chain] Step 3 FAILED — ALL encoder attempts exhausted");
-
+    shutdown();
     return false;
 }
 
@@ -597,8 +603,16 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                                  ComPtr<IMFSample>& out_sample,
                                  std::shared_ptr<TextureSurfaceLease> surface_lease)
 {
-    if (!initialized_ || !mft_) return false;
+    if (!initialized_ || !mft_) {
+        if (initialized_) input_preparation_errors_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
     input_samples_offered_.fetch_add(1, std::memory_order_relaxed);
+    auto fail_preparation = [this]() {
+        input_preparation_errors_.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    };
+    if (!nv12_texture || (!hw_path_ && !d3d_context_)) return fail_preparation();
 
     auto recover_stalled_hardware = [&](IMFSample* retry_sample = nullptr) {
         constexpr ULONGLONG kOutputStallLimitMs = 5'000;
@@ -620,7 +634,10 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     HRESULT hr = hw_path_
         ? create_tracked_surface_sample(surface_lease, &sample)
         : MFCreateSample(&sample);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        SR_LOG_ERROR(L"Creating encoder input sample failed: 0x%08X", hr);
+        return fail_preparation();
+    }
 
     if (hw_path_) {
         // HW path: wrap D3D11 texture in MF DXGI buffer
@@ -636,7 +653,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
                 input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
                 return encode_frame(nv12_texture, pts, out_sample, surface_lease);
             }
-            return false;
+            return fail_preparation();
         }
 
         D3D11_TEXTURE2D_DESC td{};
@@ -645,20 +662,20 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         hr = buffer->SetCurrentLength(total);
         if (FAILED(hr)) {
             SR_LOG_ERROR(L"DXGI input buffer SetCurrentLength failed: 0x%08X", hr);
-            return false;
+            return fail_preparation();
         }
     } else {
         // SW path: read back texture to system memory using pre-allocated staging
         D3D11_TEXTURE2D_DESC td{};
         nv12_texture->GetDesc(&td);
 
-        if (!ensure_staging_texture(td.Width, td.Height)) return false;
+        if (!ensure_staging_texture(td.Width, td.Height)) return fail_preparation();
 
         d3d_context_->CopyResource(staging_tex_.Get(), nv12_texture);
 
         D3D11_MAPPED_SUBRESOURCE mapped{};
         hr = d3d_context_->Map(staging_tex_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-        if (FAILED(hr)) return false;
+        if (FAILED(hr)) return fail_preparation();
 
         // NV12: tightly pack Y + UV planes to match stride=width media type.
         const uint32_t tight_stride = td.Width;
@@ -670,7 +687,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         if (FAILED(hr)) {
             d3d_context_->Unmap(staging_tex_.Get(), 0);
             SR_LOG_ERROR(L"MFCreateMemoryBuffer(%u) failed: 0x%08X", total, hr);
-            return false;
+            return fail_preparation();
         }
         BYTE* buf_data = nullptr;
         hr = buffer->Lock(&buf_data, nullptr, nullptr);
@@ -678,7 +695,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             if (SUCCEEDED(hr)) buffer->Unlock();
             d3d_context_->Unmap(staging_tex_.Get(), 0);
             SR_LOG_ERROR(L"Software encoder input buffer Lock failed: 0x%08X", hr);
-            return false;
+            return fail_preparation();
         }
 
         const uint8_t* src = static_cast<uint8_t*>(mapped.pData);
@@ -707,19 +724,19 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         if (FAILED(unlock_hr) || FAILED(length_hr)) {
             SR_LOG_ERROR(L"Software encoder input buffer finalize failed: unlock=0x%08X length=0x%08X",
                          unlock_hr, length_hr);
-            return false;
+            return fail_preparation();
         }
     }
 
     hr = sample->AddBuffer(buffer.Get());
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"Attaching encoder input buffer failed: 0x%08X", hr);
-        return false;
+        return fail_preparation();
     }
     hr = sample->SetSampleTime(pts);
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"Setting encoder input timestamp failed: 0x%08X", hr);
-        return false;
+        return fail_preparation();
     }
 
     // Compute duration (100ns)
@@ -727,7 +744,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     hr = sample->SetSampleDuration(duration);
     if (FAILED(hr)) {
         SR_LOG_ERROR(L"Setting encoder input duration failed: 0x%08X", hr);
-        return false;
+        return fail_preparation();
     }
 
     // Force IDR keyframe if requested (e.g. after resume from pause)
@@ -744,9 +761,9 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
 
     bool current_input_abandoned = false;
     if (hw_async_mft_) {
-        pump_hw_events(0);
+        if (!pump_hw_events(0)) scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
         if (hw_need_input_events_ == 0 && hw_have_output_events_ == 0) {
-            pump_hw_events(5);
+            if (!pump_hw_events(5)) scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
         }
         // Service older queued inputs first so the hardware encoder sees
         // timestamps and frames in capture order.
@@ -785,7 +802,14 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
         if (SUCCEEDED(hr)) {
             input_samples_accepted_.fetch_add(1, std::memory_order_relaxed);
-            pending_video_pts_.push_back(pts);
+            try {
+                pending_video_pts_.push_back(pts);
+            } catch (...) {
+                input_accounting_errors_.fetch_add(1, std::memory_order_relaxed);
+                pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
+                SR_LOG_ERROR(L"Could not allocate encoder timestamp ledger entry after input acceptance");
+                return false;
+            }
             pending_input_count_.fetch_add(1, std::memory_order_relaxed);
             uint64_t pending = pending_input_count_.load(std::memory_order_relaxed);
             uint64_t high = pending_input_high_watermark_.load(std::memory_order_relaxed);
@@ -799,7 +823,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
     }
 
     if (hw_async_mft_) {
-        pump_hw_events(2);
+        if (!pump_hw_events(2)) scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
     }
 
     // Drain available output. Some encoders buffer internally and may not
@@ -821,6 +845,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
             if (FAILED(alloc_hr)) {
                 SR_LOG_ERROR(L"Failed to allocate MFT output sample: 0x%08X", alloc_hr);
+                output_errors_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -835,7 +860,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();
             if (hw_async_mft_) {
-                pump_hw_events(0);
+                if (!pump_hw_events(0)) scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
                 submit_deferred_inputs();
             }
             if (recover_stalled_hardware(sample.Get())) {
@@ -847,6 +872,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         }
 
         if (FAILED(hr)) {
+            output_errors_.fetch_add(1, std::memory_order_relaxed);
             LogProcessOutputFailureRateLimited(hr);
             if (hw_path_) {
                 ++hw_output_fail_count_;
@@ -888,7 +914,7 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
             out_sample.Attach(out_buf.pSample);
             if (out_buf.pEvents) out_buf.pEvents->Release();
             if (hw_async_mft_) {
-                pump_hw_events(0);
+                if (!pump_hw_events(0)) scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
                 submit_deferred_inputs();
             }
             return true;
@@ -1006,6 +1032,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                 if (FAILED(alloc_hr)) {
                     SR_LOG_ERROR(L"Failed to allocate MFT output while submitting deferred inputs: 0x%08X",
                                  alloc_hr);
+                    output_errors_.fetch_add(1, std::memory_order_relaxed);
                     return false;
                 }
             }
@@ -1019,6 +1046,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                 return true;
             }
             if (FAILED(output_hr)) {
+                output_errors_.fetch_add(1, std::memory_order_relaxed);
                 SR_LOG_ERROR(L"ProcessOutput while submitting deferred inputs failed: 0x%08X", output_hr);
                 if (out_buf.pSample) out_buf.pSample->Release();
                 if (out_buf.pEvents) out_buf.pEvents->Release();
@@ -1039,7 +1067,10 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
         };
 
         while (!deferred_inputs_.empty() && GetTickCount64() < deferred_deadline) {
-            if (!pump_hw_events(10)) drain_ok = false;
+            if (!pump_hw_events(10)) {
+                drain_ok = false;
+                scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
+            }
             const auto submitted = submit_deferred_inputs();
             if (submitted.failed != 0) drain_ok = false;
             while (hw_have_output_events_ > 0) {
@@ -1047,7 +1078,10 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                     drain_ok = false;
                     break;
                 }
-                if (!pump_hw_events(0)) drain_ok = false;
+                if (!pump_hw_events(0)) {
+                    drain_ok = false;
+                    scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
+                }
                 const auto retried = submit_deferred_inputs();
                 if (retried.failed != 0) drain_ok = false;
             }
@@ -1079,7 +1113,10 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
         const ULONGLONG deadline = GetTickCount64() + 3000;
 
         while ((!hw_drain_complete_ || hw_have_output_events_ > 0) && GetTickCount64() < deadline) {
-            if (!pump_hw_events(10)) drain_ok = false;
+            if (!pump_hw_events(10)) {
+                drain_ok = false;
+                scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
+            }
 
             while (hw_have_output_events_ > 0) {
                 MFT_OUTPUT_DATA_BUFFER out_buf{};
@@ -1089,6 +1126,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                     HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
                     if (FAILED(alloc_hr)) {
                         SR_LOG_ERROR(L"Failed to allocate async MFT flush output sample: 0x%08X", alloc_hr);
+                        output_errors_.fetch_add(1, std::memory_order_relaxed);
                         return false;
                     }
                 }
@@ -1104,6 +1142,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
                     break;
                 }
                 if (FAILED(hr)) {
+                    output_errors_.fetch_add(1, std::memory_order_relaxed);
                     SR_LOG_ERROR(L"Async ProcessOutput during flush failed: 0x%08X", hr);
                     if (out_buf.pSample) out_buf.pSample->Release();
                     if (out_buf.pEvents) out_buf.pEvents->Release();
@@ -1143,6 +1182,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
             HRESULT alloc_hr = CreateMftOutputSample(mft_output_sample_size_, &out_buf.pSample);
             if (FAILED(alloc_hr)) {
                 SR_LOG_ERROR(L"Failed to allocate MFT flush output sample: 0x%08X", alloc_hr);
+                output_errors_.fetch_add(1, std::memory_order_relaxed);
                 return false;
             }
         }
@@ -1154,6 +1194,7 @@ bool VideoEncoder::flush(std::vector<ComPtr<IMFSample>>& out_samples) {
             break;
         }
         if (FAILED(hr)) {
+            output_errors_.fetch_add(1, std::memory_order_relaxed);
             SR_LOG_ERROR(L"ProcessOutput during flush failed: 0x%08X", hr);
             if (out_buf.pSample) out_buf.pSample->Release();
             if (out_buf.pEvents) out_buf.pEvents->Release();

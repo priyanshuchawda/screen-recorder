@@ -40,14 +40,20 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"frames_captured=%u frames_encoded=%u frames_dropped=%u "
                  L"capture_resize_failures=%u capture_texture_acquisition_failures=%u "
                  L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u "
-                 L"audio_write_failures=%u audio_source_start_failures=%u audio_packets=%u "
+                 L"audio_resampler_failures=%u audio_write_failures=%u "
+                 L"audio_source_start_failures=%u audio_mixer_dropped_packets=%llu "
+                 L"audio_mixer_rejected_packets=%llu audio_mixer_high_water_packets=%llu "
+                 L"audio_mixer_high_water_bytes=%llu audio_mixer_high_water_duration_100ns=%llu "
+                 L"audio_packets=%u "
                  L"encoder_drain_complete=%u encoder_pending_inputs=%llu "
                  L"encoder_deferred_inputs_pending=%llu encoder_deferred_inputs_high_watermark=%llu "
                  L"encoder_inputs_offered=%llu encoder_inputs_accepted=%llu encoder_outputs_produced=%llu "
                  L"encoder_drain_samples=%llu "
                  L"encoder_inputs_not_accepted=%llu encoder_input_errors=%llu "
                  L"encoder_inputs_deferred=%llu encoder_inputs_abandoned=%llu encoder_inputs_retried=%llu "
-                 L"encoder_timestamp_errors=%llu encoder_drain_ms=%llu finalize_ms=%llu "
+                 L"encoder_timestamp_errors=%llu encoder_input_preparation_errors=%llu "
+                 L"encoder_output_errors=%llu encoder_scheduler_errors=%llu "
+                 L"encoder_input_accounting_errors=%llu encoder_drain_ms=%llu finalize_ms=%llu "
                  L"diagnostic_log_dropped=%llu",
                  info.status.empty() ? L"unknown" : info.status.c_str(),
                  info.encoder_mode.empty() ? L"unknown" : info.encoder_mode.c_str(),
@@ -59,8 +65,14 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  info.queue_drops,
                  info.video_write_failures,
                  info.audio_queue_drops,
+                 info.audio_resampler_failures,
                  info.audio_write_failures,
                  info.audio_source_start_failures,
+                 static_cast<unsigned long long>(info.audio_mixer_dropped_packets),
+                 static_cast<unsigned long long>(info.audio_mixer_rejected_packets),
+                 static_cast<unsigned long long>(info.audio_mixer_high_water_packets),
+                 static_cast<unsigned long long>(info.audio_mixer_high_water_bytes),
+                 static_cast<unsigned long long>(info.audio_mixer_high_water_duration_100ns),
                  info.audio_packets,
                  info.encoder_drain_complete ? 1u : 0u,
                  static_cast<unsigned long long>(info.encoder_pending_inputs),
@@ -76,6 +88,10 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  static_cast<unsigned long long>(info.encoder_inputs_abandoned),
                  static_cast<unsigned long long>(info.encoder_inputs_retried),
                  static_cast<unsigned long long>(info.encoder_timestamp_errors),
+                 static_cast<unsigned long long>(info.encoder_input_preparation_errors),
+                 static_cast<unsigned long long>(info.encoder_output_errors),
+                 static_cast<unsigned long long>(info.encoder_scheduler_errors),
+                 static_cast<unsigned long long>(info.encoder_input_accounting_errors),
                  static_cast<unsigned long long>(info.encoder_drain_ms),
                  static_cast<unsigned long long>(info.finalize_ms),
                  static_cast<unsigned long long>(info.diagnostic_log_dropped));

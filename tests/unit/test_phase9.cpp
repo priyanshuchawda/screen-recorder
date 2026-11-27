@@ -24,6 +24,7 @@
 #include "capture/capture_cadence.h"
 #include "controller/audio_write_schedule.h"
 #include "audio/audio_engine.h"
+#include "storage/mux_writer.h"
 
 TEST(AudioQueueRecovery, BuffersTwentySecondsOfTenMillisecondPackets) {
     EXPECT_GE(sr::AudioQueue::capacity(), 2000u);
@@ -465,4 +466,85 @@ TEST(T044_AudioMixing, FindsClosestTimestampCompatibleLoopbackPacket) {
     const auto match = sr::find_loopback_mix_candidate(mic, loopback, 20'000);
     ASSERT_TRUE(match.has_value());
     EXPECT_EQ(*match, 1u);
+}
+
+namespace {
+sr::AudioPacket make_mixer_test_packet(int64_t pts, uint32_t frames = 480,
+                                       uint16_t channels = 2) {
+    sr::AudioPacket packet;
+    packet.pts = pts;
+    packet.frame_count = frames;
+    packet.sample_rate = sr::AudioTimelineMixer::kOutputRate;
+    packet.channels = channels;
+    packet.bits_per_sample = 32;
+    packet.is_float = true;
+    packet.buffer.resize(static_cast<size_t>(frames) * channels * sizeof(float));
+    return packet;
+}
+} // namespace
+
+TEST(AudioMixerBoundsTest, DropsOldestPacketsAtDurationLimitAndReportsLoss) {
+    sr::AudioTimelineMixer mixer;
+    for (int64_t index = 0; index < 250; ++index) {
+        const auto result = mixer.push(make_mixer_test_packet(index * 100'000), true);
+        EXPECT_TRUE(result.accepted);
+    }
+
+    const auto stats = mixer.stats();
+    EXPECT_EQ(stats.dropped_packets, 50u);
+    EXPECT_EQ(stats.rejected_packets, 0u);
+    EXPECT_EQ(stats.microphone_packets, 200u);
+    EXPECT_LE(stats.microphone_bytes, sr::AudioTimelineMixer::kMaxBufferedBytes);
+    EXPECT_LE(stats.microphone_high_water_duration_100ns, 20'000'000);
+    EXPECT_EQ(stats.microphone_high_water_packets, 200u);
+}
+
+TEST(AudioMixerBoundsTest, RejectsSingleOversizedPacket) {
+    sr::AudioTimelineMixer mixer;
+    auto packet = make_mixer_test_packet(0, 48'000, 32);
+    ASSERT_GT(packet.buffer.size(), sr::AudioTimelineMixer::kMaxBufferedBytes);
+
+    const auto result = mixer.push(std::move(packet), false);
+
+    EXPECT_FALSE(result.accepted);
+    EXPECT_TRUE(result.rejected);
+    EXPECT_EQ(mixer.stats().rejected_packets, 1u);
+    EXPECT_EQ(mixer.stats().loopback_packets, 0u);
+}
+
+TEST(AudioMixerBoundsTest, RejectsMalformedPacketWithoutGrowingQueue) {
+    sr::AudioTimelineMixer mixer;
+    auto packet = make_mixer_test_packet(0);
+    packet.buffer.resize(3);
+
+    const auto result = mixer.push(std::move(packet), true);
+
+    EXPECT_FALSE(result.accepted);
+    EXPECT_TRUE(result.rejected);
+    EXPECT_EQ(mixer.stats().microphone_packets, 0u);
+}
+
+TEST(AudioMixerBoundsTest, EnforcesPacketCountCapForTinyPackets) {
+    sr::AudioTimelineMixer mixer;
+    for (size_t i = 0; i < sr::AudioTimelineMixer::kMaxBufferedPackets + 88; ++i) {
+        const auto result = mixer.push(make_mixer_test_packet(0, 1), false);
+        EXPECT_TRUE(result.accepted);
+    }
+
+    const auto stats = mixer.stats();
+    EXPECT_EQ(stats.loopback_packets, sr::AudioTimelineMixer::kMaxBufferedPackets);
+    EXPECT_EQ(stats.dropped_packets, 88u);
+    EXPECT_LE(stats.loopback_bytes, sr::AudioTimelineMixer::kMaxBufferedBytes);
+}
+
+TEST(AudioEngineStartupTest, RejectsStartBeforeSuccessfulInitialization) {
+    sr::AudioEngine engine;
+    EXPECT_FALSE(engine.start());
+}
+
+TEST(MuxWriterStartupTest, AbortBeforeInitializationIsSafeAndIdempotent) {
+    sr::MuxWriter writer;
+    writer.abort();
+    writer.abort();
+    EXPECT_FALSE(writer.initialized());
 }

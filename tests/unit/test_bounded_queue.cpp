@@ -101,6 +101,28 @@ TEST(BoundedQueueTest, WaitPopWakesWhenProducerPushes) {
     EXPECT_LT(elapsed.count(), 250);
 }
 
+TEST(BoundedQueueTest, RepeatedWaitPopDoesNotLoseProducerNotifications) {
+    BoundedQueue<int, 1> q;
+    for (int value = 0; value < 100; ++value) {
+        std::promise<void> waiter_started;
+        auto started = waiter_started.get_future();
+        auto waiter = std::async(std::launch::async, [&q, &waiter_started]() {
+            waiter_started.set_value();
+            return q.wait_pop(std::chrono::milliseconds(300));
+        });
+        started.wait();
+        const auto push_time = std::chrono::steady_clock::now();
+        int queued_value = value;
+        ASSERT_TRUE(q.try_push(std::move(queued_value)));
+        auto item = waiter.get();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - push_time);
+        ASSERT_TRUE(item.has_value());
+        EXPECT_EQ(*item, value);
+        EXPECT_LT(elapsed.count(), 150);
+    }
+}
+
 TEST(BoundedQueueTest, MoveSemantics) {
     BoundedQueue<std::unique_ptr<int>, 3> q;
     q.try_push(std::make_unique<int>(42));

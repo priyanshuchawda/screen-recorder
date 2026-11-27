@@ -105,6 +105,8 @@ public:
 
     // Signal stop and join the capture thread
     void stop();
+    // Release all endpoint, client, event, notification and resampler state.
+    void shutdown();
 
     // Toggle mute: when muted, zeroed PCM is pushed instead of real audio
     void set_muted(bool muted) { muted_.store(muted, std::memory_order_relaxed); }
@@ -124,6 +126,9 @@ public:
     uint32_t bits_per_sample() const { return bits_per_sample_ == 32 ? 32u : 16u; }
     bool is_float() const { return is_float_; }
     uint32_t queue_drops() const { return queue_drops_.load(std::memory_order_relaxed); }
+    uint32_t resampler_failures() const {
+        return resampler_failures_.load(std::memory_order_relaxed);
+    }
 
     // Native device rate (before resampling) — for diagnostics
     uint32_t native_sample_rate() const { return sample_rate_; }
@@ -133,6 +138,7 @@ public:
     void set_sync_manager(SyncManager* sync) { sync_manager_ = sync; }
 
 private:
+    bool initialize_impl();
     void capture_loop();
 
     ComPtr<IMMDeviceEnumerator>  enumerator_;
@@ -154,11 +160,14 @@ private:
     // T032: device-invalidation notification
     AudioDeviceInvalidCallback device_invalid_cb_;
     AudioDeviceNotifier        notifier_;
+    bool                       notifier_registered_ = false;
 
     AudioCaptureMode           mode_ = AudioCaptureMode::Microphone;
     std::atomic<bool> running_{ false };
+    bool              initialized_ = false;
     std::atomic<bool> muted_  { false };
     std::atomic<uint32_t> queue_drops_{ 0 };
+    std::atomic<uint32_t> resampler_failures_{ 0 };
     std::thread       thread_;
 
     int64_t  pts_anchor_100ns_ = 0;   // 100ns epoch offset

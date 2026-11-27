@@ -19,6 +19,7 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <system_error>
 #include <dxgi1_4.h>
 #include <psapi.h>
 
@@ -94,11 +95,61 @@ SessionController::~SessionController() {
     if (!machine_.is_idle()) {
         encode_running_.store(false, std::memory_order_release);
         capture_->stop();
-        audio_->stop();
-        loopback_audio_->stop();
+        audio_->shutdown();
+        loopback_audio_->shutdown();
         if (encode_thread_.joinable()) encode_thread_.join();
-        muxer_->finalize();
+        encoder_->shutdown();
+        muxer_->abort();
+    } else {
+        capture_->stop();
+        audio_->shutdown();
+        loopback_audio_->shutdown();
+        encoder_->shutdown();
+        muxer_->abort();
     }
+    if (mf_initialized_) {
+        probe_.dxgi_device_manager.Reset();
+        MFShutdown();
+        mf_initialized_ = false;
+    }
+}
+
+void SessionController::rollback_startup(const wchar_t* reason) {
+    // Claim the stopping transition before touching shared engines. This keeps
+    // a concurrent disk-space auto-stop from tearing down the same resources.
+    if (machine_.is_recording() || machine_.is_paused()) {
+        if (!machine_.transition(SessionEvent::Stop)) return;
+    } else if (machine_.is_stopping()) {
+        return;
+    }
+
+    diagnostics_.write_failure(reason ? reason : L"recording_start_failed");
+    diagnostics_.write_event(L"event=startup_rollback state=begin");
+    diagnostics_stage_.store(DiagnosticsStage::StoppingCapture, std::memory_order_relaxed);
+
+    if (storage_) storage_->stopDiskSpacePolling();
+    capture_->stop();
+    audio_->shutdown();
+    loopback_audio_->shutdown();
+    encode_running_.store(false, std::memory_order_release);
+    if (encode_thread_.joinable()) encode_thread_.join();
+    encoder_->shutdown();
+    muxer_->abort(); // Keep any partial file; never relabel an unvalidated startup output.
+
+    while (frame_queue_ && frame_queue_->try_pop()) {}
+    while (audio_queue_ && audio_queue_->try_pop()) {}
+    while (loopback_queue_ && loopback_queue_->try_pop()) {}
+
+    stop_diagnostics_monitor();
+    diagnostics_.write_event(L"event=startup_rollback state=complete");
+    flush_persistent_log(std::chrono::seconds(2));
+    clear_persistent_log_path();
+    last_recording_outcome_.store(RecordingOutcome::FailedPartialKept,
+                                  std::memory_order_release);
+    if (machine_.is_stopping()) machine_.transition(SessionEvent::Finalized);
+    encode_running_.store(false, std::memory_order_release);
+    stopping_from_pause_.store(false, std::memory_order_release);
+    notify_status(L"Idle");
 }
 
 const wchar_t* SessionController::diagnostics_stage_label(DiagnosticsStage stage) {
@@ -131,16 +182,23 @@ bool SessionController::initialize(StorageManager* storage,
     on_error_  = std::move(on_error);
     on_stop_requested_ = std::move(on_stop_requested);
 
-    // Initialize Media Foundation
-    HRESULT hr = MFStartup(MF_VERSION);
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"MFStartup failed: 0x%08X", hr);
-        return false;
+    // Initialize Media Foundation once per controller lifetime. Balance the
+    // startup reference in the destructor, including probe-failure paths.
+    if (!mf_initialized_) {
+        const HRESULT hr = MFStartup(MF_VERSION);
+        if (FAILED(hr)) {
+            SR_LOG_ERROR(L"MFStartup failed: 0x%08X", hr);
+            return false;
+        }
+        mf_initialized_ = true;
     }
 
     // Probe D3D11 + HW encoder
     if (!EncoderProbe::run(probe_)) {
         notify_error(L"D3D11 initialization failed");
+        probe_.dxgi_device_manager.Reset();
+        MFShutdown();
+        mf_initialized_ = false;
         return false;
     }
 
@@ -159,9 +217,6 @@ bool SessionController::start() {
     pipeline_stall_events_.store(0, std::memory_order_relaxed);
 
     diagnostics_stage_.store(DiagnosticsStage::Starting, std::memory_order_relaxed);
-
-    // Elevate process priority during recording for smooth capture
-    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
 
     notify_status(L"Starting...");
 
@@ -207,9 +262,9 @@ bool SessionController::start() {
     }
 
     // T042: Apply base-mode power clamping before capture allocates output textures.
-    last_power_ac_ = PowerModeDetector::is_on_ac_power();
+    last_power_ac_.store(PowerModeDetector::is_on_ac_power(), std::memory_order_release);
     enc_prof = PowerModeDetector::clamp_for_quality_and_power_state(
-        enc_prof, last_power_ac_, high_quality_profile);
+        enc_prof, last_power_ac_.load(std::memory_order_acquire), high_quality_profile);
     active_high_quality_ = high_quality_profile;
 
     // ---------------------------------------------------------------
@@ -221,11 +276,8 @@ bool SessionController::start() {
                                {enc_prof.width, enc_prof.height},
                                enc_prof.fps))
     {
-        diagnostics_.write_failure(L"capture_engine_initialization_failed");
-        clear_persistent_log_path();
         notify_error(L"Capture engine initialization failed");
-        machine_.transition(SessionEvent::Stop);
-        machine_.transition(SessionEvent::Finalized);
+        rollback_startup(L"capture_engine_initialization_failed");
         return false;
     }
     capture_->set_sync_anchor_100ns(sync_.anchor_100ns());
@@ -261,11 +313,8 @@ bool SessionController::start() {
                                probe_.d3d_device.Get(),
                                probe_.d3d_context.Get()))
     {
-        diagnostics_.write_failure(L"video_encoder_initialization_failed");
-        clear_persistent_log_path();
         notify_error(L"Video encoder initialization failed");
-        machine_.transition(SessionEvent::Stop);
-        machine_.transition(SessionEvent::Finalized);
+        rollback_startup(L"video_encoder_initialization_failed");
         return false;
     }
 
@@ -283,11 +332,8 @@ bool SessionController::start() {
     mux_cfg.audio_is_float         = true;
 
     if (!muxer_->initialize(current_partial_path_, current_output_path_, mux_cfg)) {
-        diagnostics_.write_failure(L"mux_writer_initialization_failed");
-        clear_persistent_log_path();
         notify_error(L"Mux writer initialization failed");
-        machine_.transition(SessionEvent::Stop);
-        machine_.transition(SessionEvent::Finalized);
+        rollback_startup(L"mux_writer_initialization_failed");
         return false;
     }
 
@@ -297,7 +343,7 @@ bool SessionController::start() {
     diagnostics_start.probed_encoder_name =
         probe_.hw_encoder_available ? probe_.encoder_name : L"not available";
     diagnostics_start.encoder_mode = encoder_mode_label(encoder_->mode());
-    diagnostics_start.power_state = last_power_ac_ ? L"AC" : L"Battery";
+    diagnostics_start.power_state = last_power_ac_.load(std::memory_order_acquire) ? L"AC" : L"Battery";
     diagnostics_start.high_quality = high_quality_profile;
     diagnostics_start.width = encoder_->output_width();
     diagnostics_start.height = encoder_->output_height();
@@ -312,6 +358,7 @@ bool SessionController::start() {
     video_write_failures_.store(0, std::memory_order_relaxed);
     audio_write_failures_.store(0, std::memory_order_relaxed);
     audio_source_start_failures_.store(0, std::memory_order_relaxed);
+    audio_mixer_stats_ = {};
     output_failure_reported_.store(false, std::memory_order_relaxed);
     stopping_from_pause_.store(false, std::memory_order_relaxed);
     audio_written_.store(0,  std::memory_order_relaxed);
@@ -349,12 +396,19 @@ bool SessionController::start() {
     });
 
     encode_running_.store(true, std::memory_order_release);
-    encode_thread_ = std::thread(&SessionController::encode_loop, this);
+    try {
+        encode_thread_ = std::thread(&SessionController::encode_loop, this);
+    } catch (const std::system_error& e) {
+        encode_running_.store(false, std::memory_order_release);
+        SR_LOG_ERROR(L"Could not create recording pipeline thread: %S", e.what());
+        rollback_startup(L"encode_thread_creation_failed");
+        return false;
+    }
 
     if (!capture_->start()) {
         diagnostics_.write_event(L"event=start_stage stage=capture state=failed");
         notify_error(L"Capture start failed");
-        stop();
+        rollback_startup(L"capture_start_failed");
         return false;
     }
     diagnostics_.write_event(L"event=start_stage stage=capture state=complete");
@@ -370,19 +424,23 @@ bool SessionController::start() {
         ? L"event=start_stage stage=loopback state=complete"
         : L"event=start_stage stage=loopback state=unavailable");
 
-    // T031: Start async disk space polling — auto-stop on < 500 MB free
-    if (storage_) {
-        storage_->startDiskSpacePolling([this]() {
-            // Runs on poll thread — use atomic transition to safely trigger stop
-            if (!machine_.is_idle()) {
-                SR_LOG_WARN(L"Auto-stopping: disk space critically low");
-                notify_error(L"\u26A0 Disk space critically low! Recording auto-stopped.");
-                stop(); // safe: atomic state transitions; stopDiskSpacePolling detaches
-            }
-        });
+    try {
+        // T031: Start async disk space polling — auto-stop on < 500 MB free
+        if (storage_) {
+            storage_->startDiskSpacePolling([this]() {
+                if (!machine_.is_idle()) {
+                    SR_LOG_WARN(L"Auto-stopping: disk space critically low");
+                    notify_error(L"\u26A0 Disk space critically low! Recording auto-stopped.");
+                    stop();
+                }
+            });
+        }
+        start_diagnostics_monitor();
+    } catch (const std::system_error& e) {
+        SR_LOG_ERROR(L"Could not create recording monitor thread: %S", e.what());
+        rollback_startup(L"recording_monitor_thread_creation_failed");
+        return false;
     }
-
-    start_diagnostics_monitor();
     diagnostics_.write_event(L"event=recording_started");
     notify_status(L"Recording...");
     SR_LOG_INFO(L"Recording started -> %s", current_output_path_.c_str());
@@ -473,6 +531,9 @@ bool SessionController::stop() {
                 std::chrono::steady_clock::now() - mux_write_started).count();
             video_mux_timing_.record(static_cast<uint64_t>((std::max)(0LL, mux_write_us)));
         }
+        encoder_->shutdown();
+        encoder_final_state = encoder_->diagnostics_snapshot();
+        encoder_pending_inputs = encoder_final_state.pending_inputs;
         const auto drain_mux_timing = video_mux_timing_.snapshot();
         diagnostics_.write_event(L"event=encoder_drain_mux_timing samples=" +
             std::to_wstring(drain_mux_timing.samples) + L" total_us=" +
@@ -500,9 +561,6 @@ bool SessionController::stop() {
     diagnostics_.write_event(L"event=stop_complete");
     stop_diagnostics_monitor();
 
-    // Revert process priority to normal when not recording
-    SetPriorityClass(GetCurrentProcess(), NORMAL_PRIORITY_CLASS);
-
     SessionDiagnostics::StopInfo diagnostics_stop;
     diagnostics_stop.encoder_mode = encoder_mode_label(encoder_->mode());
     diagnostics_stop.frames_captured = capture_->frames_captured();
@@ -513,8 +571,21 @@ bool SessionController::stop() {
     diagnostics_stop.queue_drops = capture_->queue_drops();
     diagnostics_stop.video_write_failures = video_write_failures_.load();
     diagnostics_stop.audio_queue_drops = audio_->queue_drops() + loopback_audio_->queue_drops();
+    diagnostics_stop.audio_resampler_failures =
+        audio_->resampler_failures() + loopback_audio_->resampler_failures();
     diagnostics_stop.audio_write_failures = audio_write_failures_.load();
     diagnostics_stop.audio_source_start_failures = audio_source_start_failures_.load();
+    diagnostics_stop.audio_mixer_dropped_packets = audio_mixer_stats_.dropped_packets;
+    diagnostics_stop.audio_mixer_rejected_packets = audio_mixer_stats_.rejected_packets;
+    diagnostics_stop.audio_mixer_high_water_packets = (std::max)(
+        audio_mixer_stats_.microphone_high_water_packets,
+        audio_mixer_stats_.loopback_high_water_packets);
+    diagnostics_stop.audio_mixer_high_water_bytes = (std::max)(
+        audio_mixer_stats_.microphone_high_water_bytes,
+        audio_mixer_stats_.loopback_high_water_bytes);
+    diagnostics_stop.audio_mixer_high_water_duration_100ns = (std::max)(
+        audio_mixer_stats_.microphone_high_water_duration_100ns,
+        audio_mixer_stats_.loopback_high_water_duration_100ns);
     diagnostics_stop.audio_packets = audio_written_.load();
     diagnostics_stop.encoder_drain_complete = encoder_drain_ok;
     diagnostics_stop.encoder_pending_inputs = encoder_pending_inputs;
@@ -529,9 +600,18 @@ bool SessionController::stop() {
     diagnostics_stop.encoder_inputs_abandoned = encoder_final_state.pending_inputs_abandoned;
     diagnostics_stop.encoder_inputs_retried = encoder_final_state.input_samples_retried;
     diagnostics_stop.encoder_timestamp_errors = encoder_final_state.output_timestamp_errors;
+    diagnostics_stop.encoder_input_preparation_errors = encoder_final_state.input_preparation_errors;
+    diagnostics_stop.encoder_output_errors = encoder_final_state.output_errors;
+    diagnostics_stop.encoder_scheduler_errors = encoder_final_state.scheduler_errors;
+    diagnostics_stop.encoder_input_accounting_errors = encoder_final_state.input_accounting_errors;
     diagnostics_stop.encoder_drain_samples = encoder_drain_samples;
     diagnostics_stop.encoder_drain_ms = encoder_drain_ms;
     diagnostics_stop.finalize_ms = finalize_ms;
+
+    // Drop idle capture, audio endpoint and encoder state after their final
+    // counters have been captured. A later session initializes them afresh.
+    audio_->shutdown();
+    loopback_audio_->shutdown();
 
     // Wait for queued session events so logger failures are reflected in the
     // outcome. The diagnostic writer itself is bounded and this wait is bounded.
@@ -551,13 +631,20 @@ bool SessionController::stop() {
     outcome_input.capture_texture_acquisition_failures = diagnostics_stop.capture_texture_acquisition_failures;
     outcome_input.video_write_failures = diagnostics_stop.video_write_failures;
     outcome_input.audio_queue_drops = diagnostics_stop.audio_queue_drops;
+    outcome_input.audio_resampler_failures = diagnostics_stop.audio_resampler_failures;
     outcome_input.audio_write_failures = diagnostics_stop.audio_write_failures;
     outcome_input.audio_source_start_failures = diagnostics_stop.audio_source_start_failures;
+    outcome_input.audio_mixer_dropped_packets = diagnostics_stop.audio_mixer_dropped_packets;
+    outcome_input.audio_mixer_rejected_packets = diagnostics_stop.audio_mixer_rejected_packets;
     outcome_input.encoder_inputs_not_accepted = diagnostics_stop.encoder_inputs_not_accepted;
     outcome_input.encoder_input_errors = diagnostics_stop.encoder_input_errors;
     outcome_input.encoder_inputs_deferred = diagnostics_stop.encoder_inputs_deferred;
     outcome_input.encoder_inputs_abandoned = diagnostics_stop.encoder_inputs_abandoned;
     outcome_input.encoder_timestamp_errors = diagnostics_stop.encoder_timestamp_errors;
+    outcome_input.encoder_input_preparation_errors = diagnostics_stop.encoder_input_preparation_errors;
+    outcome_input.encoder_output_errors = diagnostics_stop.encoder_output_errors;
+    outcome_input.encoder_scheduler_errors = diagnostics_stop.encoder_scheduler_errors;
+    outcome_input.encoder_input_accounting_errors = diagnostics_stop.encoder_input_accounting_errors;
     outcome_input.encoder_pending_inputs = diagnostics_stop.encoder_pending_inputs;
     outcome_input.warnings = diagnostics_stop.diagnostic_log_dropped +
         pipeline_stall_events_.load(std::memory_order_relaxed);
@@ -985,7 +1072,7 @@ TelemetrySnapshot SessionController::telemetry_snapshot() const {
     // Update backlog counter from the live queue depth
     uint32_t backlog = frame_queue_ ? static_cast<uint32_t>(frame_queue_->size()) : 0;
     const_cast<TelemetryStore&>(telemetry_).set_backlog(backlog);
-    auto snapshot = telemetry_.snapshot(enc_mode, last_power_ac_);
+    auto snapshot = telemetry_.snapshot(enc_mode, last_power_ac_.load(std::memory_order_acquire));
     if (capture_) {
         snapshot.frames_captured = capture_->frames_captured();
         snapshot.frames_dropped += capture_->frames_dropped();
@@ -1019,16 +1106,31 @@ void SessionController::encode_loop() {
     auto encode_frame_timed = [this](ID3D11Texture2D* texture, int64_t pts,
                                      std::shared_ptr<TextureSurfaceLease> surface_lease,
                                      ComPtr<IMFSample>& output) {
-        const uint64_t abandoned_before = encoder_->diagnostics_snapshot().pending_inputs_abandoned;
+        const auto before = encoder_->diagnostics_snapshot();
         const auto started = std::chrono::steady_clock::now();
         const bool produced = encoder_->encode_frame(texture, pts, output, std::move(surface_lease));
         const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - started).count();
         video_encode_timing_.record(static_cast<uint64_t>((std::max)(0LL, elapsed_us)));
-        const uint64_t abandoned_after = encoder_->diagnostics_snapshot().pending_inputs_abandoned;
-        if (abandoned_after > abandoned_before) {
-            diagnostics_.write_event(L"event=encoder_inputs_abandoned count=" +
-                std::to_wstring(abandoned_after - abandoned_before));
+        const auto after = encoder_->diagnostics_snapshot();
+        const uint64_t abandoned_delta = after.pending_inputs_abandoned - before.pending_inputs_abandoned;
+        const uint64_t preparation_delta = after.input_preparation_errors - before.input_preparation_errors;
+        const uint64_t input_error_delta = after.input_errors - before.input_errors;
+        const uint64_t output_error_delta = after.output_errors - before.output_errors;
+        const uint64_t scheduler_error_delta = after.scheduler_errors - before.scheduler_errors;
+        const uint64_t accounting_error_delta = after.input_accounting_errors - before.input_accounting_errors;
+        const uint64_t timestamp_error_delta = after.output_timestamp_errors - before.output_timestamp_errors;
+        if (abandoned_delta != 0 || preparation_delta != 0 || input_error_delta != 0 ||
+            output_error_delta != 0 || scheduler_error_delta != 0 ||
+            accounting_error_delta != 0 || timestamp_error_delta != 0) {
+            diagnostics_.write_event(L"event=encoder_frame_failure abandoned=" +
+                std::to_wstring(abandoned_delta) + L" preparation=" +
+                std::to_wstring(preparation_delta) + L" input=" +
+                std::to_wstring(input_error_delta) + L" output=" +
+                std::to_wstring(output_error_delta) + L" scheduler=" +
+                std::to_wstring(scheduler_error_delta) + L" accounting=" +
+                std::to_wstring(accounting_error_delta) + L" timestamp=" +
+                std::to_wstring(timestamp_error_delta));
             report_recording_loss(L"encoder_input");
         }
         return produced;
@@ -1227,13 +1329,25 @@ void SessionController::encode_loop() {
             while (auto packet = audio_queue_->try_pop()) {
                 if (!machine_.is_paused() &&
                     !stopping_from_pause_.load(std::memory_order_acquire)) {
-                    audio_mixer.push(std::move(*packet), true);
+                    const auto result = audio_mixer.push(std::move(*packet), true);
+                    if (result.dropped_packets != 0 || result.rejected) {
+                        diagnostics_.write_event(L"event=audio_mixer_overflow source=microphone dropped=" +
+                            std::to_wstring(result.dropped_packets) + L" rejected=" +
+                            std::to_wstring(result.rejected ? 1 : 0));
+                        report_recording_loss(L"audio_mixer_queue");
+                    }
                 }
             }
             while (auto packet = loopback_queue_->try_pop()) {
                 if (!machine_.is_paused() &&
                     !stopping_from_pause_.load(std::memory_order_acquire)) {
-                    audio_mixer.push(std::move(*packet), false);
+                    const auto result = audio_mixer.push(std::move(*packet), false);
+                    if (result.dropped_packets != 0 || result.rejected) {
+                        diagnostics_.write_event(L"event=audio_mixer_overflow source=loopback dropped=" +
+                            std::to_wstring(result.dropped_packets) + L" rejected=" +
+                            std::to_wstring(result.rejected ? 1 : 0));
+                        report_recording_loss(L"audio_mixer_queue");
+                    }
                 }
             }
 
@@ -1258,8 +1372,8 @@ void SessionController::encode_loop() {
         // Keep this timestamp session-local so each recording starts fresh.
         if (now_ms - last_power_check_ms >= kPowerCheckIntervalMs) {
             bool on_ac = PowerModeDetector::is_on_ac_power();
-            if (on_ac != last_power_ac_) {
-                last_power_ac_ = on_ac;
+            if (on_ac != last_power_ac_.load(std::memory_order_acquire)) {
+                last_power_ac_.store(on_ac, std::memory_order_release);
                 SR_LOG_INFO(L"[Power] Switched to %s power", on_ac ? L"AC" : L"Battery");
                 // Keep capture work within the active power budget. The
                 // encoder's sample timestamps remain on the source clock.
@@ -1284,6 +1398,7 @@ void SessionController::encode_loop() {
             audio_write_failures_.fetch_add(1, std::memory_order_relaxed);
         }
     }
+    audio_mixer_stats_ = audio_mixer.stats();
 }
 
 // ---------------------------------------------------------------------------

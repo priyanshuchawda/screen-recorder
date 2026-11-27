@@ -31,8 +31,14 @@ public:
         uint32_t queue_drops = 0;
         uint32_t video_write_failures = 0;
         uint32_t audio_queue_drops = 0;
+        uint32_t audio_resampler_failures = 0;
         uint32_t audio_write_failures = 0;
         uint32_t audio_source_start_failures = 0;
+        uint64_t audio_mixer_dropped_packets = 0;
+        uint64_t audio_mixer_rejected_packets = 0;
+        uint64_t audio_mixer_high_water_packets = 0;
+        uint64_t audio_mixer_high_water_bytes = 0;
+        uint64_t audio_mixer_high_water_duration_100ns = 0;
         uint32_t audio_packets = 0;
         bool encoder_drain_complete = true;
         uint64_t encoder_pending_inputs = 0;
@@ -47,6 +53,10 @@ public:
         uint64_t encoder_inputs_abandoned = 0;
         uint64_t encoder_inputs_retried = 0;
         uint64_t encoder_timestamp_errors = 0;
+        uint64_t encoder_input_preparation_errors = 0;
+        uint64_t encoder_output_errors = 0;
+        uint64_t encoder_scheduler_errors = 0;
+        uint64_t encoder_input_accounting_errors = 0;
         uint64_t encoder_drain_samples = 0;
         uint64_t encoder_drain_ms = 0;
         uint64_t finalize_ms = 0;

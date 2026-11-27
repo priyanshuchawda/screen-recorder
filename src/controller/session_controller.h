@@ -28,6 +28,7 @@
 #include "utils/latency_histogram.h"
 #include "capture/capture_engine.h"  // for FrameQueue typedef
 #include "audio/audio_engine.h"     // for AudioQueue typedef
+#include "audio/audio_mixer.h"
 
 namespace sr {
 
@@ -164,6 +165,7 @@ private:
     void start_diagnostics_monitor();
     void stop_diagnostics_monitor();
     void diagnostics_monitor_loop();
+    void rollback_startup(const wchar_t* reason);
 
     // Shared state
     SessionMachine  machine_;
@@ -171,8 +173,9 @@ private:
     ProbeResult     probe_;
     FramePacer      pacer_;      // T038: frame pacing
     TelemetryStore  telemetry_;  // T037: live counters
-    bool            last_power_ac_ = true; // T042: last known power state
+    std::atomic<bool> last_power_ac_{ true }; // T042: published power source state
     bool            active_high_quality_ = false;
+    bool            mf_initialized_ = false;
 
     // Engines
     std::unique_ptr<CaptureEngine> capture_;
@@ -206,6 +209,7 @@ private:
     std::atomic<uint32_t> video_write_failures_{ 0 };
     std::atomic<uint32_t> audio_write_failures_{ 0 };
     std::atomic<uint32_t> audio_source_start_failures_{ 0 };
+    AudioMixerStats audio_mixer_stats_{}; // written by encode worker; read after join
     std::atomic<bool> output_failure_reported_{ false };
     std::atomic<bool> stopping_from_pause_{ false };
     std::atomic<uint32_t> pipeline_stall_events_{ 0 };
