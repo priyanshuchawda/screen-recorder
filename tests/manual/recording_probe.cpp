@@ -38,12 +38,29 @@ static LRESULT CALLBACK probe_window(HWND window, UINT message, WPARAM wparam, L
 }
 
 int wmain(int argc, wchar_t** argv) {
-    if (argc != 3 && argc != 4) {
-        std::fwprintf(stderr, L"Usage: recording_probe OUTPUT_DIRECTORY SECONDS [15]\n");
+    if (argc < 3 || argc > 5) {
+        std::fwprintf(stderr, L"Usage: recording_probe OUTPUT_DIRECTORY SECONDS [15] [--pause-resume|--stop-paused]\n");
         return 2;
     }
     const int seconds = _wtoi(argv[2]);
     if (seconds < 1 || seconds > 3600) return 2;
+    bool low_rate = false;
+    bool pause_resume_test = false;
+    bool stop_paused_test = false;
+    for (int i = 3; i < argc; ++i) {
+        if (wcscmp(argv[i], L"15") == 0 && !low_rate) {
+            low_rate = true;
+        } else if (wcscmp(argv[i], L"--pause-resume") == 0 && !pause_resume_test) {
+            pause_resume_test = true;
+        } else if (wcscmp(argv[i], L"--stop-paused") == 0 && !stop_paused_test) {
+            stop_paused_test = true;
+        } else {
+            std::fwprintf(stderr, L"Invalid or repeated probe option: %ls\n", argv[i]);
+            return 2;
+        }
+    }
+    if ((pause_resume_test && stop_paused_test) ||
+        ((pause_resume_test || stop_paused_test) && seconds < 6)) return 2;
 #ifdef SR_LOCAL_RECORDING_PROBE
     wchar_t stall_value[2]{};
     const bool stall_requested =
@@ -77,8 +94,6 @@ int wmain(int argc, wchar_t** argv) {
         sr::EncoderProfile profile{};
         profile.width = 1920; profile.height = 1080;
         profile.fps = 60; profile.bitrate_bps = 10'000'000;
-        const bool low_rate = argc == 4 && _wtoi(argv[3]) == 15;
-        if (argc == 4 && !low_rate) return 2;
         if (low_rate) {
             profile.width = 640; profile.height = 360;
             profile.fps = 15; profile.bitrate_bps = 1'000'000;
@@ -87,9 +102,35 @@ int wmain(int argc, wchar_t** argv) {
         if (!controller.start()) return 7;
         std::fwprintf(stdout, L"Recording: %ls\n", controller.output_path().c_str());
         std::fflush(stdout);
-        const ULONGLONG deadline = GetTickCount64() + static_cast<ULONGLONG>(seconds) * 1000;
+        const ULONGLONG test_started = GetTickCount64();
+        const ULONGLONG deadline = test_started + static_cast<ULONGLONG>(seconds) * 1000;
+        ULONGLONG pause_started = 0;
+        bool did_pause = false;
+        bool did_resume = false;
+        bool resume_attempted = false;
+        bool stop_while_paused = false;
         bool quit = false;
         while (!quit && !stop_requested.load() && GetTickCount64() < deadline) {
+            const ULONGLONG now = GetTickCount64();
+            const ULONGLONG elapsed = now - test_started;
+            if (pause_resume_test && !did_pause && elapsed >=
+                static_cast<ULONGLONG>(seconds) * 1000 / 3) {
+                did_pause = controller.pause();
+                pause_started = now;
+                std::fwprintf(stdout, L"Pause test: paused=%u\n", did_pause ? 1u : 0u);
+            }
+            if (pause_resume_test && did_pause && !resume_attempted && now - pause_started >= 3000) {
+                resume_attempted = true;
+                did_resume = controller.resume();
+                std::fwprintf(stdout, L"Pause test: resumed=%u\n", did_resume ? 1u : 0u);
+            }
+            if (stop_paused_test && elapsed >=
+                static_cast<ULONGLONG>(seconds) * 2 * 1000 / 3) {
+                stop_while_paused = controller.pause();
+                std::fwprintf(stdout, L"Stop-paused test: paused=%u; requesting stop\n",
+                              stop_while_paused ? 1u : 0u);
+                break;
+            }
             MSG msg{};
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
                 if (msg.message == WM_QUIT) { quit = true; break; }
@@ -98,12 +139,28 @@ int wmain(int argc, wchar_t** argv) {
             }
             Sleep(10);
         }
+        if ((pause_resume_test && (!did_pause || !did_resume)) ||
+            (stop_paused_test && !stop_while_paused)) {
+            std::fwprintf(stderr, L"FAIL: requested pause scenario did not complete.\n");
+            result = 11;
+        }
         if (!controller.stop()) result = 8;
+        const auto outcome = controller.last_recording_outcome();
+        const auto expected = stall_requested
+            ? sr::RecordingOutcome::Incomplete
+            : sr::RecordingOutcome::Complete;
+        if (outcome != expected) {
+            std::fwprintf(stderr, L"FAIL: expected recording outcome %ls, got %ls.\n",
+                          sr::recording_outcome_name(expected),
+                          sr::recording_outcome_name(outcome));
+            result = 10;
+        }
         if (stall_requested && !sr::probe_audio_stall_was_triggered()) {
             std::fwprintf(stderr, L"FAIL: requested audio writer stall was not triggered.\n");
             result = 9;
         }
-        std::fwprintf(stdout, L"Stopped; captured=%u encoded=%u dropped=%u audio_packets=%u\n",
+        std::fwprintf(stdout, L"Stopped; outcome=%ls captured=%u encoded=%u dropped=%u audio_packets=%u\n",
+                      sr::recording_outcome_name(outcome),
                       controller.frames_captured(), controller.frames_encoded(),
                       controller.frames_dropped(), controller.audio_packets_written());
     }

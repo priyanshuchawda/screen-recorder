@@ -5,6 +5,7 @@
 namespace sr {
 
 enum class RecordingOutcome {
+    NotRun,
     Complete,
     CompleteWithWarnings,
     Incomplete,
@@ -15,6 +16,8 @@ struct RecordingOutcomeInputs {
     bool finalized = false;
     bool encoder_drain_complete = false;
     uint64_t frame_drops = 0;
+    uint64_t capture_resize_failures = 0;
+    uint64_t capture_texture_acquisition_failures = 0;
     uint64_t video_write_failures = 0;
     uint64_t audio_queue_drops = 0;
     uint64_t audio_write_failures = 0;
@@ -34,6 +37,8 @@ inline RecordingOutcome classify_recording_outcome(
 
     const bool media_loss = !input.encoder_drain_complete ||
         input.frame_drops != 0 ||
+        input.capture_resize_failures != 0 ||
+        input.capture_texture_acquisition_failures != 0 ||
         input.video_write_failures != 0 ||
         input.audio_queue_drops != 0 ||
         input.audio_write_failures != 0 ||
@@ -52,6 +57,7 @@ inline RecordingOutcome classify_recording_outcome(
 
 inline const wchar_t* recording_outcome_name(RecordingOutcome outcome) noexcept {
     switch (outcome) {
+        case RecordingOutcome::NotRun: return L"not_run";
         case RecordingOutcome::Complete: return L"complete";
         case RecordingOutcome::CompleteWithWarnings: return L"complete_with_warnings";
         case RecordingOutcome::Incomplete: return L"incomplete";

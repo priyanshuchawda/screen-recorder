@@ -30,26 +30,18 @@ inline std::wstring& persistent_log_path() {
 inline bool write_persistent_log_line(const std::wstring& path,
                                       const std::wstring& line) {
     if (path.empty()) return false;
-
-    SYSTEMTIME now{};
-    GetLocalTime(&now);
-    wchar_t timestamped[4096]{};
-    _snwprintf_s(timestamped, _countof(timestamped), _TRUNCATE,
-                 L"%04u-%02u-%02u %02u:%02u:%02u.%03u %s",
-                 now.wYear, now.wMonth, now.wDay,
-                 now.wHour, now.wMinute, now.wSecond, now.wMilliseconds,
-                 line.c_str());
-    size_t chars = wcslen(timestamped);
-    while (chars > 0 && (timestamped[chars - 1] == L'\r' || timestamped[chars - 1] == L'\n')) {
-        timestamped[--chars] = L'\0';
+    std::wstring timestamped = line;
+    while (!timestamped.empty() &&
+           (timestamped.back() == L'\r' || timestamped.back() == L'\n')) {
+        timestamped.pop_back();
     }
-    wcscat_s(timestamped, L"\r\n");
+    timestamped += L"\r\n";
 
-    const int required = WideCharToMultiByte(CP_UTF8, 0, timestamped, -1,
+    const int required = WideCharToMultiByte(CP_UTF8, 0, timestamped.c_str(), -1,
                                               nullptr, 0, nullptr, nullptr);
     if (required <= 1) return false;
     std::string utf8(static_cast<size_t>(required), '\0');
-    const int converted = WideCharToMultiByte(CP_UTF8, 0, timestamped, -1,
+    const int converted = WideCharToMultiByte(CP_UTF8, 0, timestamped.c_str(), -1,
                                                utf8.data(), required, nullptr, nullptr);
     if (converted <= 1) {
         return false;
@@ -81,7 +73,15 @@ public:
                 return;
             }
             try {
-                queue_.push_back({ path, line });
+                SYSTEMTIME now{};
+                GetLocalTime(&now);
+                wchar_t timestamped[4096]{};
+                _snwprintf_s(timestamped, _countof(timestamped), _TRUNCATE,
+                             L"%04u-%02u-%02u %02u:%02u:%02u.%03u %s",
+                             now.wYear, now.wMonth, now.wDay,
+                             now.wHour, now.wMinute, now.wSecond, now.wMilliseconds,
+                             line.c_str());
+                queue_.push_back({ path, timestamped });
             } catch (...) {
                 dropped_.fetch_add(1, std::memory_order_relaxed);
                 return;

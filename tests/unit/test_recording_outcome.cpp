@@ -19,6 +19,22 @@ TEST(RecordingOutcomeTest, FinalizedContainerWithKnownMediaLossIsIncomplete) {
     EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
 }
 
+TEST(RecordingOutcomeTest, CaptureResizeFailureMakesFinalizedRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.capture_resize_failures = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
+TEST(RecordingOutcomeTest, TextureAcquisitionFailureMakesFinalizedRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.capture_texture_acquisition_failures = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
 TEST(RecordingOutcomeTest, FinalizedContainerWithAbandonedEncoderInputsIsIncomplete) {
     sr::RecordingOutcomeInputs input;
     input.finalized = true;

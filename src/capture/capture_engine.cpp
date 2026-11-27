@@ -12,6 +12,7 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 
 #include "capture/capture_engine.h"
+#include "sync/sync_manager.h"
 #include "capture/capture_cadence.h"
 #include "utils/logging.h"
 
@@ -256,6 +257,8 @@ struct CaptureEngineImpl {
         auto frame = pool.TryGetNextFrame();
         if (!frame) return;
 
+        if (parent->sync_manager_ && parent->sync_manager_->is_paused()) return;
+
         // T034: Detect resolution change — compare WGC content size to VP input
         parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::ReadFrameMetadata);
         auto content_size = frame.ContentSize();
@@ -264,9 +267,14 @@ struct CaptureEngineImpl {
 
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
-        const int64_t capture_pts = static_cast<int64_t>(
-            static_cast<double>(now.QuadPart) * 10'000'000.0 /
-            static_cast<double>(qpc_freq.QuadPart)) - start_100ns;
+        int64_t capture_pts = 0;
+        if (parent->sync_manager_) {
+            if (!parent->sync_manager_->try_map_qpc_ticks(now.QuadPart, capture_pts)) return;
+        } else {
+            capture_pts = static_cast<int64_t>(
+                static_cast<double>(now.QuadPart) * 10'000'000.0 /
+                static_cast<double>(qpc_freq.QuadPart)) - start_100ns;
+        }
         if (!capture_cadence.accept(
                 capture_pts, capture_interval_100ns.load(std::memory_order_relaxed))) {
             parent->cadence_rejections_.fetch_add(1, std::memory_order_relaxed);
@@ -279,18 +287,28 @@ struct CaptureEngineImpl {
             // Keep fixed output dimensions; only input changes
             if (!setup_video_processor(frame_w, frame_h, out_width_, out_height_)) {
                 SR_LOG_ERROR(L"VP resize failed — dropping frame");
+                parent->resize_failures_.fetch_add(1, std::memory_order_relaxed);
+                parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
         }
 
         parent->set_frame_callback_stage(CaptureEngine::FrameCallbackStage::ReadSurface);
-        auto surface = frame.Surface();
-        auto access  = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
-
         winrt::com_ptr<ID3D11Texture2D> bgra_tex;
-        HRESULT hr = access->GetInterface(IID_PPV_ARGS(bgra_tex.put()));
+        HRESULT hr = E_FAIL;
+        try {
+            auto surface = frame.Surface();
+            auto access = surface.as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
+            hr = access->GetInterface(IID_PPV_ARGS(bgra_tex.put()));
+        } catch (const winrt::hresult_error& error) {
+            hr = error.code();
+        } catch (...) {
+            hr = E_UNEXPECTED;
+        }
         if (FAILED(hr)) {
             SR_LOG_ERROR(L"GetInterface(ID3D11Texture2D) failed: 0x%08X", hr);
+            parent->texture_acquisition_failures_.fetch_add(1, std::memory_order_relaxed);
+            parent->frames_dropped_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
 

@@ -194,9 +194,10 @@ bool MuxWriter::write_audio(IMFSample* sample) {
     active_write_started_ms_.store(start, std::memory_order_release);
 #ifdef SR_LOCAL_RECORDING_PROBE
     // Explicit fault injection, compiled only into the disposable local probe.
-    if (try_trigger_probe_audio_stall()) {
-        SR_LOG_WARN(L"[ProbeFault] Injecting requested 18-second audio writer stall");
-        Sleep(18'000);
+    if (try_trigger_probe_audio_stall(++audio_write_count_)) {
+        const uint32_t delay_ms = probe_audio_stall_duration_ms();
+        SR_LOG_WARN(L"[ProbeFault] Injecting requested audio writer stall: %u ms", delay_ms);
+        Sleep(delay_ms);
     }
 #endif
     HRESULT hr = sink_writer_->WriteSample(audio_stream_index_, sample);

@@ -72,6 +72,7 @@ private:
     DWORD                 audio_stream_index_ = 1;
     bool                  initialized_        = false;
     uint64_t              bytes_written_      = 0;
+    uint64_t              audio_write_count_  = 0;
     std::atomic<uint64_t> active_write_started_ms_{0};
     std::atomic<int64_t> last_video_pts_{-1};
     std::atomic<int64_t> last_audio_pts_{-1};

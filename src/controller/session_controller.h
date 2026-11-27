@@ -16,6 +16,7 @@
 #include <functional>
 #include <string>
 #include "controller/session_machine.h"
+#include "controller/recording_outcome.h"
 #include "encoder/encoder_probe.h"
 #include "encoder/power_mode.h"      // T042
 #include "sync/sync_manager.h"
@@ -58,6 +59,10 @@ public:
 
     // Stop recording — transitions Recording/Paused->Stopping->Idle
     bool stop();
+    // Last finalized recording result; stop() reports shutdown completion only.
+    RecordingOutcome last_recording_outcome() const {
+        return last_recording_outcome_.load(std::memory_order_acquire);
+    }
 
     // Pause — Recording->Paused
     bool pause();
@@ -203,6 +208,8 @@ private:
     std::atomic<uint32_t> audio_source_start_failures_{ 0 };
     std::atomic<bool> output_failure_reported_{ false };
     std::atomic<bool> stopping_from_pause_{ false };
+    std::atomic<uint32_t> pipeline_stall_events_{ 0 };
+    std::atomic<RecordingOutcome> last_recording_outcome_{ RecordingOutcome::NotRun };
     std::atomic<uint32_t> audio_written_ { 0 };
     uint64_t diagnostic_log_dropped_at_start_ = 0;
     StageTimingCounters video_encode_timing_;

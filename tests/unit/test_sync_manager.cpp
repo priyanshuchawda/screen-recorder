@@ -212,3 +212,42 @@ TEST_F(SyncManagerTest, ConcurrentPauseResumeAndTimestampReadsRemainSafe) {
     clock_reader.join();
     EXPECT_GE(sync_.paused_total_100ns(), 0);
 }
+
+TEST_F(SyncManagerTest, CapturedVideoTimestampExcludesCompletedPauseIntervals) {
+    sync_.start();
+    const int64_t anchor = sync_.anchor_qpc();
+    const int64_t freq = qpc_freq();
+    const int64_t before_pause = anchor + freq * 2;
+    sync_.pause_at_qpc(anchor + freq * 3);
+    sync_.resume_at_qpc(anchor + freq * 23);
+
+    int64_t pts = -1;
+    ASSERT_TRUE(sync_.try_map_qpc_ticks(before_pause, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 20'000'000.0, 100'000.0);
+    ASSERT_TRUE(sync_.try_map_qpc_ticks(anchor + freq * 24, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 40'000'000.0, 100'000.0);
+}
+
+TEST_F(SyncManagerTest, CapturedVideoDuringPauseIsRejectedAndResumeMapsContinuously) {
+    sync_.start();
+    const int64_t anchor = sync_.anchor_qpc();
+    const int64_t freq = qpc_freq();
+    sync_.pause_at_qpc(anchor + freq * 3);
+    int64_t pts = -1;
+    EXPECT_FALSE(sync_.try_map_qpc_ticks(anchor + freq * 8, pts));
+    sync_.resume_at_qpc(anchor + freq * 23);
+    ASSERT_TRUE(sync_.try_map_qpc_ticks(anchor + freq * 24, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 40'000'000.0, 100'000.0);
+}
+
+TEST_F(SyncManagerTest, AudioPacketOverlappingPauseIsRejected) {
+    sync_.start();
+    const int64_t anchor = sync_.anchor_100ns();
+    sync_.pause_at_qpc(sync_.anchor_qpc() + qpc_freq() * 3);
+    sync_.resume_at_qpc(sync_.anchor_qpc() + qpc_freq() * 23);
+
+    int64_t pts = -1;
+    EXPECT_FALSE(sync_.try_map_qpc_100ns(anchor + 8 * 10'000'000LL, 100'000, pts));
+    ASSERT_TRUE(sync_.try_map_qpc_100ns(anchor + 24 * 10'000'000LL, 100'000, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 40'000'000.0, 100'000.0);
+}

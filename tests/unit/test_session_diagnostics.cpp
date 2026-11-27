@@ -74,3 +74,13 @@ TEST(SessionDiagnosticsTest, StopSummaryMarksIncompleteEncoderDrain) {
     EXPECT_NE(summary.find(L"audio_source_start_failures=2"), std::wstring::npos);
     EXPECT_NE(summary.find(L"diagnostic_log_dropped=2"), std::wstring::npos);
 }
+
+TEST(SessionDiagnosticsTest, StopSummaryIncludesCaptureSetupFailures) {
+    sr::SessionDiagnostics::StopInfo info;
+    info.status = L"incomplete";
+    info.capture_resize_failures = 2;
+    info.capture_texture_acquisition_failures = 3;
+    const std::wstring summary = sr::SessionDiagnostics::format_stop_summary(info);
+    EXPECT_NE(summary.find(L"capture_resize_failures=2"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"capture_texture_acquisition_failures=3"), std::wstring::npos);
+}

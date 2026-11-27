@@ -100,7 +100,7 @@ target_compile_definitions(recording_probe PRIVATE SR_LOCAL_RECORDING_PROBE)
 # Fault injection must be compiled into the mux writer translation unit, which
 # belongs to the library. Keep this probe-only copy isolated from the production
 # core so the app cannot contain or activate the simulated writer stall.
-add_library(screen_recorder_probe_core STATIC ${SCREEN_RECORDER_CORE_SOURCES})
+add_library(screen_recorder_probe_core STATIC EXCLUDE_FROM_ALL ${SCREEN_RECORDER_CORE_SOURCES})
 target_include_directories(screen_recorder_probe_core PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(screen_recorder_probe_core PUBLIC ${WIN_LIBS})
 target_compile_definitions(screen_recorder_probe_core PRIVATE SR_LOCAL_RECORDING_PROBE)

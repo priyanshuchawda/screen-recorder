@@ -58,8 +58,8 @@ public:
 
     // Attempt a state transition. Returns true if valid, false if rejected
     bool transition(SessionEvent event) {
-        SessionState old_state;
-        SessionState new_state;
+        SessionState old_state = SessionState::Idle;
+        SessionState new_state = SessionState::Idle;
         StateChangeCallback callback;
 
         {
