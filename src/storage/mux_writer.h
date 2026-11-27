@@ -103,10 +103,10 @@ private:
     bool enqueue_sample(MediaStream stream, IMFSample* sample);
     bool write_sample(AsyncWriter::Packet& packet);
     bool initialize_writer_worker();
-    void shutdown_writer_worker();
+    bool create_sink_writer_on_worker();
+    void shutdown_sink_writer_on_worker();
 
-    ComPtr<IMFSinkWriter> sink_writer_;
-    // Marshaled into the writer thread's MTA and released there.
+    // Created, used, finalized, and released only on the writer worker.
     ComPtr<IMFSinkWriter> worker_sink_writer_;
     MuxConfig             cfg_{};
     std::wstring          partial_path_;
@@ -131,6 +131,8 @@ private:
     std::atomic<uint64_t> sink_finalize_ms_{0};
     std::atomic<uint64_t> invalid_sample_rejections_{0};
     std::atomic<HRESULT> last_error_{S_OK};
+    std::atomic<HRESULT> sink_finalize_result_{E_PENDING};
+    std::atomic<bool> finalize_requested_{false};
     AsyncWriter writer_{MediaQueueLimits{1024, 16ull * 1024 * 1024,
                                           5ll * 10'000'000}};
 };

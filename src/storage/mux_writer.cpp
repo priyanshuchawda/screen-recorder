@@ -39,107 +39,6 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
     partial_path_ = partial_path;
     final_path_   = final_path;
     cfg_ = cfg;
-
-    // --- Sink Writer Attributes ---
-    ComPtr<IMFAttributes> attrs;
-    HRESULT hr = MFCreateAttributes(&attrs, 4);
-    if (FAILED(hr)) { SR_LOG_ERROR(L"MFCreateAttributes failed: 0x%08X", hr); return false; }
-
-    hr = configure_mux_writer_attributes(attrs.Get());
-    if (FAILED(hr)) { SR_LOG_ERROR(L"MuxWriter attribute setup failed: 0x%08X", hr); return false; }
-
-    // --- Create SinkWriter ---
-    hr = MFCreateSinkWriterFromURL(partial_path.c_str(), nullptr, attrs.Get(),
-                                   &sink_writer_);
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"MFCreateSinkWriterFromURL('%s') failed: 0x%08X",
-                     partial_path.c_str(), hr);
-        return false;
-    }
-
-    // ===================================================================
-    // VIDEO STREAM — H.264 output
-    // ===================================================================
-    ComPtr<IMFMediaType> video_out;
-    hr = MFCreateMediaType(&video_out);
-    if (FAILED(hr)) return false;
-
-    video_out->SetGUID(MF_MT_MAJOR_TYPE,     MFMediaType_Video);
-    video_out->SetGUID(MF_MT_SUBTYPE,        MFVideoFormat_H264);
-    video_out->SetUINT32(MF_MT_AVG_BITRATE,  cfg.video_bitrate);
-    video_out->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-    MFSetAttributeSize(video_out.Get(), MF_MT_FRAME_SIZE,
-                       cfg.video_width, cfg.video_height);
-    MFSetAttributeRatio(video_out.Get(), MF_MT_FRAME_RATE,
-                        cfg.video_fps_num, cfg.video_fps_den);
-    MFSetAttributeRatio(video_out.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
-    video_out->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main);
-
-    hr = sink_writer_->AddStream(video_out.Get(), &video_stream_index_);
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"SinkWriter AddStream (video) failed: 0x%08X", hr);
-        return false;
-    }
-
-    // Set matching input type (we pass pre-encoded H.264)
-    hr = sink_writer_->SetInputMediaType(video_stream_index_, video_out.Get(), nullptr);
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"SetInputMediaType (video) failed: 0x%08X", hr);
-        return false;
-    }
-
-    // ===================================================================
-    // AUDIO STREAM — AAC-LC output
-    // ===================================================================
-    ComPtr<IMFMediaType> audio_out;
-    hr = MFCreateMediaType(&audio_out);
-    if (FAILED(hr)) return false;
-
-    audio_out->SetGUID(MF_MT_MAJOR_TYPE,              MFMediaType_Audio);
-    audio_out->SetGUID(MF_MT_SUBTYPE,                 MFAudioFormat_AAC);
-    audio_out->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, cfg.audio_sample_rate);
-    audio_out->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,       cfg.audio_channels);
-    audio_out->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, cfg.audio_bitrate / 8);
-    audio_out->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,    16);
-    audio_out->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE,          0); // Raw AAC
-
-    hr = sink_writer_->AddStream(audio_out.Get(), &audio_stream_index_);
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"SinkWriter AddStream (audio) failed: 0x%08X", hr);
-        return false;
-    }
-
-    // Input audio type: PCM or IEEE Float (SinkWriter will encode to AAC)
-    ComPtr<IMFMediaType> audio_in;
-    hr = MFCreateMediaType(&audio_in);
-    if (FAILED(hr)) return false;
-
-    GUID audio_subtype = cfg.audio_is_float ? MFAudioFormat_Float : MFAudioFormat_PCM;
-    audio_in->SetGUID(MF_MT_MAJOR_TYPE,              MFMediaType_Audio);
-    audio_in->SetGUID(MF_MT_SUBTYPE,                 audio_subtype);
-    audio_in->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, cfg.audio_sample_rate);
-    audio_in->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,       cfg.audio_channels);
-    audio_in->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,    cfg.audio_bits_per_sample);
-    uint32_t block_align = cfg.audio_channels * (cfg.audio_bits_per_sample / 8);
-    audio_in->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, block_align);
-    audio_in->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
-                         cfg.audio_sample_rate * block_align);
-
-    hr = sink_writer_->SetInputMediaType(audio_stream_index_, audio_in.Get(), nullptr);
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"SetInputMediaType (audio PCM) failed: 0x%08X", hr);
-        return false;
-    }
-
-    // ===================================================================
-    // Begin writing
-    // ===================================================================
-    hr = sink_writer_->BeginWriting();
-    if (FAILED(hr)) {
-        SR_LOG_ERROR(L"SinkWriter::BeginWriting failed: 0x%08X", hr);
-        return false;
-    }
-
     last_video_pts_.store(-1, std::memory_order_relaxed);
     last_audio_pts_.store(-1, std::memory_order_relaxed);
     bytes_written_.store(0, std::memory_order_relaxed);
@@ -155,6 +54,8 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
     sink_finalize_ms_.store(0, std::memory_order_relaxed);
     invalid_sample_rejections_.store(0, std::memory_order_relaxed);
     last_error_.store(S_OK, std::memory_order_relaxed);
+    sink_finalize_result_.store(E_PENDING, std::memory_order_relaxed);
+    finalize_requested_.store(false, std::memory_order_relaxed);
     initialized_.store(true, std::memory_order_release);
     if (!initialize_writer_worker()) {
         initialized_.store(false, std::memory_order_release);
@@ -174,19 +75,10 @@ bool MuxWriter::write_audio(IMFSample* sample) {
 }
 
 bool MuxWriter::initialize_writer_worker() {
-    auto marshaled_sink_writer = std::make_shared<ComPtr<IStream>>();
-    HRESULT marshal_hr = CoMarshalInterThreadInterfaceInStream(
-        IID_IMFSinkWriter, sink_writer_.Get(), marshaled_sink_writer->GetAddressOf());
-    if (FAILED(marshal_hr)) {
-        last_error_.store(marshal_hr, std::memory_order_release);
-        SR_LOG_ERROR(L"Could not marshal Sink Writer to its worker: 0x%08X", marshal_hr);
-        return false;
-    }
-
     auto com_initialized = std::make_shared<bool>(false);
     const bool started = writer_.start(
         [this](AsyncWriter::Packet& packet) { return write_sample(packet); },
-        [this, com_initialized, marshaled_sink_writer] {
+        [this, com_initialized] {
             const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
             if (FAILED(hr)) {
                 last_error_.store(hr, std::memory_order_release);
@@ -194,13 +86,7 @@ bool MuxWriter::initialize_writer_worker() {
                 return false;
             }
             *com_initialized = true;
-            IStream* stream = marshaled_sink_writer->Detach();
-            const HRESULT unmarshal_hr = CoGetInterfaceAndReleaseStream(
-                stream, IID_IMFSinkWriter,
-                reinterpret_cast<void**>(worker_sink_writer_.GetAddressOf()));
-            if (FAILED(unmarshal_hr)) {
-                last_error_.store(unmarshal_hr, std::memory_order_release);
-                SR_LOG_ERROR(L"Could not unmarshal Sink Writer on worker: 0x%08X", unmarshal_hr);
+            if (!create_sink_writer_on_worker()) {
                 worker_sink_writer_.Reset();
                 CoUninitialize();
                 *com_initialized = false;
@@ -209,21 +95,118 @@ bool MuxWriter::initialize_writer_worker() {
             return true;
         },
         [this, com_initialized] {
-            worker_sink_writer_.Reset();
+            shutdown_sink_writer_on_worker();
             if (*com_initialized) CoUninitialize();
         });
-    if (!started && marshaled_sink_writer->Get()) {
-        const HRESULT release_hr = CoReleaseMarshalData(marshaled_sink_writer->Get());
-        if (FAILED(release_hr)) {
-            SR_LOG_WARN(L"Could not release unused marshaled Sink Writer data: 0x%08X",
-                        release_hr);
-        }
-    }
     if (!started && last_error_.load(std::memory_order_acquire) == S_OK) {
         last_error_.store(HRESULT_FROM_WIN32(ERROR_NOT_ENOUGH_MEMORY),
                           std::memory_order_release);
     }
     return started;
+}
+
+bool MuxWriter::create_sink_writer_on_worker() {
+    ComPtr<IMFAttributes> attrs;
+    HRESULT hr = MFCreateAttributes(&attrs, 4);
+    if (FAILED(hr)) {
+        last_error_.store(hr, std::memory_order_release);
+        SR_LOG_ERROR(L"MFCreateAttributes failed: 0x%08X", hr);
+        return false;
+    }
+    hr = configure_mux_writer_attributes(attrs.Get());
+    if (FAILED(hr)) {
+        last_error_.store(hr, std::memory_order_release);
+        SR_LOG_ERROR(L"MuxWriter attribute setup failed: 0x%08X", hr);
+        return false;
+    }
+    hr = MFCreateSinkWriterFromURL(partial_path_.c_str(), nullptr, attrs.Get(),
+                                   worker_sink_writer_.GetAddressOf());
+    if (FAILED(hr)) {
+        last_error_.store(hr, std::memory_order_release);
+        SR_LOG_ERROR(L"MFCreateSinkWriterFromURL('%s') failed: 0x%08X",
+                     partial_path_.c_str(), hr);
+        return false;
+    }
+
+    ComPtr<IMFMediaType> video_out;
+    hr = MFCreateMediaType(&video_out);
+    if (SUCCEEDED(hr)) hr = video_out->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    if (SUCCEEDED(hr)) hr = video_out->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    if (SUCCEEDED(hr)) hr = video_out->SetUINT32(MF_MT_AVG_BITRATE, cfg_.video_bitrate);
+    if (SUCCEEDED(hr)) hr = video_out->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    if (SUCCEEDED(hr)) hr = MFSetAttributeSize(video_out.Get(), MF_MT_FRAME_SIZE,
+                                                cfg_.video_width, cfg_.video_height);
+    if (SUCCEEDED(hr)) hr = MFSetAttributeRatio(video_out.Get(), MF_MT_FRAME_RATE,
+                                                 cfg_.video_fps_num, cfg_.video_fps_den);
+    if (SUCCEEDED(hr)) hr = MFSetAttributeRatio(video_out.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+    if (SUCCEEDED(hr)) hr = video_out->SetUINT32(MF_MT_MPEG2_PROFILE,
+                                                  eAVEncH264VProfile_Main);
+    if (SUCCEEDED(hr)) hr = worker_sink_writer_->AddStream(video_out.Get(), &video_stream_index_);
+    if (SUCCEEDED(hr)) hr = worker_sink_writer_->SetInputMediaType(
+        video_stream_index_, video_out.Get(), nullptr);
+    if (FAILED(hr)) {
+        last_error_.store(hr, std::memory_order_release);
+        SR_LOG_ERROR(L"SinkWriter video stream setup failed: 0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IMFMediaType> audio_out;
+    hr = MFCreateMediaType(&audio_out);
+    if (SUCCEEDED(hr)) hr = audio_out->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    if (SUCCEEDED(hr)) hr = audio_out->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
+    if (SUCCEEDED(hr)) hr = audio_out->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND,
+                                                  cfg_.audio_sample_rate);
+    if (SUCCEEDED(hr)) hr = audio_out->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,
+                                                  cfg_.audio_channels);
+    if (SUCCEEDED(hr)) hr = audio_out->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+                                                  cfg_.audio_bitrate / 8);
+    if (SUCCEEDED(hr)) hr = audio_out->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
+    if (SUCCEEDED(hr)) hr = audio_out->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
+    if (SUCCEEDED(hr)) hr = worker_sink_writer_->AddStream(audio_out.Get(), &audio_stream_index_);
+    if (FAILED(hr)) {
+        last_error_.store(hr, std::memory_order_release);
+        SR_LOG_ERROR(L"SinkWriter audio output stream setup failed: 0x%08X", hr);
+        return false;
+    }
+
+    ComPtr<IMFMediaType> audio_in;
+    hr = MFCreateMediaType(&audio_in);
+    if (SUCCEEDED(hr)) hr = audio_in->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    if (SUCCEEDED(hr)) hr = audio_in->SetGUID(
+        MF_MT_SUBTYPE, cfg_.audio_is_float ? MFAudioFormat_Float : MFAudioFormat_PCM);
+    if (SUCCEEDED(hr)) hr = audio_in->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND,
+                                                 cfg_.audio_sample_rate);
+    if (SUCCEEDED(hr)) hr = audio_in->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS,
+                                                 cfg_.audio_channels);
+    if (SUCCEEDED(hr)) hr = audio_in->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE,
+                                                 cfg_.audio_bits_per_sample);
+    const uint32_t block_align = cfg_.audio_channels * (cfg_.audio_bits_per_sample / 8);
+    if (SUCCEEDED(hr)) hr = audio_in->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, block_align);
+    if (SUCCEEDED(hr)) hr = audio_in->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
+                                                 cfg_.audio_sample_rate * block_align);
+    if (SUCCEEDED(hr)) hr = worker_sink_writer_->SetInputMediaType(
+        audio_stream_index_, audio_in.Get(), nullptr);
+    if (SUCCEEDED(hr)) hr = worker_sink_writer_->BeginWriting();
+    if (FAILED(hr)) {
+        last_error_.store(hr, std::memory_order_release);
+        SR_LOG_ERROR(L"SinkWriter audio input setup/BeginWriting failed: 0x%08X", hr);
+        return false;
+    }
+    return true;
+}
+
+void MuxWriter::shutdown_sink_writer_on_worker() {
+    if (worker_sink_writer_ && finalize_requested_.load(std::memory_order_acquire)) {
+        const ULONGLONG started_ms = GetTickCount64();
+        const HRESULT hr = worker_sink_writer_->Finalize();
+        sink_finalize_ms_.store(GetTickCount64() - started_ms, std::memory_order_relaxed);
+        sink_finalize_result_.store(hr, std::memory_order_release);
+        if (FAILED(hr)) {
+            last_error_.store(hr, std::memory_order_release);
+            SR_LOG_ERROR(L"SinkWriter::Finalize failed: 0x%08X", hr);
+        }
+    }
+    worker_sink_writer_.Reset();
 }
 
 bool MuxWriter::enqueue_sample(MediaStream stream, IMFSample* sample) {
@@ -357,18 +340,16 @@ MuxWriter::StatsSnapshot MuxWriter::snapshot() const {
 }
 
 bool MuxWriter::finalize() {
-    if (!sink_writer_) return true;
+    if (!initialized_.load(std::memory_order_acquire)) return true;
     initialized_.store(false, std::memory_order_release);
+    finalize_requested_.store(true, std::memory_order_release);
 
     const ULONGLONG drain_started_ms = GetTickCount64();
     const bool packets_drained = writer_.finish();
     writer_drain_ms_.store(GetTickCount64() - drain_started_ms, std::memory_order_relaxed);
     const auto writer_state = snapshot();
 
-    const ULONGLONG sink_finalize_started_ms = GetTickCount64();
-    HRESULT hr = sink_writer_->Finalize();
-    sink_finalize_ms_.store(GetTickCount64() - sink_finalize_started_ms, std::memory_order_relaxed);
-    sink_writer_.Reset();
+    const HRESULT hr = sink_finalize_result_.load(std::memory_order_acquire);
 
     if (!packets_drained || FAILED(hr)) {
         if (!packets_drained) {
@@ -401,7 +382,9 @@ void MuxWriter::abort() {
     writer_.abort();
     active_write_started_ms_.store(0, std::memory_order_release);
     active_sample_bytes_.store(0, std::memory_order_release);
-    sink_writer_.Reset();
+    worker_sink_writer_.Reset();
+    sink_finalize_result_.store(E_PENDING, std::memory_order_relaxed);
+    finalize_requested_.store(false, std::memory_order_relaxed);
     video_stream_index_ = 0;
     audio_stream_index_ = 1;
     bytes_written_.store(0, std::memory_order_relaxed);

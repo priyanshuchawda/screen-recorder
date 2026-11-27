@@ -4,7 +4,7 @@
 
 **Goal:** Move Media Foundation sink writes to a dedicated worker and absorb short storage stalls with bounded buffering of encoded video and audio samples.
 
-**Architecture:** The controller submits immutable `IMFSample` references to one bounded FIFO owned by `MuxWriter`. COM marshals the sink-writer interface to the worker MTA, where a single writer thread is the only caller of `IMFSinkWriter::WriteSample`. Finalize closes submissions, drains accepted packets, joins the worker, then finalizes and renames only if every accepted packet was written. Limits cover packet count, total queued bytes and per-stream media-time span. Capacity overflow or asynchronous write failure is surfaced as recording loss; accepted packets are never silently evicted.
+**Architecture:** The controller submits immutable `IMFSample` references to one bounded FIFO owned by `MuxWriter`. The worker initializes COM and creates, configures, writes, finalizes, and releases the sink writer in its own MTA; the interface is never marshaled across apartments. Finalize closes submissions, drains accepted packets, joins the worker after its sink finalization, and renames only if every accepted packet was written. Limits cover packet count, total queued bytes and per-stream media-time span. Capacity overflow or asynchronous write failure is surfaced as recording loss; accepted packets are never silently evicted.
 
 **Tech Stack:** Native C++20, Win32 threads/condition variables, Media Foundation, existing GoogleTest/CMake setup.
 
