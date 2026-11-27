@@ -34,6 +34,11 @@ public:
         uint32_t audio_resampler_failures = 0;
         uint32_t audio_write_failures = 0;
         uint32_t audio_source_start_failures = 0;
+        uint64_t audio_mixer_dropped_packets = 0;
+        uint64_t audio_mixer_rejected_packets = 0;
+        uint64_t audio_mixer_high_water_packets = 0;
+        uint64_t audio_mixer_high_water_bytes = 0;
+        uint64_t audio_mixer_high_water_duration_100ns = 0;
         uint32_t audio_packets = 0;
         bool encoder_drain_complete = true;
         uint64_t encoder_pending_inputs = 0;

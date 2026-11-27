@@ -41,7 +41,10 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"capture_resize_failures=%u capture_texture_acquisition_failures=%u "
                  L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u "
                  L"audio_resampler_failures=%u audio_write_failures=%u "
-                 L"audio_source_start_failures=%u audio_packets=%u "
+                 L"audio_source_start_failures=%u audio_mixer_dropped_packets=%llu "
+                 L"audio_mixer_rejected_packets=%llu audio_mixer_high_water_packets=%llu "
+                 L"audio_mixer_high_water_bytes=%llu audio_mixer_high_water_duration_100ns=%llu "
+                 L"audio_packets=%u "
                  L"encoder_drain_complete=%u encoder_pending_inputs=%llu "
                  L"encoder_deferred_inputs_pending=%llu encoder_deferred_inputs_high_watermark=%llu "
                  L"encoder_inputs_offered=%llu encoder_inputs_accepted=%llu encoder_outputs_produced=%llu "
@@ -63,6 +66,11 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  info.audio_resampler_failures,
                  info.audio_write_failures,
                  info.audio_source_start_failures,
+                 static_cast<unsigned long long>(info.audio_mixer_dropped_packets),
+                 static_cast<unsigned long long>(info.audio_mixer_rejected_packets),
+                 static_cast<unsigned long long>(info.audio_mixer_high_water_packets),
+                 static_cast<unsigned long long>(info.audio_mixer_high_water_bytes),
+                 static_cast<unsigned long long>(info.audio_mixer_high_water_duration_100ns),
                  info.audio_packets,
                  info.encoder_drain_complete ? 1u : 0u,
                  static_cast<unsigned long long>(info.encoder_pending_inputs),

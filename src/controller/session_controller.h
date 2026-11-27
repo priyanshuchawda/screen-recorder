@@ -28,6 +28,7 @@
 #include "utils/latency_histogram.h"
 #include "capture/capture_engine.h"  // for FrameQueue typedef
 #include "audio/audio_engine.h"     // for AudioQueue typedef
+#include "audio/audio_mixer.h"
 
 namespace sr {
 
@@ -206,6 +207,7 @@ private:
     std::atomic<uint32_t> video_write_failures_{ 0 };
     std::atomic<uint32_t> audio_write_failures_{ 0 };
     std::atomic<uint32_t> audio_source_start_failures_{ 0 };
+    AudioMixerStats audio_mixer_stats_{}; // written by encode worker; read after join
     std::atomic<bool> output_failure_reported_{ false };
     std::atomic<bool> stopping_from_pause_{ false };
     std::atomic<uint32_t> pipeline_stall_events_{ 0 };

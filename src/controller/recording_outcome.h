@@ -23,6 +23,8 @@ struct RecordingOutcomeInputs {
     uint64_t audio_resampler_failures = 0;
     uint64_t audio_write_failures = 0;
     uint64_t audio_source_start_failures = 0;
+    uint64_t audio_mixer_dropped_packets = 0;
+    uint64_t audio_mixer_rejected_packets = 0;
     uint64_t encoder_inputs_not_accepted = 0;
     uint64_t encoder_input_errors = 0;
     uint64_t encoder_inputs_deferred = 0;
@@ -45,6 +47,8 @@ inline RecordingOutcome classify_recording_outcome(
         input.audio_resampler_failures != 0 ||
         input.audio_write_failures != 0 ||
         input.audio_source_start_failures != 0 ||
+        input.audio_mixer_dropped_packets != 0 ||
+        input.audio_mixer_rejected_packets != 0 ||
         input.encoder_input_errors != 0 ||
         input.encoder_inputs_abandoned != 0 ||
         input.encoder_timestamp_errors != 0 ||

@@ -312,6 +312,7 @@ bool SessionController::start() {
     video_write_failures_.store(0, std::memory_order_relaxed);
     audio_write_failures_.store(0, std::memory_order_relaxed);
     audio_source_start_failures_.store(0, std::memory_order_relaxed);
+    audio_mixer_stats_ = {};
     output_failure_reported_.store(false, std::memory_order_relaxed);
     stopping_from_pause_.store(false, std::memory_order_relaxed);
     audio_written_.store(0,  std::memory_order_relaxed);
@@ -517,6 +518,17 @@ bool SessionController::stop() {
         audio_->resampler_failures() + loopback_audio_->resampler_failures();
     diagnostics_stop.audio_write_failures = audio_write_failures_.load();
     diagnostics_stop.audio_source_start_failures = audio_source_start_failures_.load();
+    diagnostics_stop.audio_mixer_dropped_packets = audio_mixer_stats_.dropped_packets;
+    diagnostics_stop.audio_mixer_rejected_packets = audio_mixer_stats_.rejected_packets;
+    diagnostics_stop.audio_mixer_high_water_packets = (std::max)(
+        audio_mixer_stats_.microphone_high_water_packets,
+        audio_mixer_stats_.loopback_high_water_packets);
+    diagnostics_stop.audio_mixer_high_water_bytes = (std::max)(
+        audio_mixer_stats_.microphone_high_water_bytes,
+        audio_mixer_stats_.loopback_high_water_bytes);
+    diagnostics_stop.audio_mixer_high_water_duration_100ns = (std::max)(
+        audio_mixer_stats_.microphone_high_water_duration_100ns,
+        audio_mixer_stats_.loopback_high_water_duration_100ns);
     diagnostics_stop.audio_packets = audio_written_.load();
     diagnostics_stop.encoder_drain_complete = encoder_drain_ok;
     diagnostics_stop.encoder_pending_inputs = encoder_pending_inputs;
@@ -556,6 +568,8 @@ bool SessionController::stop() {
     outcome_input.audio_resampler_failures = diagnostics_stop.audio_resampler_failures;
     outcome_input.audio_write_failures = diagnostics_stop.audio_write_failures;
     outcome_input.audio_source_start_failures = diagnostics_stop.audio_source_start_failures;
+    outcome_input.audio_mixer_dropped_packets = diagnostics_stop.audio_mixer_dropped_packets;
+    outcome_input.audio_mixer_rejected_packets = diagnostics_stop.audio_mixer_rejected_packets;
     outcome_input.encoder_inputs_not_accepted = diagnostics_stop.encoder_inputs_not_accepted;
     outcome_input.encoder_input_errors = diagnostics_stop.encoder_input_errors;
     outcome_input.encoder_inputs_deferred = diagnostics_stop.encoder_inputs_deferred;
@@ -1230,13 +1244,25 @@ void SessionController::encode_loop() {
             while (auto packet = audio_queue_->try_pop()) {
                 if (!machine_.is_paused() &&
                     !stopping_from_pause_.load(std::memory_order_acquire)) {
-                    audio_mixer.push(std::move(*packet), true);
+                    const auto result = audio_mixer.push(std::move(*packet), true);
+                    if (result.dropped_packets != 0 || result.rejected) {
+                        diagnostics_.write_event(L"event=audio_mixer_overflow source=microphone dropped=" +
+                            std::to_wstring(result.dropped_packets) + L" rejected=" +
+                            std::to_wstring(result.rejected ? 1 : 0));
+                        report_recording_loss(L"audio_mixer_queue");
+                    }
                 }
             }
             while (auto packet = loopback_queue_->try_pop()) {
                 if (!machine_.is_paused() &&
                     !stopping_from_pause_.load(std::memory_order_acquire)) {
-                    audio_mixer.push(std::move(*packet), false);
+                    const auto result = audio_mixer.push(std::move(*packet), false);
+                    if (result.dropped_packets != 0 || result.rejected) {
+                        diagnostics_.write_event(L"event=audio_mixer_overflow source=loopback dropped=" +
+                            std::to_wstring(result.dropped_packets) + L" rejected=" +
+                            std::to_wstring(result.rejected ? 1 : 0));
+                        report_recording_loss(L"audio_mixer_queue");
+                    }
                 }
             }
 
@@ -1287,6 +1313,7 @@ void SessionController::encode_loop() {
             audio_write_failures_.fetch_add(1, std::memory_order_relaxed);
         }
     }
+    audio_mixer_stats_ = audio_mixer.stats();
 }
 
 // ---------------------------------------------------------------------------

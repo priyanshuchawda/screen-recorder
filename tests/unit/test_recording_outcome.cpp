@@ -88,6 +88,15 @@ TEST(RecordingOutcomeTest, AudioResamplerFailureMakesFinalizedRecordingIncomplet
     EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
 }
 
+TEST(RecordingOutcomeTest, AudioMixerOverflowMakesFinalizedRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.audio_mixer_dropped_packets = 1;
+
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
 TEST(RecordingOutcomeTest, FinalizeFailureTakesPrecedence) {
     sr::RecordingOutcomeInputs input;
     input.finalized = false;
