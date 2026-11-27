@@ -17,6 +17,18 @@ TEST(BoundedQueueTest, StartsEmpty) {
     EXPECT_EQ(q.size(), 0u);
 }
 
+TEST(BoundedQueueTest, TracksQueueHighWatermarkAfterPushesAndEviction) {
+    BoundedQueue<int, 2> q;
+    EXPECT_EQ(q.high_watermark(), 0u);
+    EXPECT_TRUE(q.try_push(1));
+    EXPECT_TRUE(q.try_push(2));
+    EXPECT_EQ(q.high_watermark(), 2u);
+    auto first = q.try_pop();
+    ASSERT_TRUE(first.has_value());
+    EXPECT_TRUE(q.try_push_latest(3));
+    EXPECT_EQ(q.high_watermark(), 2u);
+}
+
 TEST(BoundedQueueTest, PushAndPop) {
     BoundedQueue<int, 5> q;
     EXPECT_TRUE(q.try_push(42));

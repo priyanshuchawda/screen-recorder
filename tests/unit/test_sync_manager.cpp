@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 #include "sync/sync_manager.h"
 #include <windows.h>
+#include <atomic>
 #include <thread>
 #include <chrono>
 
@@ -122,6 +123,23 @@ TEST_F(SyncManagerTest, PTSSubtractsPauseDuration) {
     EXPECT_GE(delta_ms, 0)  << "PTS should not go backwards";
 }
 
+TEST_F(SyncManagerTest, NowPtsUsedByIdleFrameSchedulingRemovesPauseTime) {
+    sync_.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    const int64_t before_pause = sync_.now_pts();
+
+    sync_.pause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Same clock closure used by stop while paused and resume.
+    sync_.resume();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    const int64_t after_resume = sync_.now_pts();
+    const int64_t delta_ms = hns_to_ms(after_resume - before_pause);
+    EXPECT_GE(delta_ms, 0);
+    EXPECT_LT(delta_ms, 80) << "A resumed idle-frame timestamp must exclude the pause interval";
+}
+
 // T019: Multiple pause/resume cycles accumulate correctly
 TEST_F(SyncManagerTest, MultiplePauseCyclesAccumulate) {
     sync_.start();
@@ -171,4 +189,65 @@ TEST_F(SyncManagerTest, PTSNonNegativeDuringPause) {
     // While paused, now_pts() should still reflect time up to pause point (no subtraction until resume)
     int64_t pts_while_paused = sync_.now_pts();
     EXPECT_GE(pts_while_paused, 0) << "PTS should be >= 0 while paused";
+}
+
+TEST_F(SyncManagerTest, ConcurrentPauseResumeAndTimestampReadsRemainSafe) {
+    sync_.start();
+    std::atomic<bool> finished{ false };
+    std::thread clock_reader([&] {
+        while (!finished.load(std::memory_order_acquire)) {
+            LARGE_INTEGER now{};
+            QueryPerformanceCounter(&now);
+            (void)sync_.to_pts(now.QuadPart);
+            (void)sync_.paused_total_100ns();
+            (void)sync_.anchor_100ns();
+        }
+    });
+
+    for (int i = 0; i < 100; ++i) {
+        sync_.pause();
+        sync_.resume();
+    }
+    finished.store(true, std::memory_order_release);
+    clock_reader.join();
+    EXPECT_GE(sync_.paused_total_100ns(), 0);
+}
+
+TEST_F(SyncManagerTest, CapturedVideoTimestampExcludesCompletedPauseIntervals) {
+    sync_.start();
+    const int64_t anchor = sync_.anchor_qpc();
+    const int64_t freq = qpc_freq();
+    const int64_t before_pause = anchor + freq * 2;
+    sync_.pause_at_qpc(anchor + freq * 3);
+    sync_.resume_at_qpc(anchor + freq * 23);
+
+    int64_t pts = -1;
+    ASSERT_TRUE(sync_.try_map_qpc_ticks(before_pause, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 20'000'000.0, 100'000.0);
+    ASSERT_TRUE(sync_.try_map_qpc_ticks(anchor + freq * 24, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 40'000'000.0, 100'000.0);
+}
+
+TEST_F(SyncManagerTest, CapturedVideoDuringPauseIsRejectedAndResumeMapsContinuously) {
+    sync_.start();
+    const int64_t anchor = sync_.anchor_qpc();
+    const int64_t freq = qpc_freq();
+    sync_.pause_at_qpc(anchor + freq * 3);
+    int64_t pts = -1;
+    EXPECT_FALSE(sync_.try_map_qpc_ticks(anchor + freq * 8, pts));
+    sync_.resume_at_qpc(anchor + freq * 23);
+    ASSERT_TRUE(sync_.try_map_qpc_ticks(anchor + freq * 24, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 40'000'000.0, 100'000.0);
+}
+
+TEST_F(SyncManagerTest, AudioPacketOverlappingPauseIsRejected) {
+    sync_.start();
+    const int64_t anchor = sync_.anchor_100ns();
+    sync_.pause_at_qpc(sync_.anchor_qpc() + qpc_freq() * 3);
+    sync_.resume_at_qpc(sync_.anchor_qpc() + qpc_freq() * 23);
+
+    int64_t pts = -1;
+    EXPECT_FALSE(sync_.try_map_qpc_100ns(anchor + 8 * 10'000'000LL, 100'000, pts));
+    ASSERT_TRUE(sync_.try_map_qpc_100ns(anchor + 24 * 10'000'000LL, 100'000, pts));
+    EXPECT_NEAR(static_cast<double>(pts), 40'000'000.0, 100'000.0);
 }

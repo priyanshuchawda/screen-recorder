@@ -1,72 +1,140 @@
 #pragma once
-// sync_manager.h — A/V presentation timestamp (PTS) alignment using QPC clock
-// T014: Converts QPC timestamps to 100ns units, tracks pause offsets for PTS rebasing
+// QPC-backed session timeline shared by captured video and WASAPI audio.
 
 #include <windows.h>
 #include <cstdint>
+#include <mutex>
+#include <vector>
 
 namespace sr {
 
 class SyncManager {
 public:
-    SyncManager() = default;
+    SyncManager() : freq_(get_freq()) {}
 
-    // Call at recording start; anchors the QPC base time
     void start() {
+        std::lock_guard<std::mutex> lock(mutex_);
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
-        anchor_qpc_       = now.QuadPart;
+        anchor_qpc_ = now.QuadPart;
+        anchor_100ns_ = ticks_to_100ns(anchor_qpc_);
         paused_accum_100ns_ = 0;
-        pause_start_qpc_  = 0;
-        freq_ = get_freq();
+        pause_start_100ns_ = 0;
+        pause_intervals_.clear();
     }
 
-    // Call immediately at pause
     void pause() {
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
-        pause_start_qpc_ = now.QuadPart;
+        pause_at_qpc(now.QuadPart);
     }
 
-    // Call immediately at resume; accumulates pause duration
+    void pause_at_qpc(int64_t qpc_ticks) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (anchor_qpc_ == 0 || pause_start_100ns_ != 0) return;
+        pause_start_100ns_ = ticks_to_100ns(qpc_ticks);
+        pause_intervals_.push_back({ pause_start_100ns_, 0 });
+    }
+
     void resume() {
-        if (pause_start_qpc_ > 0) {
-            LARGE_INTEGER now{};
-            QueryPerformanceCounter(&now);
-            int64_t paused_ticks = now.QuadPart - pause_start_qpc_;
-            paused_accum_100ns_ += ticks_to_100ns(paused_ticks);
-            pause_start_qpc_ = 0;
-        }
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        resume_at_qpc(now.QuadPart);
     }
 
-    // Convert any QPC tick value to a rebased PTS (100ns units)
-    // Suitable for both video frames and audio packets
+    void resume_at_qpc(int64_t qpc_ticks) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (pause_start_100ns_ == 0) return;
+        const int64_t end = ticks_to_100ns(qpc_ticks);
+        const int64_t duration = (end > pause_start_100ns_) ? end - pause_start_100ns_ : 0;
+        pause_intervals_.back().end_100ns = end;
+        paused_accum_100ns_ += duration;
+        pause_start_100ns_ = 0;
+    }
+
+    // A frame captured during a pause is rejected. Timestamps from before a
+    // pause remain mapped with only pauses that precede that timestamp removed.
+    bool try_map_qpc_ticks(int64_t qpc_ticks, int64_t& pts_100ns) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return map_absolute_100ns_locked(ticks_to_100ns(qpc_ticks), 0, pts_100ns);
+    }
+
+    // WASAPI supplies its QPC position in 100ns units. Reject an entire packet
+    // if any part of its capture interval overlaps a user pause.
+    bool try_map_qpc_100ns(int64_t absolute_qpc_100ns,
+                           int64_t duration_100ns,
+                           int64_t& pts_100ns) const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return map_absolute_100ns_locked(absolute_qpc_100ns,
+                                         (duration_100ns > 0) ? duration_100ns : 0,
+                                         pts_100ns);
+    }
+
     int64_t to_pts(int64_t qpc_ticks) const {
-        int64_t raw = ticks_to_100ns(qpc_ticks - anchor_qpc_);
-        return raw - paused_accum_100ns_;
+        int64_t pts = 0;
+        if (try_map_qpc_ticks(qpc_ticks, pts)) return pts;
+        std::lock_guard<std::mutex> lock(mutex_);
+        // During pause the public session clock freezes at its boundary.
+        return (pause_start_100ns_ > anchor_100ns_)
+            ? pause_start_100ns_ - anchor_100ns_ - paused_accum_100ns_
+            : 0;
     }
 
-    // Convenience: PTS at "now"
     int64_t now_pts() const {
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
         return to_pts(now.QuadPart);
     }
 
-    // Total paused duration in 100ns units
-    int64_t paused_total_100ns() const { return paused_accum_100ns_; }
+    int64_t paused_total_100ns() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return paused_accum_100ns_;
+    }
 
-    // QPC ticks at anchor (recording start)
-    int64_t anchor_qpc() const { return anchor_qpc_; }
+    bool is_paused() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return pause_start_100ns_ != 0;
+    }
+
+    int64_t anchor_qpc() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return anchor_qpc_;
+    }
     int64_t anchor_100ns() const {
-        return ticks_to_100ns(anchor_qpc_);
+        std::lock_guard<std::mutex> lock(mutex_);
+        return anchor_100ns_;
     }
 
 private:
-    int64_t anchor_qpc_        = 0;
+    struct PauseInterval { int64_t start_100ns; int64_t end_100ns; };
+    int64_t anchor_qpc_ = 0;
+    int64_t anchor_100ns_ = 0;
     int64_t paused_accum_100ns_ = 0;
-    int64_t pause_start_qpc_   = 0;
-    mutable int64_t freq_      = 0;
+    int64_t pause_start_100ns_ = 0;
+    int64_t freq_ = 0;
+    std::vector<PauseInterval> pause_intervals_;
+    mutable std::mutex mutex_;
+
+    bool map_absolute_100ns_locked(int64_t absolute_100ns,
+                                   int64_t duration_100ns,
+                                   int64_t& pts_100ns) const {
+        if (anchor_qpc_ == 0 || absolute_100ns < anchor_100ns_) return false;
+        int64_t removed_pause = 0;
+        const int64_t packet_end = absolute_100ns + duration_100ns;
+        for (const auto& interval : pause_intervals_) {
+            const int64_t end = interval.end_100ns ? interval.end_100ns : INT64_MAX;
+            if (duration_100ns == 0) {
+                if (absolute_100ns >= interval.start_100ns && absolute_100ns < end) return false;
+            } else if (absolute_100ns < end && packet_end > interval.start_100ns) {
+                return false;
+            }
+            if (interval.end_100ns != 0 && absolute_100ns >= interval.end_100ns) {
+                removed_pause += interval.end_100ns - interval.start_100ns;
+            }
+        }
+        pts_100ns = absolute_100ns - anchor_100ns_ - removed_pause;
+        return true;
+    }
 
     static int64_t get_freq() {
         LARGE_INTEGER f{};
@@ -75,14 +143,8 @@ private:
     }
 
     int64_t ticks_to_100ns(int64_t ticks) const {
-        if (freq_ == 0) {
-            const_cast<SyncManager*>(this)->freq_ = get_freq();
-        }
-        // Avoid overflow: use double arithmetic (sufficient precision for 60-min sessions)
-        return static_cast<int64_t>(
-            static_cast<double>(ticks) * 10'000'000.0 /
-            static_cast<double>(freq_)
-        );
+        return static_cast<int64_t>(static_cast<double>(ticks) * 10'000'000.0 /
+                                    static_cast<double>(freq_));
     }
 };
 

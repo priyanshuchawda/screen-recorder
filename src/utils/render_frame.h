@@ -5,6 +5,8 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <atomic>
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -12,9 +14,25 @@ namespace sr {
 
 using Microsoft::WRL::ComPtr;
 
+struct TextureSurfaceSlot {
+    std::atomic<bool> available{ true };
+};
+
+struct TextureSurfaceLease {
+    explicit TextureSurfaceLease(std::shared_ptr<TextureSurfaceSlot> owner_slot)
+        : slot(std::move(owner_slot)) {}
+    ~TextureSurfaceLease() {
+        if (slot) slot->available.store(true, std::memory_order_release);
+    }
+    TextureSurfaceLease(const TextureSurfaceLease&) = delete;
+    TextureSurfaceLease& operator=(const TextureSurfaceLease&) = delete;
+    std::shared_ptr<TextureSurfaceSlot> slot;
+};
+
 // Video frame from capture engine, GPU-backed
 struct RenderFrame {
     ComPtr<ID3D11Texture2D> texture;
+    std::shared_ptr<TextureSurfaceLease> surface_lease;
     int64_t                 pts = 0;          // QPC ticks mapped to 100ns units
     uint32_t                width = 0;
     uint32_t                height = 0;

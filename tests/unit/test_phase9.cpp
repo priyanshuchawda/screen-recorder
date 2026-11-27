@@ -51,6 +51,14 @@ TEST(CaptureCadenceTest, KeepsNearlySixtyHertzFramesAtSixtyFps) {
     EXPECT_GE(accepted, 3500u);
 }
 
+TEST(CaptureCadenceTest, CountsFramesRejectedByCadenceLimit) {
+    sr::CaptureCadence cadence;
+    EXPECT_TRUE(cadence.accept(0, 10));
+    EXPECT_FALSE(cadence.accept(1, 10));
+    EXPECT_FALSE(cadence.accept(2, 10));
+    EXPECT_EQ(cadence.rejected_count(), 2u);
+}
+
 TEST(CaptureCadenceTest, LimitsOneHundredTwentyHertzToSixtyFps) {
     sr::CaptureCadence cadence;
     constexpr int64_t interval = 10'000'000 / 60;

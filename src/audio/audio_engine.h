@@ -18,6 +18,8 @@
 
 namespace sr {
 
+class SyncManager;
+
 using Microsoft::WRL::ComPtr;
 
 // Capture mode: microphone input or system/desktop loopback audio
@@ -128,6 +130,7 @@ public:
 
     // Set QPC anchor for PTS calculation (call just before start())
     void set_sync_anchor_100ns(int64_t anchor) { pts_anchor_100ns_ = anchor; }
+    void set_sync_manager(SyncManager* sync) { sync_manager_ = sync; }
 
 private:
     void capture_loop();
@@ -159,6 +162,7 @@ private:
     std::thread       thread_;
 
     int64_t  pts_anchor_100ns_ = 0;   // 100ns epoch offset
+    SyncManager* sync_manager_ = nullptr; // Owned by SessionController.
     int64_t  start_pts_100ns_  = 0;   // stream start on the shared QPC timeline
     int64_t  sample_count_     = 0;   // monotonic sample counter for PTS
     float    mic_level_envelope_ = 0.0f; // smoothed microphone RMS for automatic level

@@ -19,17 +19,22 @@ public:
         // last arrival. Otherwise a slightly early 60 Hz source can lose
         // every other frame at a 60 fps target.
         const int64_t tolerance = interval / 20;
-        if (pts < next_due_ - tolerance) return false;
+        if (pts < next_due_ - tolerance) {
+            ++rejected_count_;
+            return false;
+        }
         next_due_ += interval;
         if (next_due_ <= pts) next_due_ = pts + interval;
         return true;
     }
 
-    void reset() { next_due_ = -1; interval_ = 0; }
+    void reset() { next_due_ = -1; interval_ = 0; rejected_count_ = 0; }
+    uint64_t rejected_count() const { return rejected_count_; }
 
 private:
     int64_t next_due_ = -1;
     int64_t interval_ = 0;
+    uint64_t rejected_count_ = 0;
 };
 
 } // namespace sr

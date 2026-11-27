@@ -5,6 +5,7 @@
 // Supports Microphone (eCapture) and Loopback (eRender) capture modes.
 
 #include "audio/audio_engine.h"
+#include "sync/sync_manager.h"
 #include "utils/logging.h"
 
 #include <avrt.h>
@@ -263,12 +264,25 @@ void AudioEngine::capture_loop() {
                 ? last_packet_end_pts
                 : start_pts_100ns_ + static_cast<int64_t>(sample_count_) *
                     10'000'000LL / static_cast<int64_t>(sample_rate_);
+            bool timestamp_in_pause = sync_manager_ && sync_manager_->is_paused();
             if (qpc_position != 0 && !(flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR)) {
-                pts = static_cast<int64_t>(qpc_position) - pts_anchor_100ns_;
+                if (sync_manager_) {
+                    const int64_t packet_duration = static_cast<int64_t>(frames_available) *
+                        10'000'000LL / static_cast<int64_t>(sample_rate_);
+                    timestamp_in_pause = !sync_manager_->try_map_qpc_100ns(
+                        static_cast<int64_t>(qpc_position), packet_duration, pts);
+                } else {
+                    pts = static_cast<int64_t>(qpc_position) - pts_anchor_100ns_;
+                }
             } else if ((flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) && !logged_timestamp_error) {
                 logged_timestamp_error = true;
                 SR_LOG_WARN(L"[%s] WASAPI timestamp uncertain; using sample clock",
                             mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone");
+            }
+            if (timestamp_in_pause) {
+                capture_client_->ReleaseBuffer(frames_available);
+                sample_count_ += static_cast<int64_t>(frames_available);
+                continue;
             }
             pts = (std::max)(int64_t{0}, pts);
             last_packet_end_pts = pts + static_cast<int64_t>(frames_available) *

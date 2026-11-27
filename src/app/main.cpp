@@ -156,17 +156,24 @@ static void ApplyCameraProfileFromSettings()
 static void UpdateProfileLabel()
 {
     if (!g_lbl_profile) return;
-    const auto resolution = sr::recording_resolution_for_height(g_settings.resolution_height);
-    const uint32_t active_fps = g_controller.state() == sr::SessionState::Idle
-        ? g_settings.fps
-        : g_controller.active_fps();
+    const bool idle = g_controller.state() == sr::SessionState::Idle;
+    sr::EncoderProfile active_profile{};
+    if (idle) {
+        const auto resolution = sr::recording_resolution_for_height(g_settings.resolution_height);
+        active_profile.width = resolution.width;
+        active_profile.height = resolution.height;
+        active_profile.fps = g_settings.fps;
+        active_profile.bitrate_bps = g_settings.bitrate_bps;
+    } else {
+        active_profile = g_controller.active_encoder_profile();
+    }
     wchar_t prof_buf[96];
     _snwprintf_s(prof_buf, _countof(prof_buf), _TRUNCATE,
         L"%ufps | %ux%u | %uMbps%s",
-        active_fps ? active_fps : g_settings.fps,
-        resolution.width, resolution.height,
-        g_settings.bitrate_bps / 1'000'000,
-        g_settings.is_high_quality() ? L" | HQ" : L"");
+        active_profile.fps ? active_profile.fps : g_settings.fps,
+        active_profile.width, active_profile.height,
+        active_profile.bitrate_bps / 1'000'000,
+        idle && g_settings.is_high_quality() ? L" | HQ" : L"");
     SetWindowTextW(g_lbl_profile, prof_buf);
 }
 
