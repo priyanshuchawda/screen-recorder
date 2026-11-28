@@ -44,6 +44,7 @@ class StorageManager;
 // Callback for UI status updates
 using StatusCallback = std::function<void(const std::wstring& status)>;
 using ErrorCallback  = std::function<void(const std::wstring& error)>;
+using WarningCallback = std::function<void(const std::wstring& warning)>;
 using StopRequestCallback = std::function<void()>;
 
 class SessionController {
@@ -55,7 +56,8 @@ public:
     bool initialize(StorageManager* storage,
                     StatusCallback on_status = nullptr,
                     ErrorCallback  on_error  = nullptr,
-                    StopRequestCallback on_stop_requested = nullptr);
+                    StopRequestCallback on_stop_requested = nullptr,
+                    WarningCallback on_warning = nullptr);
 
     // Start recording — transitions state machine Idle->Recording
     bool start();
@@ -251,9 +253,11 @@ private:
     StatusCallback on_status_;
     ErrorCallback  on_error_;
     StopRequestCallback on_stop_requested_;
+    WarningCallback on_warning_;
 
     void notify_status(const std::wstring& msg);
     void notify_error (const std::wstring& msg);
+    void notify_warning(const std::wstring& msg);
     void report_recording_loss(const wchar_t* stage);
 };
 

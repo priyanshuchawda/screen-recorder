@@ -184,12 +184,14 @@ const wchar_t* SessionController::diagnostics_stage_label(DiagnosticsStage stage
 bool SessionController::initialize(StorageManager* storage,
                                     StatusCallback on_status,
                                     ErrorCallback  on_error,
-                                    StopRequestCallback on_stop_requested)
+                                    StopRequestCallback on_stop_requested,
+                                    WarningCallback on_warning)
 {
     storage_   = storage;
     on_status_ = std::move(on_status);
     on_error_  = std::move(on_error);
     on_stop_requested_ = std::move(on_stop_requested);
+    on_warning_ = std::move(on_warning);
 
     // Initialize Media Foundation once per controller lifetime. Balance the
     // startup reference in the destructor, including probe-failure paths.
@@ -809,13 +811,12 @@ bool SessionController::stop() {
     last_recording_outcome_.store(outcome, std::memory_order_release);
     diagnostics_stop.status = recording_outcome_name(outcome);
     if (outcome == RecordingOutcome::Incomplete) {
-        if (diagnostics_stop.video_scheduled_frame_drops != 0 &&
-            diagnostics_stop.video_write_failures == 0 &&
-            diagnostics_stop.audio_write_failures == 0 &&
-            diagnostics_stop.encoder_inputs_abandoned == 0) {
-            notify_error(L"The MP4 was finalized, but " +
-                std::to_wstring(diagnostics_stop.video_scheduled_frame_drops) +
-                L" scheduled video frame deadlines were missed. The video may have timing gaps; review the diagnostics file.");
+        if (has_only_scheduled_video_deadline_misses(outcome_input)) {
+            const uint64_t missed = diagnostics_stop.video_scheduled_frame_drops;
+            notify_warning(L"The MP4 was saved, but " + std::to_wstring(missed) +
+                (missed == 1 ? L" scheduled video frame deadline was missed. "
+                             : L" scheduled video frame deadlines were missed. ") +
+                L"Review the diagnostics file for timing details.");
         } else {
             notify_error(L"The MP4 was finalized, but diagnostics found possible missing or invalid media. Review its diagnostics file before relying on it.");
         }
@@ -1337,6 +1338,7 @@ void SessionController::encode_loop() {
     uint64_t scheduled_output_frames = 0;
     int64_t first_scheduled_pts = -1;
     int64_t last_scheduled_pts = -1;
+    bool initial_video_timeline_started = false;
     ULONGLONG   last_power_check_ms = 0;
     constexpr ULONGLONG kPowerCheckIntervalMs = 10'000;
     constexpr uint32_t kAudioOutputRate = 48'000;
@@ -1556,6 +1558,19 @@ void SessionController::encode_loop() {
         if (!pacer_.started() && pending_video_frame &&
             (machine_.is_recording() || machine_.is_stopping())) {
             pacer_.begin(pending_video_frame->pts);
+            if (!initial_video_timeline_started) {
+                const int64_t ready_pts = sync_.now_pts();
+                const int64_t startup_latency_100ns =
+                    (std::max)(int64_t{0}, ready_pts - pending_video_frame->pts);
+                diagnostics_.write_event(
+                    L"event=video_timeline_started capture_pts=" +
+                    std::to_wstring(pending_video_frame->pts) +
+                    L" ready_pts=" + std::to_wstring(ready_pts) +
+                    L" startup_latency_100ns=" + std::to_wstring(startup_latency_100ns) +
+                    L" startup_latency_us=" + std::to_wstring(startup_latency_100ns / 10) +
+                    L" fps=" + std::to_wstring(pacer_.fps()));
+                initial_video_timeline_started = true;
+            }
         }
 
         const int64_t now_pts = sync_.now_pts();
@@ -1815,6 +1830,10 @@ void SessionController::notify_status(const std::wstring& msg) {
 void SessionController::notify_error(const std::wstring& msg) {
     SR_LOG_ERROR(L"%s", msg.c_str());
     if (on_error_) on_error_(msg);
+}
+void SessionController::notify_warning(const std::wstring& msg) {
+    SR_LOG_WARN(L"%s", msg.c_str());
+    if (on_warning_) on_warning_(msg);
 }
 
 void SessionController::report_recording_loss(const wchar_t* stage) {

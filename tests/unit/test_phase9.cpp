@@ -240,6 +240,31 @@ TEST(M4FixedFramePacer, DoesNotEmitInvalidTimestampBeforeTimelineStarts) {
     EXPECT_EQ(pacer.emit_next(true), 1'000'000);
 }
 
+TEST(M4FixedFramePacer, PreservesFirstCapturedTimestampAcrossSlowStartupConversion) {
+    for (const uint32_t fps : {30u, 60u}) {
+        for (const int64_t startup_delay_ms : {30LL, 70LL, 100LL, 500LL}) {
+            sr::FixedFramePacer pacer(fps);
+            constexpr int64_t first_capture_pts = 1'000'000;
+            pacer.begin(first_capture_pts);
+            const int64_t ready_pts = first_capture_pts + startup_delay_ms * 10'000;
+
+            // Before the first output, conversion startup is not an in-session
+            // missed slot. Preserve the captured frame timestamp and hold it
+            // until the CFR grid resumes after the conversion is ready.
+            EXPECT_EQ(pacer.emit_due(ready_pts, true), first_capture_pts)
+                << "fps=" << fps << " startup_delay_ms=" << startup_delay_ms;
+            EXPECT_EQ(pacer.skipped_slots(), 0u);
+            EXPECT_GT(pacer.next_deadline(), ready_pts);
+
+            // Once the first frame has been emitted, ordinary deadline misses
+            // remain visible and retain the existing no-catch-up behavior.
+            const int64_t delayed_wake = pacer.next_deadline() + 2 * 10'000'000LL / fps;
+            pacer.emit_due(delayed_wake, true);
+            EXPECT_GT(pacer.skipped_slots(), 0u);
+        }
+    }
+}
+
 TEST(M4FixedFramePacer, DoesNotExceedRequestedRateDuringIrregularArrivals) {
     sr::FixedFramePacer pacer(30);
     pacer.begin(0);

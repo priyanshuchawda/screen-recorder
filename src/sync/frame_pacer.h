@@ -64,6 +64,19 @@ public:
         // multiplying the full elapsed timestamp and handles 30-FPS rounding.
         const uint64_t due_slot = whole_seconds * fps_ +
             (remainder * fps_ + fps_ - 1) / kTicksPerSecond;
+
+        // The first usable image establishes the video track's opening
+        // timestamp. Conversion can take longer than one frame interval on a
+        // cold start; preserve that captured timestamp and begin the regular
+        // CFR cadence after the image became ready instead of classifying all
+        // elapsed startup slots as missing media. Once slot zero is emitted,
+        // all later deadline misses follow the normal strict accounting path.
+        if (next_slot_ == 0 && due_slot > 0) {
+            const int64_t first_pts = emit_current_slot(has_new_frame);
+            next_slot_ = due_slot + 1;
+            return first_pts;
+        }
+
         if (due_slot > next_slot_) {
             last_skipped_.count = due_slot - next_slot_;
             last_skipped_.first_deadline_pts = deadline_for_slot(next_slot_);
