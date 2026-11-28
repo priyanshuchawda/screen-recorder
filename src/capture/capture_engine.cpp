@@ -12,6 +12,7 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 
 #include "capture/capture_engine.h"
+#include "encoder/async_mft_limits.h"
 #include "sync/sync_manager.h"
 #include "capture/capture_cadence.h"
 #include "utils/logging.h"
@@ -53,7 +54,11 @@ struct CaptureEngineImpl {
     winrt::com_ptr<ID3D11VideoProcessor>           vp;
     // Independent surfaces keep WGC from overwriting frames queued for or
     // still being consumed by the asynchronous hardware encoder.
-    static constexpr size_t kNv12TextureCount = FrameQueue::capacity() + 5;
+    // Bound every surface that can be leased simultaneously: queued capture
+    // frames, the active frame, the retained duplicate frame, four prepared
+    // encoder inputs and four inputs owned by the asynchronous MFT.
+    static constexpr size_t kNv12TextureCount = FrameQueue::capacity() + 1 + 1 +
+        kAsyncMftInputQueueCapacity + kAsyncMftMaxInFlightInputs;
     std::array<winrt::com_ptr<ID3D11Texture2D>, kNv12TextureCount> nv12_tex{};
     std::array<winrt::com_ptr<ID3D11VideoProcessorOutputView>, kNv12TextureCount> vp_out_view{};
     std::array<std::shared_ptr<TextureSurfaceSlot>, kNv12TextureCount> nv12_slots{};
