@@ -32,7 +32,7 @@ public:
         origin_pts_ = first_pts;
         next_slot_ = 0;
         startup_bootstrap_active_ = false;
-        startup_fill_frames_ = 0;
+        startup_backfilled_slots_ = 0;
         last_skipped_ = {};
     }
 
@@ -49,13 +49,13 @@ public:
         origin_pts_ = 0;
         next_slot_ = 0;
         startup_bootstrap_active_ = false;
-        startup_fill_frames_ = 0;
+        startup_backfilled_slots_ = 0;
         last_skipped_ = {};
     }
 
     bool started() const { return started_; }
     bool startup_bootstrap_active() const { return startup_bootstrap_active_; }
-    uint64_t startup_fill_frames() const { return startup_fill_frames_; }
+    uint64_t startup_backfilled_slots() const { return startup_backfilled_slots_; }
     int64_t next_deadline() const {
         return started_ ? deadline_for_slot(next_slot_) : (std::numeric_limits<int64_t>::max)();
     }
@@ -81,7 +81,7 @@ public:
             (remainder * fps_ + fps_ - 1) / kTicksPerSecond;
 
         if (startup_bootstrap_active_) {
-            if (next_slot_ > 0) ++startup_fill_frames_;
+            if (next_slot_ > 0) ++startup_backfilled_slots_;
             const int64_t output_pts = emit_current_slot(has_new_frame);
             // Stop backfilling as soon as the next slot is in the future.
             // Misses after that point use the normal strict accounting path.
@@ -139,7 +139,7 @@ private:
     uint64_t repeats_ = 0;
     uint64_t skipped_ = 0;
     bool startup_bootstrap_active_ = false;
-    uint64_t startup_fill_frames_ = 0;
+    uint64_t startup_backfilled_slots_ = 0;
     SkippedSlots last_skipped_{};
 };
 

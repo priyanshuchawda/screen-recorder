@@ -1629,8 +1629,8 @@ void SessionController::encode_loop() {
                     L" ready_pts=" + std::to_wstring(initial_video_ready_pts) +
                     L" hold_duration_100ns=" + std::to_wstring(startup_hold_100ns) +
                     L" hold_duration_us=" + std::to_wstring(startup_hold_100ns / 10) +
-                    L" startup_repeat_frames=" +
-                    std::to_wstring(pacer_.startup_fill_frames()) +
+                    L" startup_backfilled_slots=" +
+                    std::to_wstring(pacer_.startup_backfilled_slots()) +
                     L" fps=" + std::to_wstring(pacer_.fps()));
             }
             const auto skipped_slots = pacer_.last_skipped_slots();

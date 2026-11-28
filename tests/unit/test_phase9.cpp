@@ -266,7 +266,7 @@ TEST(M4FixedFramePacer, BackfillsStartupHoldOnTheCfrGridWithoutCountingLoss) {
                     << "fps=" << fps << " startup_delay_ms=" << startup_delay_ms
                     << " slot=" << slot;
             }
-            EXPECT_EQ(pacer.startup_fill_frames(), expected_startup_repeats);
+            EXPECT_EQ(pacer.startup_backfilled_slots(), expected_startup_repeats);
             EXPECT_FALSE(pacer.startup_bootstrap_active());
             EXPECT_EQ(pacer.skipped_slots(), 0u);
             EXPECT_GT(pacer.next_deadline(), ready_pts);
