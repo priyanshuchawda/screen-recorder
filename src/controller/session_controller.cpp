@@ -1339,6 +1339,8 @@ void SessionController::encode_loop() {
     int64_t first_scheduled_pts = -1;
     int64_t last_scheduled_pts = -1;
     bool initial_video_timeline_started = false;
+    int64_t initial_video_capture_pts = -1;
+    int64_t initial_video_ready_pts = -1;
     ULONGLONG   last_power_check_ms = 0;
     constexpr ULONGLONG kPowerCheckIntervalMs = 10'000;
     constexpr uint32_t kAudioOutputRate = 48'000;
@@ -1557,9 +1559,11 @@ void SessionController::encode_loop() {
 
         if (!pacer_.started() && pending_video_frame &&
             (machine_.is_recording() || machine_.is_stopping())) {
-            pacer_.begin(pending_video_frame->pts);
             if (!initial_video_timeline_started) {
+                pacer_.begin_startup(pending_video_frame->pts);
                 const int64_t ready_pts = sync_.now_pts();
+                initial_video_capture_pts = pending_video_frame->pts;
+                initial_video_ready_pts = ready_pts;
                 const int64_t startup_latency_100ns =
                     (std::max)(int64_t{0}, ready_pts - pending_video_frame->pts);
                 diagnostics_.write_event(
@@ -1570,6 +1574,10 @@ void SessionController::encode_loop() {
                     L" startup_latency_us=" + std::to_wstring(startup_latency_100ns / 10) +
                     L" fps=" + std::to_wstring(pacer_.fps()));
                 initial_video_timeline_started = true;
+            } else {
+                // Used after a pause/reset: startup grace is one-shot per
+                // recording and must not mask ordinary resumed deadlines.
+                pacer_.begin(pending_video_frame->pts);
             }
         }
 
@@ -1607,9 +1615,24 @@ void SessionController::encode_loop() {
         const bool final_frame_can_submit = final_pending_frame && encoder_has_capacity;
         if (session_accepts_video && (deadline_due || final_frame_can_submit)) {
             const bool has_new_frame = pending_video_frame.has_value();
+            const bool startup_bootstrap_was_active = pacer_.startup_bootstrap_active();
             const int64_t output_pts = deadline_due
                 ? pacer_.emit_due(now_pts, has_new_frame)
                 : pacer_.emit_next(has_new_frame);
+            if (startup_bootstrap_was_active && !pacer_.startup_bootstrap_active()) {
+                const int64_t startup_hold_100ns = initial_video_capture_pts >= 0 &&
+                    initial_video_ready_pts >= initial_video_capture_pts
+                    ? initial_video_ready_pts - initial_video_capture_pts : 0;
+                diagnostics_.write_event(
+                    L"event=video_startup_hold_completed capture_pts=" +
+                    std::to_wstring(initial_video_capture_pts) +
+                    L" ready_pts=" + std::to_wstring(initial_video_ready_pts) +
+                    L" hold_duration_100ns=" + std::to_wstring(startup_hold_100ns) +
+                    L" hold_duration_us=" + std::to_wstring(startup_hold_100ns / 10) +
+                    L" startup_repeat_frames=" +
+                    std::to_wstring(pacer_.startup_fill_frames()) +
+                    L" fps=" + std::to_wstring(pacer_.fps()));
+            }
             const auto skipped_slots = pacer_.last_skipped_slots();
             if (skipped_slots.count != 0) {
                 const auto encoder_state = encoder_->diagnostics_snapshot();

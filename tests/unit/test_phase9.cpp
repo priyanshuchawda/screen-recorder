@@ -240,29 +240,56 @@ TEST(M4FixedFramePacer, DoesNotEmitInvalidTimestampBeforeTimelineStarts) {
     EXPECT_EQ(pacer.emit_next(true), 1'000'000);
 }
 
-TEST(M4FixedFramePacer, PreservesFirstCapturedTimestampAcrossSlowStartupConversion) {
+TEST(M4FixedFramePacer, BackfillsStartupHoldOnTheCfrGridWithoutCountingLoss) {
     for (const uint32_t fps : {30u, 60u}) {
-        for (const int64_t startup_delay_ms : {30LL, 70LL, 100LL, 500LL}) {
+        const std::vector<std::pair<int64_t, uint64_t>> cases = {
+            {30, fps == 30 ? 0u : 1u},
+            {70, fps == 30 ? 2u : 4u},
+            {100, fps == 30 ? 3u : 6u},
+            {500, fps == 30 ? 15u : 30u},
+        };
+        for (const auto& [startup_delay_ms, expected_startup_repeats] : cases) {
             sr::FixedFramePacer pacer(fps);
             constexpr int64_t first_capture_pts = 1'000'000;
-            pacer.begin(first_capture_pts);
+            pacer.begin_startup(first_capture_pts);
             const int64_t ready_pts = first_capture_pts + startup_delay_ms * 10'000;
 
-            // Before the first output, conversion startup is not an in-session
-            // missed slot. Preserve the captured frame timestamp and hold it
-            // until the CFR grid resumes after the conversion is ready.
+            // Bootstrap fills each nominal CFR slot with the first captured
+            // image, so the mux receives uniform timestamps and sample durations.
             EXPECT_EQ(pacer.emit_due(ready_pts, true), first_capture_pts)
                 << "fps=" << fps << " startup_delay_ms=" << startup_delay_ms;
+            for (uint64_t slot = 1; slot <= expected_startup_repeats; ++slot) {
+                const int64_t expected_pts = first_capture_pts +
+                    static_cast<int64_t>(slot * 10'000'000ULL / fps);
+                ASSERT_TRUE(pacer.output_due(ready_pts));
+                EXPECT_EQ(pacer.emit_due(ready_pts, false), expected_pts)
+                    << "fps=" << fps << " startup_delay_ms=" << startup_delay_ms
+                    << " slot=" << slot;
+            }
+            EXPECT_EQ(pacer.startup_fill_frames(), expected_startup_repeats);
+            EXPECT_FALSE(pacer.startup_bootstrap_active());
             EXPECT_EQ(pacer.skipped_slots(), 0u);
             EXPECT_GT(pacer.next_deadline(), ready_pts);
 
-            // Once the first frame has been emitted, ordinary deadline misses
-            // remain visible and retain the existing no-catch-up behavior.
+            // Once bootstrap is consumed, normal misses remain strict.
             const int64_t delayed_wake = pacer.next_deadline() + 2 * 10'000'000LL / fps;
             pacer.emit_due(delayed_wake, true);
             EXPECT_GT(pacer.skipped_slots(), 0u);
         }
     }
+}
+
+TEST(M4FixedFramePacer, PauseResumeReanchorDoesNotReenableStartupBootstrap) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin_startup(0);
+    EXPECT_EQ(pacer.emit_due(0, true), 0);
+    EXPECT_FALSE(pacer.startup_bootstrap_active());
+
+    pacer.reset();
+    pacer.begin(9'000'000);
+    EXPECT_EQ(pacer.emit_due(9'900'000, true), 9'666'666);
+    EXPECT_EQ(pacer.skipped_slots(), 2u);
+    EXPECT_FALSE(pacer.startup_bootstrap_active());
 }
 
 TEST(M4FixedFramePacer, DoesNotExceedRequestedRateDuringIrregularArrivals) {
