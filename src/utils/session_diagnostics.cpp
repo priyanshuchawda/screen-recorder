@@ -39,6 +39,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
     _snwprintf_s(buf, _countof(buf), _TRUNCATE,
                  L"event=session_stop status=%s encoder_mode_end=%s "
                  L"frames_captured=%u frames_encoded=%u frames_dropped=%u "
+                 L"video_scheduled_frame_drops=%llu "
                  L"capture_resize_failures=%u capture_texture_acquisition_failures=%u "
                  L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u "
                  L"audio_resampler_failures=%u audio_write_failures=%u "
@@ -61,6 +62,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  info.frames_captured,
                  info.frames_encoded,
                  info.frames_dropped,
+                 static_cast<unsigned long long>(info.video_scheduled_frame_drops),
                  info.capture_resize_failures,
                  info.capture_texture_acquisition_failures,
                  info.queue_drops,

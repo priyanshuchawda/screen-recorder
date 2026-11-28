@@ -86,3 +86,11 @@ TEST(SessionDiagnosticsTest, StopSummaryIncludesCaptureSetupFailures) {
     EXPECT_NE(summary.find(L"capture_resize_failures=2"), std::wstring::npos);
     EXPECT_NE(summary.find(L"capture_texture_acquisition_failures=3"), std::wstring::npos);
 }
+
+TEST(SessionDiagnosticsTest, StopSummaryReportsMissedFixedFrameSlots) {
+    sr::SessionDiagnostics::StopInfo info;
+    info.status = L"incomplete";
+    info.video_scheduled_frame_drops = 3;
+    const std::wstring summary = sr::SessionDiagnostics::format_stop_summary(info);
+    EXPECT_NE(summary.find(L"video_scheduled_frame_drops=3"), std::wstring::npos);
+}

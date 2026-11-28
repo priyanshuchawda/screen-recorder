@@ -90,16 +90,17 @@ SessionController::SessionController()
     , audio_queue_(std::make_unique<AudioQueue>())
     , loopback_queue_(std::make_unique<AudioQueue>())
 {
-    frame_queue_->set_wake_signal(&pipeline_wake_);
-    audio_queue_->set_wake_signal(&pipeline_wake_);
-    loopback_queue_->set_wake_signal(&pipeline_wake_);
+    frame_queue_->set_wake_signal(pipeline_wake_, PipelineWakeSource::CaptureFrame);
+    audio_queue_->set_wake_signal(pipeline_wake_, PipelineWakeSource::MicrophoneAudio);
+    loopback_queue_->set_wake_signal(pipeline_wake_, PipelineWakeSource::LoopbackAudio);
+    encoder_->set_pipeline_wake_signal(pipeline_wake_);
 }
 
 SessionController::~SessionController() {
     stop_diagnostics_monitor();
     if (!machine_.is_idle()) {
         encode_running_.store(false, std::memory_order_release);
-        pipeline_wake_.notify();
+        pipeline_wake_->notify(PipelineWakeSource::Lifecycle);
         capture_->stop();
         audio_->shutdown();
         loopback_audio_->shutdown();
@@ -138,7 +139,7 @@ void SessionController::rollback_startup(const wchar_t* reason) {
     audio_->shutdown();
     loopback_audio_->shutdown();
     encode_running_.store(false, std::memory_order_release);
-    pipeline_wake_.notify();
+    pipeline_wake_->notify(PipelineWakeSource::Lifecycle);
     if (encode_thread_.joinable()) encode_thread_.join();
     encoder_->shutdown();
     muxer_->abort(); // Keep any partial file; never relabel an unvalidated startup output.
@@ -155,7 +156,7 @@ void SessionController::rollback_startup(const wchar_t* reason) {
                                   std::memory_order_release);
     if (machine_.is_stopping()) machine_.transition(SessionEvent::Finalized);
     encode_running_.store(false, std::memory_order_release);
-    pipeline_wake_.notify();
+    pipeline_wake_->notify(PipelineWakeSource::Lifecycle);
     stopping_from_pause_.store(false, std::memory_order_release);
     notify_status(L"Idle");
 }
@@ -391,6 +392,7 @@ bool SessionController::start() {
 
     // T038: initialise frame pacer for this session's fps
     pacer_.set_fps(enc_prof.fps);
+    pipeline_wake_->reset_notification_counts();
 
     // T039: register device-lost callback — fires when D3D device is removed
     capture_->set_device_lost_callback([this]() {
@@ -412,7 +414,7 @@ bool SessionController::start() {
         encode_thread_ = std::thread(&SessionController::encode_loop, this);
     } catch (const std::system_error& e) {
         encode_running_.store(false, std::memory_order_release);
-        pipeline_wake_.notify();
+        pipeline_wake_->notify(PipelineWakeSource::Lifecycle);
         SR_LOG_ERROR(L"Could not create recording pipeline thread: %S", e.what());
         rollback_startup(L"encode_thread_creation_failed");
         return false;
@@ -502,7 +504,7 @@ bool SessionController::stop() {
     diagnostics_stage_.store(DiagnosticsStage::JoiningEncodeThread, std::memory_order_relaxed);
     diagnostics_.write_event(L"event=stop_stage stage=join_encode_thread state=begin");
     encode_running_.store(false, std::memory_order_release);
-    pipeline_wake_.notify();
+    pipeline_wake_->notify(PipelineWakeSource::Lifecycle);
     if (encode_thread_.joinable()) encode_thread_.join();
     diagnostics_.write_event(L"event=stop_stage stage=join_encode_thread state=complete");
 
@@ -649,6 +651,10 @@ bool SessionController::stop() {
         std::to_wstring(capture_->system_relative_timestamp_frames()) +
         L" callback_qpc_fallback_frames=" +
         std::to_wstring(capture_->qpc_timestamp_fallback_frames()) +
+        L" system_relative_pause_rejections=" +
+        std::to_wstring(capture_->system_relative_pause_rejections()) +
+        L" system_relative_pre_session_rejections=" +
+        std::to_wstring(capture_->system_relative_pre_session_rejections()) +
         L" wgc_min_update_supported=" +
         std::to_wstring(capture_->wgc_min_update_interval_supported() ? 1 : 0) +
         L" wgc_min_update_applied=" +
@@ -661,6 +667,19 @@ bool SessionController::stop() {
         L" loopback_count=" + std::to_wstring(loopback_audio_->discontinuities()) +
         L" loopback_estimated_missing_100ns=" +
         std::to_wstring(loopback_audio_->estimated_missing_duration_100ns()));
+    diagnostics_.write_event(
+        L"event=pipeline_wake_sources capture_notifications=" +
+        std::to_wstring(pipeline_wake_->notification_count(PipelineWakeSource::CaptureFrame)) +
+        L" microphone_audio_notifications=" +
+        std::to_wstring(pipeline_wake_->notification_count(PipelineWakeSource::MicrophoneAudio)) +
+        L" loopback_audio_notifications=" +
+        std::to_wstring(pipeline_wake_->notification_count(PipelineWakeSource::LoopbackAudio)) +
+        L" encoder_output_notifications=" +
+        std::to_wstring(pipeline_wake_->notification_count(PipelineWakeSource::EncoderOutput)) +
+        L" encoder_failure_notifications=" +
+        std::to_wstring(pipeline_wake_->notification_count(PipelineWakeSource::EncoderFailure)) +
+        L" lifecycle_notifications=" +
+        std::to_wstring(pipeline_wake_->notification_count(PipelineWakeSource::Lifecycle)));
 
     // Stop/join diagnostics before publishing Idle; a new session must not
     // overlap the prior session's sampler or persistent log path.
@@ -674,6 +693,7 @@ bool SessionController::stop() {
     diagnostics_stop.frames_encoded = static_cast<uint32_t>((std::min<uint64_t>)(
         writer_final.video_samples_written, (std::numeric_limits<uint32_t>::max)()));
     diagnostics_stop.frames_dropped = capture_->frames_dropped();
+    diagnostics_stop.video_scheduled_frame_drops = pacer_.skipped_slots();
     diagnostics_stop.capture_resize_failures = capture_->resize_failures();
     diagnostics_stop.capture_texture_acquisition_failures = capture_->texture_acquisition_failures();
     diagnostics_stop.queue_drops = capture_->queue_drops();
@@ -749,6 +769,7 @@ bool SessionController::stop() {
     outcome_input.finalized = finalized;
     outcome_input.encoder_drain_complete = encoder_drain_ok;
     outcome_input.frame_drops = diagnostics_stop.frames_dropped;
+    outcome_input.video_scheduled_frame_drops = diagnostics_stop.video_scheduled_frame_drops;
     outcome_input.capture_resize_failures = diagnostics_stop.capture_resize_failures;
     outcome_input.capture_texture_acquisition_failures = diagnostics_stop.capture_texture_acquisition_failures;
     outcome_input.video_write_failures = diagnostics_stop.video_write_failures;
@@ -1201,7 +1222,7 @@ bool SessionController::pause() {
     if (!machine_.transition(SessionEvent::Pause)) return false;
     sync_.pause();
     pacer_reset_requested_.store(true, std::memory_order_release);
-    pipeline_wake_.notify();
+    pipeline_wake_->notify(PipelineWakeSource::Lifecycle);
     notify_status(L"Paused");
     return true;
 }
@@ -1210,7 +1231,7 @@ bool SessionController::resume() {
     if (!machine_.transition(SessionEvent::Resume)) return false;
     sync_.resume();
     pacer_reset_requested_.store(true, std::memory_order_release);
-    pipeline_wake_.notify();
+    pipeline_wake_->notify(PipelineWakeSource::Lifecycle);
     // Force an IDR keyframe on the next encoded frame so the resumed segment
     // is independently decodable and seeks work correctly after pause gaps.
     encoder_->request_keyframe();
@@ -1287,7 +1308,8 @@ void SessionController::encode_loop() {
     std::optional<RenderFrame> pending_video_frame;
     uint64_t coalesced_capture_frames = 0;
     uint64_t controller_wakeups = 0;
-    uint64_t controller_deadline_wakeups = 0;
+    uint64_t controller_video_deadline_wakeups = 0;
+    uint64_t controller_power_check_wakeups = 0;
     uint64_t scheduled_output_frames = 0;
     int64_t first_scheduled_pts = -1;
     int64_t last_scheduled_pts = -1;
@@ -1456,7 +1478,7 @@ void SessionController::encode_loop() {
            !frame_queue_->empty() || !audio_queue_->empty() || !loopback_queue_->empty() ||
            pending_video_frame.has_value())
     {
-        const uint64_t observed_wake_generation = pipeline_wake_.generation();
+        const uint64_t observed_wake_generation = pipeline_wake_->generation();
         drain_async_outputs();
         if (pacer_reset_requested_.exchange(false, std::memory_order_acq_rel)) {
             pacer_.reset();
@@ -1598,20 +1620,36 @@ void SessionController::encode_loop() {
         // iteration began. The generation was captured before queue inspection,
         // so arrivals during processing wake immediately without lost signals.
         if (encode_running_.load(std::memory_order_acquire)) {
+            bool frame_deadline_can_wake = false;
             auto sleep_for = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::hours(24));
             if (machine_.is_recording() && pacer_.started()) {
                 const int64_t remaining_100ns = pacer_.next_deadline() - sync_.now_pts();
-                if (remaining_100ns > 0) {
-                    const auto until_deadline = std::chrono::milliseconds(
-                        (remaining_100ns + 9'999) / 10'000);
-                    sleep_for = (std::max)(std::chrono::milliseconds(1), until_deadline);
+                if (remaining_100ns <= 0) {
+                    // Work is already due; reevaluate rather than sleeping on
+                    // notifications that may never arrive.
+                    ++controller_video_deadline_wakeups;
+                    continue;
                 }
+                const auto until_deadline = std::chrono::milliseconds(
+                    (remaining_100ns + 9'999) / 10'000);
+                sleep_for = (std::max)(std::chrono::milliseconds(1), until_deadline);
+                frame_deadline_can_wake = true;
             }
-            if (pipeline_wake_.wait_for_change(observed_wake_generation, sleep_for)) {
+            const ULONGLONG until_power_check_ms =
+                now_ms >= last_power_check_ms + kPowerCheckIntervalMs
+                    ? 0 : last_power_check_ms + kPowerCheckIntervalMs - now_ms;
+            const auto power_check_wait = std::chrono::milliseconds(until_power_check_ms);
+            const bool power_check_can_wake = power_check_wait <= sleep_for;
+            if (power_check_can_wake) {
+                if (power_check_wait < sleep_for) frame_deadline_can_wake = false;
+                sleep_for = power_check_wait;
+            }
+            if (pipeline_wake_->wait_for_change(observed_wake_generation, sleep_for)) {
                 ++controller_wakeups;
             } else {
-                ++controller_deadline_wakeups;
+                if (frame_deadline_can_wake) ++controller_video_deadline_wakeups;
+                if (power_check_can_wake) ++controller_power_check_wakeups;
             }
         }
 
@@ -1630,8 +1668,9 @@ void SessionController::encode_loop() {
         std::to_wstring(coalesced_capture_frames) + L" scheduled_frames=" +
         std::to_wstring(scheduled_output_frames) + L" scheduled_output_fps_milli=" +
         std::to_wstring(output_fps_milli) + L" controller_wakeups=" +
-        std::to_wstring(controller_wakeups) + L" controller_deadline_wakeups=" +
-        std::to_wstring(controller_deadline_wakeups));
+        std::to_wstring(controller_wakeups) + L" controller_video_deadline_wakeups=" +
+        std::to_wstring(controller_video_deadline_wakeups) + L" controller_power_check_wakeups=" +
+        std::to_wstring(controller_power_check_wakeups));
 
     // Capture is stopped before this thread is joined; flush the mixer reorder
     // window so the final microphone/system audio samples reach the MP4.

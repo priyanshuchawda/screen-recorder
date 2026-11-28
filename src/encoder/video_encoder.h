@@ -17,6 +17,7 @@
 #include <thread>
 #include <vector>
 #include "utils/render_frame.h"
+#include "utils/pipeline_wake_signal.h"
 #include "encoder/pending_input_accounting.h"
 #include "encoder/async_mft_scheduler.h"
 #include "encoder/async_mft_callback.h"
@@ -142,6 +143,9 @@ public:
 
     bool try_pop_async_output(AsyncEncodedOutput& output);
     bool async_worker_failed() const { return hw_async_mft_ && async_scheduler_->failed(); }
+    void set_pipeline_wake_signal(const std::shared_ptr<PipelineWakeSignal>& signal) {
+        pipeline_wake_signal_ = signal;
+    }
 
 private:
     struct DeferredInput {
@@ -165,6 +169,7 @@ private:
     bool async_drain_to(std::vector<AsyncEncodedOutput>& out_samples, DWORD timeout_ms);
     bool stamp_output_sample(IMFSample* sample, int64_t fallback_pts);
     void publish_configuration();
+    void notify_pipeline(PipelineWakeSource source);
 
     ComPtr<IMFTransform>       mft_;
     ComPtr<IMFMediaEventGenerator> hw_events_;
@@ -200,6 +205,7 @@ private:
         kAsyncMftOutputQueueCapacity,
         kAsyncMftOutputQueueByteCapacity
     );
+    std::weak_ptr<PipelineWakeSignal> pipeline_wake_signal_;
     std::thread async_worker_;
     std::atomic<bool> async_worker_stopping_{ false };
     std::atomic<uint64_t> async_worker_wakeups_{ 0 };

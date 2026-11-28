@@ -308,23 +308,32 @@ struct CaptureEngineImpl {
         uint32_t frame_h = static_cast<uint32_t>(content_size.Height);
 
         int64_t capture_pts = 0;
-        bool used_system_relative_time = false;
+        int64_t absolute_qpc_100ns = 0;
+        bool system_relative_available = false;
         try {
             const auto system_relative_time = frame.SystemRelativeTime();
-            const int64_t absolute_qpc_100ns = system_relative_time.count();
-            if (absolute_qpc_100ns > 0) {
-                if (parent->sync_manager_) {
-                    used_system_relative_time = parent->sync_manager_->try_map_qpc_100ns(
-                        absolute_qpc_100ns, 0, capture_pts);
-                } else {
-                    capture_pts = absolute_qpc_100ns - start_100ns;
-                    used_system_relative_time = true;
-                }
-            }
+            absolute_qpc_100ns = system_relative_time.count();
+            system_relative_available = absolute_qpc_100ns > 0;
         } catch (...) {
             // Older runtimes or transient WGC metadata failures use callback QPC.
         }
-        if (used_system_relative_time) {
+        if (system_relative_available && parent->sync_manager_) {
+            const auto mapping = parent->sync_manager_->map_qpc_100ns(
+                absolute_qpc_100ns, 0, capture_pts);
+            if (mapping != TimestampMappingStatus::Mapped) {
+                if (mapping == TimestampMappingStatus::OverlapsPause) {
+                    parent->system_relative_pause_rejections_.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    parent->system_relative_pre_session_rejections_.fetch_add(1, std::memory_order_relaxed);
+                }
+                // A valid compositor timestamp that belongs to an excluded
+                // pause or predates this session is not missing metadata.
+                // Never retimestamp it using callback time.
+                return;
+            }
+            parent->system_relative_timestamp_frames_.fetch_add(1, std::memory_order_relaxed);
+        } else if (system_relative_available) {
+            capture_pts = absolute_qpc_100ns - start_100ns;
             parent->system_relative_timestamp_frames_.fetch_add(1, std::memory_order_relaxed);
         } else {
             LARGE_INTEGER now{};

@@ -27,6 +27,7 @@ public:
         uint32_t frames_captured = 0;
         uint32_t frames_encoded = 0;
         uint32_t frames_dropped = 0;
+        uint64_t video_scheduled_frame_drops = 0;
         uint32_t capture_resize_failures = 0;
         uint32_t capture_texture_acquisition_failures = 0;
         uint32_t queue_drops = 0;

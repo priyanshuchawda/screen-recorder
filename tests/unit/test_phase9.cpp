@@ -243,13 +243,35 @@ TEST(M4PipelineWake, NotificationBeforeWaitIsNotLost) {
 }
 
 TEST(M4PipelineWake, QueuePushNotifiesSharedConsumer) {
-    sr::PipelineWakeSignal wake;
+    auto wake = std::make_shared<sr::PipelineWakeSignal>();
     sr::BoundedQueue<int, 2> queue;
-    queue.set_wake_signal(&wake);
-    const auto observed = wake.generation();
+    queue.set_wake_signal(wake, sr::PipelineWakeSource::CaptureFrame);
+    const auto observed = wake->generation();
     EXPECT_TRUE(queue.try_push(7));
-    EXPECT_TRUE(wake.wait_for_change(observed, std::chrono::milliseconds(0)));
+    EXPECT_TRUE(wake->wait_for_change(observed, std::chrono::milliseconds(0)));
     ASSERT_TRUE(queue.try_pop().has_value());
+}
+
+TEST(M4PipelineWake, QueueCoalescesSignalsUntilItBecomesNonEmptyAgain) {
+    auto wake = std::make_shared<sr::PipelineWakeSignal>();
+    sr::BoundedQueue<int, 4> queue;
+    queue.set_wake_signal(wake, sr::PipelineWakeSource::MicrophoneAudio);
+    ASSERT_TRUE(queue.try_push(1));
+    ASSERT_TRUE(queue.try_push(2));
+    EXPECT_EQ(wake->notification_count(sr::PipelineWakeSource::MicrophoneAudio), 1u);
+    ASSERT_TRUE(queue.try_pop().has_value());
+    ASSERT_TRUE(queue.try_pop().has_value());
+    ASSERT_TRUE(queue.try_push(3));
+    EXPECT_EQ(wake->notification_count(sr::PipelineWakeSource::MicrophoneAudio), 2u);
+}
+
+TEST(M4PipelineWake, TracksNotificationSourcesIndependently) {
+    auto wake = std::make_shared<sr::PipelineWakeSignal>();
+    wake->notify(sr::PipelineWakeSource::EncoderOutput);
+    wake->notify(sr::PipelineWakeSource::EncoderFailure);
+    EXPECT_EQ(wake->notification_count(sr::PipelineWakeSource::EncoderOutput), 1u);
+    EXPECT_EQ(wake->notification_count(sr::PipelineWakeSource::EncoderFailure), 1u);
+    EXPECT_EQ(wake->notification_count(sr::PipelineWakeSource::MicrophoneAudio), 0u);
 }
 
 // ============================================================

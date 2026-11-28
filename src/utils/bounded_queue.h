@@ -25,6 +25,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <memory>
 #include "utils/pipeline_wake_signal.h"
 
 namespace sr {
@@ -38,9 +39,11 @@ class BoundedQueue {
 public:
     BoundedQueue() : head_(0), tail_(0) {}
 
-    // Install before starting queue producers. The signal must outlive them.
-    void set_wake_signal(PipelineWakeSignal* signal) {
-        wake_signal_.store(signal, std::memory_order_release);
+    // Install before starting queue producers. Weak ownership keeps late pushes safe.
+    void set_wake_signal(const std::shared_ptr<PipelineWakeSignal>& signal,
+                         PipelineWakeSource source) {
+        wake_signal_ = signal;
+        wake_source_ = source;
     }
 
     // Non-blocking push. Returns false if queue is full (caller applies drop policy).
@@ -52,12 +55,13 @@ public:
         if (next == tail_.load(std::memory_order_acquire)) {
             return false; // Full — caller must apply drop policy
         }
+        const bool was_empty = head == tail_.load(std::memory_order_relaxed);
         buffer_[head] = std::move(item);
         head_.store(next, std::memory_order_release);
         update_high_watermark(size());
         lock.unlock();
         cv_.notify_one();
-        notify_pipeline();
+        if (was_empty) notify_pipeline();
         return true;
     }
 
@@ -101,6 +105,7 @@ public:
         std::unique_lock<std::mutex> lock(push_mutex_);
         size_t head = head_.load(std::memory_order_relaxed);
         size_t next = (head + 1) % (Capacity + 1);
+        const bool was_empty = head == tail_.load(std::memory_order_relaxed);
         bool dropped = false;
         if (next == tail_.load(std::memory_order_acquire)) {
             size_t tail = tail_.load(std::memory_order_relaxed);
@@ -114,7 +119,7 @@ public:
         if (dropped_oldest) *dropped_oldest = dropped;
         lock.unlock();
         cv_.notify_one();
-        notify_pipeline();
+        if (was_empty) notify_pipeline();
         return true;
     }
 
@@ -149,9 +154,7 @@ public:
 
 private:
     void notify_pipeline() {
-        if (auto* signal = wake_signal_.load(std::memory_order_acquire)) {
-            signal->notify();
-        }
+        if (auto signal = wake_signal_.lock()) signal->notify(wake_source_);
     }
 
     void update_high_watermark(size_t occupancy) {
@@ -168,7 +171,8 @@ private:
     std::atomic<size_t> high_watermark_{ 0 };
     std::mutex push_mutex_; // Serializes concurrent producers
     std::condition_variable cv_;
-    std::atomic<PipelineWakeSignal*> wake_signal_{ nullptr };
+    std::weak_ptr<PipelineWakeSignal> wake_signal_;
+    PipelineWakeSource wake_source_ = PipelineWakeSource::Lifecycle;
 };
 
 } // namespace sr

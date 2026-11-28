@@ -8,6 +8,12 @@
 
 namespace sr {
 
+enum class TimestampMappingStatus {
+    Mapped,
+    BeforeSession,
+    OverlapsPause
+};
+
 class SyncManager {
 public:
     SyncManager() : freq_(get_freq()) {}
@@ -55,6 +61,10 @@ public:
     // A frame captured during a pause is rejected. Timestamps from before a
     // pause remain mapped with only pauses that precede that timestamp removed.
     bool try_map_qpc_ticks(int64_t qpc_ticks, int64_t& pts_100ns) const {
+        return map_qpc_ticks(qpc_ticks, pts_100ns) == TimestampMappingStatus::Mapped;
+    }
+
+    TimestampMappingStatus map_qpc_ticks(int64_t qpc_ticks, int64_t& pts_100ns) const {
         std::lock_guard<std::mutex> lock(mutex_);
         return map_absolute_100ns_locked(ticks_to_100ns(qpc_ticks), 0, pts_100ns);
     }
@@ -64,6 +74,13 @@ public:
     bool try_map_qpc_100ns(int64_t absolute_qpc_100ns,
                            int64_t duration_100ns,
                            int64_t& pts_100ns) const {
+        return map_qpc_100ns(absolute_qpc_100ns, duration_100ns, pts_100ns) ==
+               TimestampMappingStatus::Mapped;
+    }
+
+    TimestampMappingStatus map_qpc_100ns(int64_t absolute_qpc_100ns,
+                                         int64_t duration_100ns,
+                                         int64_t& pts_100ns) const {
         std::lock_guard<std::mutex> lock(mutex_);
         return map_absolute_100ns_locked(absolute_qpc_100ns,
                                          (duration_100ns > 0) ? duration_100ns : 0,
@@ -115,25 +132,27 @@ private:
     std::vector<PauseInterval> pause_intervals_;
     mutable std::mutex mutex_;
 
-    bool map_absolute_100ns_locked(int64_t absolute_100ns,
-                                   int64_t duration_100ns,
-                                   int64_t& pts_100ns) const {
-        if (anchor_qpc_ == 0 || absolute_100ns < anchor_100ns_) return false;
+    TimestampMappingStatus map_absolute_100ns_locked(int64_t absolute_100ns,
+                                                      int64_t duration_100ns,
+                                                      int64_t& pts_100ns) const {
+        if (anchor_qpc_ == 0 || absolute_100ns < anchor_100ns_)
+            return TimestampMappingStatus::BeforeSession;
         int64_t removed_pause = 0;
         const int64_t packet_end = absolute_100ns + duration_100ns;
         for (const auto& interval : pause_intervals_) {
             const int64_t end = interval.end_100ns ? interval.end_100ns : INT64_MAX;
             if (duration_100ns == 0) {
-                if (absolute_100ns >= interval.start_100ns && absolute_100ns < end) return false;
+                if (absolute_100ns >= interval.start_100ns && absolute_100ns < end)
+                    return TimestampMappingStatus::OverlapsPause;
             } else if (absolute_100ns < end && packet_end > interval.start_100ns) {
-                return false;
+                return TimestampMappingStatus::OverlapsPause;
             }
             if (interval.end_100ns != 0 && absolute_100ns >= interval.end_100ns) {
                 removed_pause += interval.end_100ns - interval.start_100ns;
             }
         }
         pts_100ns = absolute_100ns - anchor_100ns_ - removed_pause;
-        return true;
+        return TimestampMappingStatus::Mapped;
     }
 
     static int64_t get_freq() {

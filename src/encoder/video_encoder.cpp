@@ -388,6 +388,10 @@ bool VideoEncoder::try_pop_async_output(AsyncEncodedOutput& output) {
     return true;
 }
 
+void VideoEncoder::notify_pipeline(PipelineWakeSource source) {
+    if (auto signal = pipeline_wake_signal_.lock()) signal->notify(source);
+}
+
 void VideoEncoder::async_worker_loop() {
     const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool com_initialized = SUCCEEDED(com_hr);
@@ -430,6 +434,7 @@ void VideoEncoder::async_worker_loop() {
         if (async_scheduler_->publish_output(*blocked_output, bytes)) {
             blocked_output.reset();
             watchdog.mark_progress(AsyncMftStallWatchdog::Clock::now());
+            notify_pipeline(PipelineWakeSource::EncoderOutput);
             return true;
         }
         if (async_scheduler_->failed()) {
@@ -682,6 +687,7 @@ void VideoEncoder::async_worker_loop() {
         }
     }
     async_scheduler_->signal_worker_drained();
+    if (async_scheduler_->failed()) notify_pipeline(PipelineWakeSource::EncoderFailure);
 }
 
 // ---------------------------------------------------------------------------

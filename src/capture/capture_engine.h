@@ -78,6 +78,8 @@ public:
     uint32_t cadence_rejections() const { return cadence_rejections_.load(std::memory_order_relaxed); }
     uint64_t system_relative_timestamp_frames() const { return system_relative_timestamp_frames_.load(std::memory_order_relaxed); }
     uint64_t qpc_timestamp_fallback_frames() const { return qpc_timestamp_fallback_frames_.load(std::memory_order_relaxed); }
+    uint64_t system_relative_pause_rejections() const { return system_relative_pause_rejections_.load(std::memory_order_relaxed); }
+    uint64_t system_relative_pre_session_rejections() const { return system_relative_pre_session_rejections_.load(std::memory_order_relaxed); }
     bool wgc_min_update_interval_supported() const { return wgc_min_update_interval_supported_.load(std::memory_order_relaxed); }
     bool wgc_min_update_interval_applied() const { return wgc_min_update_interval_applied_.load(std::memory_order_relaxed); }
     uint64_t conversion_submission_samples() const { return conversion_submission_samples_.load(std::memory_order_relaxed); }
@@ -100,6 +102,8 @@ public:
         cadence_rejections_.store(0, std::memory_order_relaxed);
         system_relative_timestamp_frames_.store(0, std::memory_order_relaxed);
         qpc_timestamp_fallback_frames_.store(0, std::memory_order_relaxed);
+        system_relative_pause_rejections_.store(0, std::memory_order_relaxed);
+        system_relative_pre_session_rejections_.store(0, std::memory_order_relaxed);
         conversion_submission_samples_.store(0, std::memory_order_relaxed);
         conversion_submission_total_us_.store(0, std::memory_order_relaxed);
         conversion_submission_max_us_.store(0, std::memory_order_relaxed);
@@ -141,6 +145,8 @@ private:
     std::atomic<uint32_t> cadence_rejections_{ 0 };
     std::atomic<uint64_t> system_relative_timestamp_frames_{ 0 };
     std::atomic<uint64_t> qpc_timestamp_fallback_frames_{ 0 };
+    std::atomic<uint64_t> system_relative_pause_rejections_{ 0 };
+    std::atomic<uint64_t> system_relative_pre_session_rejections_{ 0 };
     std::atomic<bool> wgc_min_update_interval_supported_{ false };
     std::atomic<bool> wgc_min_update_interval_applied_{ false };
     std::atomic<uint64_t> conversion_submission_samples_{ 0 };

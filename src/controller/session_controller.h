@@ -14,6 +14,7 @@
 #include <mutex>
 #include <thread>
 #include <functional>
+#include <memory>
 #include <string>
 #include "controller/session_machine.h"
 #include "controller/recording_outcome.h"
@@ -186,7 +187,7 @@ private:
     StorageManager*                storage_ = nullptr;
 
     // Queues shared between capture/audio producers and encode consumer
-    PipelineWakeSignal pipeline_wake_;
+    std::shared_ptr<PipelineWakeSignal> pipeline_wake_ = std::make_shared<PipelineWakeSignal>();
     std::unique_ptr<FrameQueue> frame_queue_;
     std::unique_ptr<AudioQueue> audio_queue_;      // microphone
     std::unique_ptr<AudioQueue> loopback_queue_;   // system audio
