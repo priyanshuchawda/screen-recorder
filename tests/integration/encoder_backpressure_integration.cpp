@@ -129,14 +129,18 @@ TEST(EncoderBackpressureIntegration, BackpressureEpisodesSeparateRecoveryCancell
     EXPECT_TRUE(metrics.begin_wait(start + std::chrono::milliseconds(9)));
     metrics.resolve(sr::EncoderBackpressureMetrics::Resolution::TimedOut,
                     start + std::chrono::milliseconds(15));
+    EXPECT_TRUE(metrics.begin_wait(start + std::chrono::milliseconds(16)));
+    metrics.resolve(sr::EncoderBackpressureMetrics::Resolution::Failed,
+                    start + std::chrono::milliseconds(20));
 
     const auto result = metrics.snapshot();
-    EXPECT_EQ(result.attempts, 3u);
+    EXPECT_EQ(result.attempts, 4u);
     EXPECT_EQ(result.recoveries, 1u);
     EXPECT_EQ(result.cancellations, 1u);
     EXPECT_EQ(result.timeouts, 1u);
+    EXPECT_EQ(result.failures, 1u);
     EXPECT_EQ(result.max_wait_us, 6000u);
-    EXPECT_EQ(result.wait_us.samples, 3u);
+    EXPECT_EQ(result.wait_us.samples, 4u);
     EXPECT_EQ(result.wait_us.p95_upper_us, 8192u);
 }
 

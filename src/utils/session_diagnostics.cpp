@@ -54,6 +54,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"encoder_inputs_not_accepted=%llu encoder_input_backpressure_attempts=%llu "
                  L"encoder_input_backpressure_timeouts=%llu "
                  L"encoder_input_backpressure_recoveries=%llu encoder_input_backpressure_cancellations=%llu "
+                 L"encoder_input_backpressure_failures=%llu "
                  L"encoder_input_backpressure_max_wait_us=%llu encoder_input_backpressure_p95_wait_us=%llu "
                  L"encoder_input_errors=%llu "
                  L"encoder_inputs_deferred=%llu encoder_inputs_abandoned=%llu encoder_inputs_retried=%llu "
@@ -95,6 +96,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  static_cast<unsigned long long>(info.encoder_input_backpressure_timeouts),
                  static_cast<unsigned long long>(info.encoder_input_backpressure_recoveries),
                  static_cast<unsigned long long>(info.encoder_input_backpressure_cancellations),
+                 static_cast<unsigned long long>(info.encoder_input_backpressure_failures),
                  static_cast<unsigned long long>(info.encoder_input_backpressure_max_wait_us),
                  static_cast<unsigned long long>(info.encoder_input_backpressure_p95_wait_us),
                  static_cast<unsigned long long>(info.encoder_input_errors),

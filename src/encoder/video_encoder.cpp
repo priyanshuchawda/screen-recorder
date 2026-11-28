@@ -595,8 +595,9 @@ void VideoEncoder::async_worker_loop() {
                     uint64_t high = pending_input_high_watermark_.load(std::memory_order_relaxed);
                     while (pending > high && !pending_input_high_watermark_.compare_exchange_weak(
                                high, pending, std::memory_order_relaxed)) {}
-                    async_scheduler_->mark_input_accepted();
-                    notify_pipeline(PipelineWakeSource::EncoderInputCapacity);
+                    if (async_scheduler_->mark_input_accepted()) {
+                        notify_pipeline(PipelineWakeSource::EncoderInputCapacity);
+                    }
                     try {
                         async_pending_frames_.push_back({ input.frame_id, input.pts, input.synthetic,
                                                           std::chrono::steady_clock::now() });

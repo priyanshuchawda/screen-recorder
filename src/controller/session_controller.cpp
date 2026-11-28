@@ -747,6 +747,7 @@ bool SessionController::stop() {
     diagnostics_stop.encoder_input_backpressure_timeouts = backpressure.timeouts;
     diagnostics_stop.encoder_input_backpressure_recoveries = backpressure.recoveries;
     diagnostics_stop.encoder_input_backpressure_cancellations = backpressure.cancellations;
+    diagnostics_stop.encoder_input_backpressure_failures = backpressure.failures;
     diagnostics_stop.encoder_input_backpressure_max_wait_us = backpressure.max_wait_us;
     diagnostics_stop.encoder_input_backpressure_p95_wait_us = backpressure.wait_us.p95_upper_us;
     diagnostics_stop.encoder_input_errors = encoder_final_state.input_errors;
@@ -808,7 +809,16 @@ bool SessionController::stop() {
     last_recording_outcome_.store(outcome, std::memory_order_release);
     diagnostics_stop.status = recording_outcome_name(outcome);
     if (outcome == RecordingOutcome::Incomplete) {
-        notify_error(L"The MP4 was finalized, but diagnostics found possible missing or invalid media. Review its diagnostics file before relying on it.");
+        if (diagnostics_stop.video_scheduled_frame_drops != 0 &&
+            diagnostics_stop.video_write_failures == 0 &&
+            diagnostics_stop.audio_write_failures == 0 &&
+            diagnostics_stop.encoder_inputs_abandoned == 0) {
+            notify_error(L"The MP4 was finalized, but " +
+                std::to_wstring(diagnostics_stop.video_scheduled_frame_drops) +
+                L" scheduled video frame deadlines were missed. The video may have timing gaps; review the diagnostics file.");
+        } else {
+            notify_error(L"The MP4 was finalized, but diagnostics found possible missing or invalid media. Review its diagnostics file before relying on it.");
+        }
     }
 
     diagnostics_.write_stop(diagnostics_stop);
@@ -1323,6 +1333,7 @@ void SessionController::encode_loop() {
     uint64_t controller_wakeups = 0;
     uint64_t controller_video_deadline_wakeups = 0;
     uint64_t controller_power_check_wakeups = 0;
+    bool encoder_capacity_blocked_since_last_output = false;
     uint64_t scheduled_output_frames = 0;
     int64_t first_scheduled_pts = -1;
     int64_t last_scheduled_pts = -1;
@@ -1406,16 +1417,24 @@ void SessionController::encode_loop() {
             async_encoder_failure_reported = true;
             if (encoder_backpressure_metrics_.waiting()) {
                 const auto now = EncoderBackpressureMetrics::Clock::now();
-                const auto resolution = encoder_backpressure_metrics_.elapsed_us(now) >= 5'000'000
+                const auto failure_reason = encoder_->async_worker_failure_reason();
+                const auto resolution = failure_reason == HRESULT_FROM_WIN32(ERROR_TIMEOUT)
                     ? EncoderBackpressureMetrics::Resolution::TimedOut
-                    : EncoderBackpressureMetrics::Resolution::Cancelled;
+                    : EncoderBackpressureMetrics::Resolution::Failed;
+                const auto wait_us = encoder_backpressure_metrics_.elapsed_us(now);
                 encoder_backpressure_metrics_.resolve(resolution, now);
+                diagnostics_.write_event(L"event=encoder_backpressure_ended reason=" +
+                    std::wstring(failure_reason == HRESULT_FROM_WIN32(ERROR_TIMEOUT)
+                        ? L"encoder_timeout" : L"encoder_worker_failure") +
+                    L" failure_hr=" + std::to_wstring(static_cast<uint32_t>(failure_reason)) +
+                    L" wait_us=" + std::to_wstring(wait_us));
             }
             if (pending_video_frame) {
                 video_unsubmitted_frames_.fetch_add(1, std::memory_order_relaxed);
                 pending_video_frame.reset();
             }
-            diagnostics_.write_event(L"event=async_encoder_worker_failed");
+            diagnostics_.write_event(L"event=async_encoder_worker_failed failure_hr=" +
+                std::to_wstring(static_cast<uint32_t>(encoder_->async_worker_failure_reason())));
             report_recording_loss(L"encoder_async_worker");
         }
         if (muxer_ && !muxer_->healthy() && !async_writer_failure_reported) {
@@ -1512,6 +1531,7 @@ void SessionController::encode_loop() {
                     EncoderBackpressureMetrics::Clock::now());
             }
             pacer_.reset();
+            encoder_capacity_blocked_since_last_output = false;
             pending_video_frame.reset();
             // A static desktop may not trigger a new WGC callback after resume.
             // Re-anchor the existing image to the resumed session clock.
@@ -1546,9 +1566,21 @@ void SessionController::encode_loop() {
                                          pending_video_frame.has_value();
         const bool video_due = session_accepts_video &&
                                (scheduled_deadline_due || final_pending_frame);
-        const bool encoder_has_capacity = encoder_->input_capacity_available();
-        if (video_due && !encoder_has_capacity) {
-            encoder_backpressure_metrics_.begin_wait(EncoderBackpressureMetrics::Clock::now());
+        bool encoder_has_capacity = encoder_->input_capacity_available();
+        if (!encoder_has_capacity && session_accepts_video) {
+            if (scheduled_deadline_due) encoder_capacity_blocked_since_last_output = true;
+            if (encoder_->register_input_capacity_waiter()) {
+                // Capacity opened between the initial check and waiter
+                // registration. Reevaluate now; no notification can be lost.
+                encoder_has_capacity = true;
+                if (video_due && encoder_backpressure_metrics_.waiting()) {
+                    encoder_backpressure_metrics_.resolve(
+                        EncoderBackpressureMetrics::Resolution::Recovered,
+                        EncoderBackpressureMetrics::Clock::now());
+                }
+            } else if (video_due) {
+                encoder_backpressure_metrics_.begin_wait(EncoderBackpressureMetrics::Clock::now());
+            }
         } else if (video_due && encoder_has_capacity) {
             if (encoder_backpressure_metrics_.waiting()) {
                 encoder_backpressure_metrics_.resolve(
@@ -1563,6 +1595,42 @@ void SessionController::encode_loop() {
             const int64_t output_pts = deadline_due
                 ? pacer_.emit_due(now_pts, has_new_frame)
                 : pacer_.emit_next(has_new_frame);
+            const auto skipped_slots = pacer_.last_skipped_slots();
+            if (skipped_slots.count != 0) {
+                const auto encoder_state = encoder_->diagnostics_snapshot();
+                const auto conversion = capture_->conversion_submission_latency();
+                const auto backpressure = encoder_backpressure_metrics_.snapshot();
+                diagnostics_.write_event(L"event=video_deadline_slots_missed count=" +
+                    std::to_wstring(skipped_slots.count) +
+                    L" first_deadline_pts=" + std::to_wstring(skipped_slots.first_deadline_pts) +
+                    L" last_deadline_pts=" + std::to_wstring(skipped_slots.last_deadline_pts) +
+                    L" emitted_deadline_pts=" + std::to_wstring(output_pts) +
+                    L" observed_now_pts=" + std::to_wstring(now_pts) +
+                    L" emitted_deadline_lateness_100ns=" +
+                    std::to_wstring((std::max)(int64_t{0}, now_pts - output_pts)) +
+                    L" encoder_capacity_available=" + std::to_wstring(encoder_has_capacity ? 1 : 0) +
+                    L" encoder_capacity_blocked_since_last_output=" +
+                    std::to_wstring(encoder_capacity_blocked_since_last_output ? 1 : 0) +
+                    L" backpressure_attempts=" + std::to_wstring(backpressure.attempts) +
+                    L" backpressure_recoveries=" + std::to_wstring(backpressure.recoveries) +
+                    L" backpressure_max_wait_us=" + std::to_wstring(backpressure.max_wait_us) +
+                    L" encoder_need_input_events=" + std::to_wstring(encoder_state.async_need_input_events) +
+                    L" encoder_have_output_events=" + std::to_wstring(encoder_state.async_have_output_events) +
+                    L" encoder_worker_wakeups=" + std::to_wstring(encoder_state.async_worker_wakeups) +
+                    L" encoder_pending_inputs=" + std::to_wstring(encoder_state.pending_inputs) +
+                    L" encoder_queue_depth=" + std::to_wstring(encoder_state.deferred_inputs_pending) +
+                    L" mft_process_input_p95_us=" +
+                    std::to_wstring(encoder_state.async_process_input_us.p95_upper_us) +
+                    L" mft_process_output_p95_us=" +
+                    std::to_wstring(encoder_state.async_process_output_us.p95_upper_us) +
+                    L" mft_event_wait_p95_us=" +
+                    std::to_wstring(encoder_state.async_event_wait_us.p95_upper_us) +
+                    L" conversion_samples=" + std::to_wstring(conversion.samples) +
+                    L" conversion_p95_us=" + std::to_wstring(conversion.p95_upper_us) +
+                    L" conversion_p99_us=" + std::to_wstring(conversion.p99_upper_us) +
+                    L" conversion_max_us=" +
+                    std::to_wstring(capture_->conversion_submission_max_us()));
+            }
             if (output_pts < 0) {
                 if (has_new_frame) {
                     video_unsubmitted_frames_.fetch_add(1, std::memory_order_relaxed);
@@ -1605,6 +1673,7 @@ void SessionController::encode_loop() {
                 drain_async_outputs();
             }
             last_paced_pts = output_pts;
+            encoder_capacity_blocked_since_last_output = false;
         }
 
         // --- Audio: timestamp-align mic and loopback, mix, and write one stream ---

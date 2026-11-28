@@ -14,13 +14,14 @@ namespace sr {
 class EncoderBackpressureMetrics {
 public:
     using Clock = std::chrono::steady_clock;
-    enum class Resolution { Recovered, Cancelled, TimedOut };
+    enum class Resolution { Recovered, Cancelled, TimedOut, Failed };
 
     struct Snapshot {
         uint64_t attempts = 0;
         uint64_t recoveries = 0;
         uint64_t cancellations = 0;
         uint64_t timeouts = 0;
+        uint64_t failures = 0;
         uint64_t max_wait_us = 0;
         LatencyHistogram::Snapshot wait_us{};
     };
@@ -60,6 +61,7 @@ public:
             case Resolution::Recovered: ++snapshot_.recoveries; break;
             case Resolution::Cancelled: ++snapshot_.cancellations; break;
             case Resolution::TimedOut: ++snapshot_.timeouts; break;
+            case Resolution::Failed: ++snapshot_.failures; break;
         }
         waiting_ = false;
     }

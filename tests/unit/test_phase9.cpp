@@ -183,6 +183,22 @@ TEST(M4FixedFramePacer, SkipsMissedSlotsWithoutCatchupBurst) {
     EXPECT_EQ(pacer.next_deadline(), 1'333'333);
 }
 
+TEST(M4FixedFramePacer, ReportsExactDeadlinesForMostRecentSkippedSlots) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin(100'000);
+    EXPECT_EQ(pacer.emit_due(100'000, true), 100'000);
+
+    EXPECT_EQ(pacer.emit_due(1'300'000, true), 1'100'000);
+    const auto skipped = pacer.last_skipped_slots();
+    EXPECT_EQ(skipped.count, 2u);
+    EXPECT_EQ(skipped.first_deadline_pts, 433'333);
+    EXPECT_EQ(skipped.last_deadline_pts, 766'666);
+    EXPECT_EQ(pacer.last_skipped_slots().count, 2u);
+
+    EXPECT_EQ(pacer.emit_due(1'300'000, false), -1);
+    EXPECT_EQ(pacer.last_skipped_slots().count, 0u);
+}
+
 TEST(M4FixedFramePacer, LateWakeAtRoundedThirtyFpsDeadlineDoesNotCatchUp) {
     sr::FixedFramePacer pacer(30);
     pacer.begin(0);

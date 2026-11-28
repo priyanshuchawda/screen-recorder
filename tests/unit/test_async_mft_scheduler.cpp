@@ -217,6 +217,38 @@ TEST(AsyncMftSchedulerTest, InputCapacityQueryIsNonBlockingAndReopensAfterAccept
     EXPECT_TRUE(scheduler.input_capacity_available());
 }
 
+TEST(AsyncMftSchedulerTest, CapacityNotificationIsRequestedOnlyForRegisteredWaiter) {
+    sr::AsyncMftScheduler<int, int> scheduler(1, 1, 4, 16);
+    ASSERT_TRUE(scheduler.enqueue_input(1));
+    scheduler.grant_input(0);
+    ASSERT_TRUE(scheduler.take_input_request().has_value());
+
+    EXPECT_FALSE(scheduler.register_input_capacity_waiter());
+    EXPECT_TRUE(scheduler.mark_input_accepted());
+    EXPECT_TRUE(scheduler.input_capacity_available());
+}
+
+TEST(AsyncMftSchedulerTest, CapacityWaitRegistrationClosesCheckRegisterRace) {
+    sr::AsyncMftScheduler<int, int> scheduler(1, 1, 4, 16);
+    ASSERT_TRUE(scheduler.enqueue_input(1));
+    scheduler.grant_input(0);
+    ASSERT_TRUE(scheduler.take_input_request().has_value());
+    EXPECT_FALSE(scheduler.register_input_capacity_waiter());
+    ASSERT_TRUE(scheduler.mark_input_accepted());
+
+    // If the queue opens before the producer registers, registration tells it
+    // to reevaluate immediately instead of waiting for a notification.
+    EXPECT_TRUE(scheduler.register_input_capacity_waiter());
+}
+
+TEST(AsyncMftSchedulerTest, AcceptedInputWithoutWaiterDoesNotRequestCapacityWake) {
+    sr::AsyncMftScheduler<int, int> scheduler(1, 1, 4, 16);
+    ASSERT_TRUE(scheduler.enqueue_input(1));
+    scheduler.grant_input(0);
+    ASSERT_TRUE(scheduler.take_input_request().has_value());
+    EXPECT_FALSE(scheduler.mark_input_accepted());
+}
+
 TEST(AsyncMftSchedulerTest, OutputQueueEnforcesPacketAndByteBoundsWithoutConsumingRejectedOutput) {
     sr::AsyncMftScheduler<int, int> scheduler(4, 4, 2, 5);
     int first = 1;

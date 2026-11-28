@@ -143,8 +143,14 @@ public:
 
     bool try_pop_async_output(AsyncEncodedOutput& output);
     bool async_worker_failed() const { return hw_async_mft_ && async_scheduler_->failed(); }
+    HRESULT async_worker_failure_reason() const {
+        return hw_async_mft_ ? async_scheduler_->failure_reason() : S_OK;
+    }
     bool input_capacity_available() const {
         return !hw_async_mft_ || async_scheduler_->input_capacity_available();
+    }
+    bool register_input_capacity_waiter() {
+        return !hw_async_mft_ || async_scheduler_->register_input_capacity_waiter();
     }
     void set_pipeline_wake_signal(const std::shared_ptr<PipelineWakeSignal>& signal) {
         pipeline_wake_signal_ = signal;

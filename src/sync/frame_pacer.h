@@ -11,6 +11,12 @@ namespace sr {
 // this clock is the sole authority that decides when a video sample is emitted.
 class FixedFramePacer {
 public:
+    struct SkippedSlots {
+        uint64_t count = 0;
+        int64_t first_deadline_pts = 0;
+        int64_t last_deadline_pts = 0;
+    };
+
     explicit FixedFramePacer(uint32_t fps = 30) { set_fps(fps); }
 
     void set_fps(uint32_t fps) {
@@ -18,18 +24,21 @@ public:
         reset();
         repeats_ = 0;
         skipped_ = 0;
+        last_skipped_ = {};
     }
 
     void begin(int64_t first_pts) {
         started_ = true;
         origin_pts_ = first_pts;
         next_slot_ = 0;
+        last_skipped_ = {};
     }
 
     void reset() {
         started_ = false;
         origin_pts_ = 0;
         next_slot_ = 0;
+        last_skipped_ = {};
     }
 
     bool started() const { return started_; }
@@ -43,6 +52,7 @@ public:
     // Returns -1 when no output is due. If several slots elapsed, emits only
     // the latest due slot and counts the earlier slots as skipped (no burst).
     int64_t emit_due(int64_t now_pts, bool has_new_frame) {
+        last_skipped_ = {};
         if (!output_due(now_pts)) return -1;
 
         const int64_t elapsed = now_pts - origin_pts_;
@@ -55,22 +65,35 @@ public:
         const uint64_t due_slot = whole_seconds * fps_ +
             (remainder * fps_ + fps_ - 1) / kTicksPerSecond;
         if (due_slot > next_slot_) {
-            skipped_ += due_slot - next_slot_;
+            last_skipped_.count = due_slot - next_slot_;
+            last_skipped_.first_deadline_pts = deadline_for_slot(next_slot_);
+            last_skipped_.last_deadline_pts = deadline_for_slot(due_slot - 1);
+            skipped_ += last_skipped_.count;
             next_slot_ = due_slot;
         }
 
-        return emit_next(has_new_frame);
+        return emit_current_slot(has_new_frame);
     }
 
     // Drain one newest captured image during stop if it arrived before its
     // next nominal slot. This prevents it being silently left in the queue.
     int64_t emit_next(bool has_new_frame) {
+        last_skipped_ = {};
+        return emit_current_slot(has_new_frame);
+    }
+
+    const SkippedSlots& last_skipped_slots() const { return last_skipped_; }
+
+private:
+    int64_t emit_current_slot(bool has_new_frame) {
         if (!started_) return -1;
         const int64_t result = deadline_for_slot(next_slot_);
         if (!has_new_frame) ++repeats_;
         ++next_slot_;
         return result;
     }
+
+public:
 
     uint64_t emitted_repeats() const { return repeats_; }
     uint64_t skipped_slots() const { return skipped_; }
@@ -88,6 +111,7 @@ private:
     uint64_t next_slot_ = 0;
     uint64_t repeats_ = 0;
     uint64_t skipped_ = 0;
+    SkippedSlots last_skipped_{};
 };
 
 } // namespace sr
