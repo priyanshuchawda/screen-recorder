@@ -27,6 +27,14 @@ TEST(RecordingOutcomeTest, MissedFixedFrameSlotsMakeFinalizedRecordingIncomplete
     EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
 }
 
+TEST(RecordingOutcomeTest, UnsubmittedVideoFrameMakesFinalizedRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.video_unsubmitted_frames = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
 TEST(RecordingOutcomeTest, CaptureResizeFailureMakesFinalizedRecordingIncomplete) {
     sr::RecordingOutcomeInputs input;
     input.finalized = true;
