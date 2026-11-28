@@ -18,8 +18,9 @@ std::wstring SessionDiagnostics::path_for_output(const std::wstring& output_path
 std::wstring SessionDiagnostics::format_start_summary(const StartInfo& info) {
     wchar_t buf[2048]{};
     _snwprintf_s(buf, _countof(buf), _TRUNCATE,
-                 L"event=session_start output=%s adapter=%s probed_encoder=%s "
+                 L"event=session_start build_commit=%s output=%s adapter=%s probed_encoder=%s "
                  L"encoder_mode=%s power=%s quality=%s profile=%ux%u@%ufps %ubps",
+                 info.build_commit.empty() ? L"unknown" : info.build_commit.c_str(),
                  info.output_path.c_str(),
                  info.adapter_name.empty() ? L"unknown" : info.adapter_name.c_str(),
                  info.probed_encoder_name.empty() ? L"not available" : info.probed_encoder_name.c_str(),

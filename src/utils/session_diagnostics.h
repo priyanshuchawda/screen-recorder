@@ -9,6 +9,7 @@ class SessionDiagnostics {
 public:
     struct StartInfo {
         std::wstring output_path;
+        std::wstring build_commit;
         std::wstring adapter_name;
         std::wstring probed_encoder_name;
         std::wstring encoder_mode;

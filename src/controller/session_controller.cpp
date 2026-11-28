@@ -19,6 +19,7 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <limits>
 #include <system_error>
 #include <dxgi1_4.h>
 #include <psapi.h>
@@ -338,6 +339,7 @@ bool SessionController::start() {
     }
 
     SessionDiagnostics::StartInfo diagnostics_start;
+    diagnostics_start.build_commit = SR_BUILD_COMMIT;
     diagnostics_start.output_path = current_output_path_;
     diagnostics_start.adapter_name = probe_.adapter_name;
     diagnostics_start.probed_encoder_name =
@@ -564,7 +566,7 @@ bool SessionController::stop() {
         encoder_final_state = encoder_->diagnostics_snapshot();
         encoder_pending_inputs = encoder_final_state.pending_inputs;
         const auto drain_mux_timing = video_mux_timing_.snapshot();
-        diagnostics_.write_event(L"event=encoder_drain_mux_timing samples=" +
+        diagnostics_.write_event(L"event=encoder_drain_enqueue_timing samples=" +
             std::to_wstring(drain_mux_timing.samples) + L" total_us=" +
             std::to_wstring(drain_mux_timing.total_us) + L" max_us=" +
             std::to_wstring(drain_mux_timing.max_us));
@@ -583,6 +585,40 @@ bool SessionController::stop() {
     if (!finalized) {
         notify_error(L"Failed to finalize recording file. Partial file kept.");
     }
+    const auto writer_final = muxer_->snapshot();
+    diagnostics_.write_event(
+        L"event=writer_final accepted=" + std::to_wstring(writer_final.samples_enqueued) +
+        L" written=" + std::to_wstring(writer_final.samples_written) +
+        L" video_accepted=" + std::to_wstring(writer_final.video_samples_enqueued) +
+        L" video_written=" + std::to_wstring(writer_final.video_samples_written) +
+        L" audio_accepted=" + std::to_wstring(writer_final.audio_samples_enqueued) +
+        L" audio_written=" + std::to_wstring(writer_final.audio_samples_written) +
+        L" queue_high_packets=" + std::to_wstring(writer_final.queue.packet_high_watermark) +
+        L" queue_high_bytes=" + std::to_wstring(writer_final.queue.queued_bytes_high_watermark) +
+        L" queue_high_allocated_bytes=" +
+            std::to_wstring(writer_final.queue.queued_allocated_bytes_high_watermark) +
+        L" total_allocated_bytes_high_watermark=" +
+            std::to_wstring(writer_final.queue.total_allocated_bytes_high_watermark) +
+        L" active_sample_payload_bytes=" +
+            std::to_wstring(writer_final.queue.active_payload_bytes) +
+        L" active_sample_allocated_bytes=" +
+            std::to_wstring(writer_final.queue.active_allocated_bytes) +
+        L" queue_max_stream_span_100ns=" +
+        std::to_wstring(writer_final.queue.stream_span_high_watermark_100ns) +
+        L" rejected=" + std::to_wstring(writer_final.queue.rejected_packets) +
+        L" discarded=" + std::to_wstring(writer_final.queue.discarded_packets) +
+        L" write_failures=" + std::to_wstring(writer_final.write_failures) +
+        L" invalid_samples=" + std::to_wstring(writer_final.invalid_sample_rejections) +
+        L" write_total_us=" + std::to_wstring(writer_final.write_total_us) +
+        L" write_max_us=" + std::to_wstring(writer_final.write_max_us) +
+        L" writer_drain_ms=" + std::to_wstring(writer_final.writer_drain_ms) +
+        L" sink_finalize_ms=" + std::to_wstring(writer_final.sink_finalize_ms) +
+        L" write_p50_us=" + std::to_wstring(writer_final.write_latency.p50_upper_us) +
+        L" write_p95_us=" + std::to_wstring(writer_final.write_latency.p95_upper_us) +
+        L" write_p99_us=" + std::to_wstring(writer_final.write_latency.p99_upper_us) +
+        L" sink_payload_bytes_written=" + std::to_wstring(writer_final.bytes_written) +
+        L" final_file_bytes=" + std::to_wstring(writer_final.final_file_bytes) +
+        L" last_error_hr=" + std::to_wstring(static_cast<uint32_t>(writer_final.last_error)));
 
     // Stop/join diagnostics before publishing Idle; a new session must not
     // overlap the prior session's sampler or persistent log path.
@@ -593,16 +629,30 @@ bool SessionController::stop() {
     SessionDiagnostics::StopInfo diagnostics_stop;
     diagnostics_stop.encoder_mode = encoder_mode_label(encoder_->mode());
     diagnostics_stop.frames_captured = capture_->frames_captured();
-    diagnostics_stop.frames_encoded = frames_encoded_.load();
+    diagnostics_stop.frames_encoded = static_cast<uint32_t>((std::min<uint64_t>)(
+        writer_final.video_samples_written, (std::numeric_limits<uint32_t>::max)()));
     diagnostics_stop.frames_dropped = capture_->frames_dropped();
     diagnostics_stop.capture_resize_failures = capture_->resize_failures();
     diagnostics_stop.capture_texture_acquisition_failures = capture_->texture_acquisition_failures();
     diagnostics_stop.queue_drops = capture_->queue_drops();
-    diagnostics_stop.video_write_failures = video_write_failures_.load();
+    const uint64_t video_not_written =
+        writer_final.video_samples_enqueued > writer_final.video_samples_written
+            ? writer_final.video_samples_enqueued - writer_final.video_samples_written : 0;
+    const auto saturating_failure_count = [](uint32_t base, uint64_t additional) {
+        return static_cast<uint32_t>((std::min<uint64_t>)(
+            static_cast<uint64_t>(base) + additional,
+            (std::numeric_limits<uint32_t>::max)()));
+    };
+    diagnostics_stop.video_write_failures =
+        saturating_failure_count(video_write_failures_.load(), video_not_written);
     diagnostics_stop.audio_queue_drops = audio_->queue_drops() + loopback_audio_->queue_drops();
     diagnostics_stop.audio_resampler_failures =
         audio_->resampler_failures() + loopback_audio_->resampler_failures();
-    diagnostics_stop.audio_write_failures = audio_write_failures_.load();
+    const uint64_t audio_not_written =
+        writer_final.audio_samples_enqueued > writer_final.audio_samples_written
+            ? writer_final.audio_samples_enqueued - writer_final.audio_samples_written : 0;
+    diagnostics_stop.audio_write_failures =
+        saturating_failure_count(audio_write_failures_.load(), audio_not_written);
     diagnostics_stop.audio_source_start_failures = audio_source_start_failures_.load();
     diagnostics_stop.audio_mixer_dropped_packets = audio_mixer_stats_.dropped_packets;
     diagnostics_stop.audio_mixer_rejected_packets = audio_mixer_stats_.rejected_packets;
@@ -615,7 +665,8 @@ bool SessionController::stop() {
     diagnostics_stop.audio_mixer_high_water_duration_100ns = (std::max)(
         audio_mixer_stats_.microphone_high_water_duration_100ns,
         audio_mixer_stats_.loopback_high_water_duration_100ns);
-    diagnostics_stop.audio_packets = audio_written_.load();
+    diagnostics_stop.audio_packets = static_cast<uint32_t>((std::min<uint64_t>)(
+        writer_final.audio_samples_written, (std::numeric_limits<uint32_t>::max)()));
     diagnostics_stop.encoder_drain_complete = encoder_drain_ok;
     diagnostics_stop.encoder_pending_inputs = encoder_pending_inputs;
     diagnostics_stop.encoder_deferred_inputs_pending = encoder_final_state.deferred_inputs_pending;
@@ -820,7 +871,9 @@ void SessionController::diagnostics_monitor_loop() {
             gpu_memory_available, gpu_sample_age_ms, gpu_local_usage, gpu_local_budget,
             gpu_nonlocal_usage, gpu_nonlocal_budget);
         const uint32_t captured_frames = capture_ ? capture_->frames_captured() : 0;
-        const uint32_t written_frames = frames_encoded_.load(std::memory_order_relaxed);
+        const auto writer_live = muxer_ ? muxer_->snapshot() : MuxWriter::StatsSnapshot{};
+        const uint32_t written_frames = static_cast<uint32_t>((std::min<uint64_t>)(
+            writer_live.video_samples_written, (std::numeric_limits<uint32_t>::max)()));
         const uint32_t dropped_frames = capture_ ? capture_->frames_dropped() : 0;
         const uint32_t capture_queue_drops = capture_ ? capture_->queue_drops() : 0;
         const uint32_t cadence_rejections = capture_ ? capture_->cadence_rejections() : 0;
@@ -869,8 +922,8 @@ void SessionController::diagnostics_monitor_loop() {
             L"mft_deferred_pending=%llu mft_deferred_high_watermark=%llu "
             L"mft_input_retried=%llu mft_output_timestamp_errors=%llu "
             L"encode_timing_samples=%llu encode_avg_us=%llu encode_max_us=%llu encode_p50_us=%llu encode_p95_us=%llu encode_p99_us=%llu "
-            L"video_mux_samples=%llu video_mux_avg_us=%llu video_mux_max_us=%llu video_mux_p50_us=%llu video_mux_p95_us=%llu video_mux_p99_us=%llu "
-            L"audio_mux_samples=%llu audio_mux_avg_us=%llu audio_mux_max_us=%llu audio_mux_p50_us=%llu audio_mux_p95_us=%llu audio_mux_p99_us=%llu "
+            L"video_enqueue_samples=%llu video_enqueue_avg_us=%llu video_enqueue_max_us=%llu video_enqueue_p50_us=%llu video_enqueue_p95_us=%llu video_enqueue_p99_us=%llu "
+            L"audio_enqueue_samples=%llu audio_enqueue_avg_us=%llu audio_enqueue_max_us=%llu audio_enqueue_p50_us=%llu audio_enqueue_p95_us=%llu audio_enqueue_p99_us=%llu "
             L"diagnostic_log_dropped=%llu",
             static_cast<unsigned long long>((now_ms - diagnostics_start_ms) / 1000),
             process_cpu_sample_available ? 1u : 0u,
@@ -936,6 +989,46 @@ void SessionController::diagnostics_monitor_loop() {
             static_cast<unsigned long long>(audio_mux_timing.p99_upper_us),
             static_cast<unsigned long long>(persistent_log_dropped_count()));
         diagnostics_.write_event(resource_event);
+        if (muxer_) {
+            const auto& writer = writer_live;
+            const uint64_t active_write_age_ms =
+                writer.active_write_started_ms != 0 && now_ms >= writer.active_write_started_ms
+                    ? now_ms - writer.active_write_started_ms : 0;
+            diagnostics_.write_event(
+                L"event=writer_sample elapsed_s=" +
+                std::to_wstring((now_ms - diagnostics_start_ms) / 1000) +
+                L" queue_packets=" + std::to_wstring(writer.queue.packet_count) +
+                L" queue_high_packets=" + std::to_wstring(writer.queue.packet_high_watermark) +
+                L" queue_bytes=" + std::to_wstring(writer.queue.queued_bytes) +
+                L" queue_high_bytes=" + std::to_wstring(writer.queue.queued_bytes_high_watermark) +
+                L" queue_allocated_bytes=" + std::to_wstring(writer.queue.queued_allocated_bytes) +
+                L" queue_high_allocated_bytes=" +
+                    std::to_wstring(writer.queue.queued_allocated_bytes_high_watermark) +
+                L" total_allocated_bytes_high_watermark=" +
+                    std::to_wstring(writer.queue.total_allocated_bytes_high_watermark) +
+                L" video_span_100ns=" + std::to_wstring(writer.queue.video_span_100ns) +
+                L" audio_span_100ns=" + std::to_wstring(writer.queue.audio_span_100ns) +
+                L" stream_span_high_watermark_100ns=" +
+                    std::to_wstring(writer.queue.stream_span_high_watermark_100ns) +
+                L" accepted=" + std::to_wstring(writer.samples_enqueued) +
+                L" written=" + std::to_wstring(writer.samples_written) +
+                L" video_written=" + std::to_wstring(writer.video_samples_written) +
+                L" audio_written=" + std::to_wstring(writer.audio_samples_written) +
+                L" rejected=" + std::to_wstring(writer.queue.rejected_packets) +
+                L" discarded=" + std::to_wstring(writer.queue.discarded_packets) +
+                L" failures=" + std::to_wstring(writer.write_failures) +
+                L" active_write_age_ms=" + std::to_wstring(active_write_age_ms) +
+                L" active_sample_bytes=" + std::to_wstring(writer.active_sample_bytes) +
+                L" active_sample_allocated_bytes=" +
+                    std::to_wstring(writer.active_sample_allocated_bytes) +
+                L" write_avg_us=" + std::to_wstring(writer.samples_written
+                    ? writer.write_total_us / writer.samples_written : 0) +
+                L" write_max_us=" + std::to_wstring(writer.write_max_us) +
+                L" write_p50_us=" + std::to_wstring(writer.write_latency.p50_upper_us) +
+                L" write_p95_us=" + std::to_wstring(writer.write_latency.p95_upper_us) +
+                L" write_p99_us=" + std::to_wstring(writer.write_latency.p99_upper_us) +
+                L" healthy=" + std::to_wstring(writer.failed ? 0 : 1));
+        }
         const auto async_wait = encoder_metrics.async_event_wait_us;
         const auto async_queue_wait = encoder_metrics.async_input_queue_residence_us;
         const auto async_input_time = encoder_metrics.async_process_input_us;
@@ -1215,7 +1308,9 @@ void SessionController::encode_loop() {
         return false;
     };
     bool async_encoder_failure_reported = false;
-    auto drain_async_outputs = [this, &account_video_write, &async_encoder_failure_reported]() {
+    bool async_writer_failure_reported = false;
+    auto drain_async_outputs = [this, &account_video_write, &async_encoder_failure_reported,
+                               &async_writer_failure_reported]() {
         VideoEncoder::AsyncEncodedOutput output;
         while (encoder_->try_pop_async_output(output)) {
             account_video_write(output.sample.Get(), output.synthetic, output.frame_id);
@@ -1224,6 +1319,11 @@ void SessionController::encode_loop() {
             async_encoder_failure_reported = true;
             diagnostics_.write_event(L"event=async_encoder_worker_failed");
             report_recording_loss(L"encoder_async_worker");
+        }
+        if (muxer_ && !muxer_->healthy() && !async_writer_failure_reported) {
+            async_writer_failure_reported = true;
+            diagnostics_.write_event(L"event=media_writer_worker_failed");
+            report_recording_loss(L"media_writer_worker");
         }
     };
     auto write_audio_timed = [this](IMFSample* sample) {
@@ -1294,6 +1394,7 @@ void SessionController::encode_loop() {
             telemetry_.on_audio_written();
             return true;
         }
+        audio_write_failures_.fetch_add(1, std::memory_order_relaxed);
         report_recording_loss(L"audio_mux");
         return false;
     };

@@ -107,14 +107,13 @@ TEST(DiskSpacePollingTest, CanRestartPolling) {
 }
 
 // ============================================================================
-// T029 — Exclusive write lock on .partial.mp4
-// Tests the StorageManager-level getFreeDiskSpace and verifies Windows file locking.
-// The lock itself is held by MuxWriter; here we test the locking contract directly.
+// Windows file-sharing semantics used by the former redundant second-handle lock.
+// MuxWriter now relies on its Sink Writer handle and does not open this extra handle.
 // ============================================================================
 
 // Verify that a file opened with GENERIC_WRITE / FILE_SHARE_READ
 // allows reads but blocks writes from other handles.
-TEST(ExclusiveFileLockTest, ShareReadBlocksExternalWrite) {
+TEST(WindowsFileSharingTest, ShareReadBlocksExternalWrite) {
     std::wstring tmp_dir = make_temp_dir(L"lock");
     std::wstring test_file = tmp_dir + L"\\test.partial.mp4";
 
@@ -164,7 +163,7 @@ TEST(ExclusiveFileLockTest, ShareReadBlocksExternalWrite) {
 }
 
 // Test: lock handle closed before rename (simulates MuxWriter::finalize)
-TEST(ExclusiveFileLockTest, FileRenamableAfterLockReleased) {
+TEST(WindowsFileSharingTest, PartialFileCanBeRenamedAfterHandleClose) {
     std::wstring tmp_dir  = make_temp_dir(L"rename");
     std::wstring partial  = tmp_dir + L"\\ScreenRec.partial.mp4";
     std::wstring final_p  = tmp_dir + L"\\ScreenRec.mp4";
