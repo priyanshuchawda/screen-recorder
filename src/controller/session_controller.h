@@ -18,6 +18,7 @@
 #include <string>
 #include "controller/session_machine.h"
 #include "controller/recording_outcome.h"
+#include "controller/encoder_backpressure_metrics.h"
 #include "encoder/encoder_probe.h"
 #include "encoder/power_mode.h"      // T042
 #include "sync/sync_manager.h"
@@ -199,6 +200,8 @@ private:
     std::atomic<uint64_t> scheduled_video_frames_{ 0 };
     std::atomic<int64_t> first_scheduled_video_pts_{ -1 };
     std::atomic<int64_t> last_scheduled_video_pts_{ -1 };
+    EncoderBackpressureMetrics encoder_backpressure_metrics_;
+    std::atomic<uint64_t> video_unsubmitted_frames_{ 0 };
 
     // Low-frequency independent heartbeat keeps recording/stop diagnostics
     // useful even if the capture or encode thread stalls.

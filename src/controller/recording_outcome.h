@@ -17,6 +17,7 @@ struct RecordingOutcomeInputs {
     bool encoder_drain_complete = false;
     uint64_t frame_drops = 0;
     uint64_t video_scheduled_frame_drops = 0;
+    uint64_t video_unsubmitted_frames = 0;
     uint64_t capture_resize_failures = 0;
     uint64_t capture_texture_acquisition_failures = 0;
     uint64_t video_write_failures = 0;
@@ -46,6 +47,7 @@ inline RecordingOutcome classify_recording_outcome(
     const bool media_loss = !input.encoder_drain_complete ||
         input.frame_drops != 0 ||
         input.video_scheduled_frame_drops != 0 ||
+        input.video_unsubmitted_frames != 0 ||
         input.capture_resize_failures != 0 ||
         input.capture_texture_acquisition_failures != 0 ||
         input.video_write_failures != 0 ||

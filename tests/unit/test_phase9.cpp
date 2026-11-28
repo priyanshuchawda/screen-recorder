@@ -216,6 +216,14 @@ TEST(M4FixedFramePacer, EmitsFinalPendingFrameAtNextSlot) {
     EXPECT_EQ(pacer.emitted_repeats(), 0u);
 }
 
+TEST(M4FixedFramePacer, DoesNotEmitInvalidTimestampBeforeTimelineStarts) {
+    sr::FixedFramePacer pacer(30);
+    EXPECT_EQ(pacer.emit_next(true), -1);
+    EXPECT_FALSE(pacer.started());
+    pacer.begin(1'000'000);
+    EXPECT_EQ(pacer.emit_next(true), 1'000'000);
+}
+
 TEST(M4FixedFramePacer, DoesNotExceedRequestedRateDuringIrregularArrivals) {
     sr::FixedFramePacer pacer(30);
     pacer.begin(0);

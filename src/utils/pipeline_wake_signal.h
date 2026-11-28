@@ -16,6 +16,7 @@ enum class PipelineWakeSource : std::size_t {
     MicrophoneAudio,
     LoopbackAudio,
     EncoderOutput,
+    EncoderInputCapacity,
     EncoderFailure,
     Lifecycle,
     Count

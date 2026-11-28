@@ -202,90 +202,19 @@ TEST(AsyncMftSchedulerTest, ReservedSubmissionSlotKeepsRejectedInputRetryable) {
     EXPECT_EQ(scheduler.input_count(), 4u);
 }
 
-TEST(AsyncMftSchedulerTest, ProducerWaitsForBoundedInputCapacityInsteadOfDroppingFrame) {
+TEST(AsyncMftSchedulerTest, InputCapacityQueryIsNonBlockingAndReopensAfterAcceptance) {
     sr::AsyncMftScheduler<int, int> scheduler(1, 1, 4, 16);
     ASSERT_TRUE(scheduler.enqueue_input(1));
-
-    std::atomic<bool> started{false};
-    std::atomic<bool> completed{false};
-    bool was_backpressured = false;
-    bool enqueued = false;
-    std::thread producer([&] {
-        started.store(true, std::memory_order_release);
-        enqueued = scheduler.enqueue_input_wait(
-            2, std::chrono::seconds(1), &was_backpressured);
-        completed.store(true, std::memory_order_release);
-    });
-
-    const bool producer_started = wait_until([&] { return started.load(std::memory_order_acquire); });
-    EXPECT_TRUE(producer_started);
-    if (!producer_started) {
-        scheduler.fail(E_ABORT);
-        producer.join();
-        return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    EXPECT_FALSE(completed.load(std::memory_order_acquire));
+    const auto before = std::chrono::steady_clock::now();
+    EXPECT_FALSE(scheduler.input_capacity_available());
+    EXPECT_LT(std::chrono::steady_clock::now() - before, std::chrono::milliseconds(50));
+    EXPECT_EQ(scheduler.input_count(), 1u);
+    EXPECT_FALSE(scheduler.failed());
 
     scheduler.grant_input(0);
-    auto request = scheduler.take_input_request();
-    ASSERT_TRUE(request.has_value());
-    EXPECT_EQ(request->input, 1);
+    ASSERT_TRUE(scheduler.take_input_request().has_value());
     scheduler.mark_input_accepted();
-
-    const bool producer_completed = wait_until([&] { return completed.load(std::memory_order_acquire); });
-    EXPECT_TRUE(producer_completed);
-    if (!producer_completed) scheduler.fail(E_ABORT);
-    producer.join();
-    EXPECT_TRUE(was_backpressured);
-    EXPECT_TRUE(enqueued);
-    EXPECT_EQ(scheduler.input_count(), 1u);
-    EXPECT_FALSE(scheduler.failed());
-}
-
-TEST(AsyncMftSchedulerTest, TerminalFailureWakesProducerWaitingForInputCapacity) {
-    sr::AsyncMftScheduler<int, int> scheduler(1, 1, 4, 16);
-    ASSERT_TRUE(scheduler.enqueue_input(1));
-
-    std::atomic<bool> started{false};
-    std::atomic<bool> completed{false};
-    bool was_backpressured = false;
-    bool enqueued = true;
-    std::thread producer([&] {
-        started.store(true, std::memory_order_release);
-        enqueued = scheduler.enqueue_input_wait(
-            2, std::chrono::seconds(1), &was_backpressured);
-        completed.store(true, std::memory_order_release);
-    });
-
-    const bool producer_started = wait_until([&] { return started.load(std::memory_order_acquire); });
-    EXPECT_TRUE(producer_started);
-    if (!producer_started) {
-        scheduler.fail(E_ABORT);
-        producer.join();
-        return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    scheduler.fail(E_FAIL);
-
-    const bool producer_completed = wait_until([&] { return completed.load(std::memory_order_acquire); });
-    EXPECT_TRUE(producer_completed);
-    if (!producer_completed) scheduler.fail(E_ABORT);
-    producer.join();
-    EXPECT_TRUE(was_backpressured);
-    EXPECT_FALSE(enqueued);
-    EXPECT_TRUE(scheduler.failed());
-}
-
-TEST(AsyncMftSchedulerTest, FullInputQueueWaitHasAnExplicitTimeout) {
-    sr::AsyncMftScheduler<int, int> scheduler(1, 1, 4, 16);
-    ASSERT_TRUE(scheduler.enqueue_input(1));
-    bool was_backpressured = false;
-    EXPECT_FALSE(scheduler.enqueue_input_wait(
-        2, std::chrono::milliseconds(10), &was_backpressured));
-    EXPECT_TRUE(was_backpressured);
-    EXPECT_EQ(scheduler.input_count(), 1u);
-    EXPECT_FALSE(scheduler.failed());
+    EXPECT_TRUE(scheduler.input_capacity_available());
 }
 
 TEST(AsyncMftSchedulerTest, OutputQueueEnforcesPacketAndByteBoundsWithoutConsumingRejectedOutput) {

@@ -41,8 +41,6 @@ public:
         uint64_t input_samples_offered = 0;
         uint64_t input_samples_accepted = 0;
         uint64_t input_samples_not_accepted = 0;
-        uint64_t input_queue_backpressure_waits = 0;
-        uint64_t input_queue_backpressure_timeouts = 0;
         uint64_t input_samples_deferred_without_event = 0;
         uint64_t input_errors = 0;
         uint64_t output_samples_produced = 0;
@@ -106,8 +104,6 @@ public:
             input_samples_offered_.load(std::memory_order_relaxed),
             input_samples_accepted_.load(std::memory_order_relaxed),
             input_samples_not_accepted_.load(std::memory_order_relaxed),
-            input_queue_backpressure_waits_.load(std::memory_order_relaxed),
-            input_queue_backpressure_timeouts_.load(std::memory_order_relaxed),
             input_samples_deferred_without_event_.load(std::memory_order_relaxed),
             input_errors_.load(std::memory_order_relaxed),
             output_samples_produced_.load(std::memory_order_relaxed),
@@ -147,6 +143,9 @@ public:
 
     bool try_pop_async_output(AsyncEncodedOutput& output);
     bool async_worker_failed() const { return hw_async_mft_ && async_scheduler_->failed(); }
+    bool input_capacity_available() const {
+        return !hw_async_mft_ || async_scheduler_->input_capacity_available();
+    }
     void set_pipeline_wake_signal(const std::shared_ptr<PipelineWakeSignal>& signal) {
         pipeline_wake_signal_ = signal;
     }
@@ -237,8 +236,6 @@ private:
     std::atomic<uint64_t> input_samples_offered_{ 0 };
     std::atomic<uint64_t> input_samples_accepted_{ 0 };
     std::atomic<uint64_t> input_samples_not_accepted_{ 0 };
-    std::atomic<uint64_t> input_queue_backpressure_waits_{ 0 };
-    std::atomic<uint64_t> input_queue_backpressure_timeouts_{ 0 };
     std::atomic<uint64_t> input_samples_deferred_without_event_{ 0 };
     std::atomic<uint64_t> input_errors_{ 0 };
     std::atomic<uint64_t> output_samples_produced_{ 0 };

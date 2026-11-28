@@ -39,7 +39,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
     _snwprintf_s(buf, _countof(buf), _TRUNCATE,
                  L"event=session_stop status=%s encoder_mode_end=%s "
                  L"frames_captured=%u frames_encoded=%u frames_dropped=%u "
-                 L"video_scheduled_frame_drops=%llu "
+                 L"video_scheduled_frame_drops=%llu video_unsubmitted_frames=%llu "
                  L"capture_resize_failures=%u capture_texture_acquisition_failures=%u "
                  L"queue_drops=%u video_write_failures=%u audio_queue_drops=%u "
                  L"audio_resampler_failures=%u audio_write_failures=%u "
@@ -51,8 +51,11 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"encoder_deferred_inputs_pending=%llu encoder_deferred_inputs_high_watermark=%llu "
                  L"encoder_inputs_offered=%llu encoder_inputs_accepted=%llu encoder_outputs_produced=%llu "
                  L"encoder_drain_samples=%llu "
-                 L"encoder_inputs_not_accepted=%llu encoder_input_queue_backpressure_waits=%llu "
-                 L"encoder_input_queue_backpressure_timeouts=%llu encoder_input_errors=%llu "
+                 L"encoder_inputs_not_accepted=%llu encoder_input_backpressure_attempts=%llu "
+                 L"encoder_input_backpressure_timeouts=%llu "
+                 L"encoder_input_backpressure_recoveries=%llu encoder_input_backpressure_cancellations=%llu "
+                 L"encoder_input_backpressure_max_wait_us=%llu encoder_input_backpressure_p95_wait_us=%llu "
+                 L"encoder_input_errors=%llu "
                  L"encoder_inputs_deferred=%llu encoder_inputs_abandoned=%llu encoder_inputs_retried=%llu "
                  L"encoder_timestamp_errors=%llu encoder_input_preparation_errors=%llu "
                  L"encoder_output_errors=%llu encoder_scheduler_errors=%llu "
@@ -64,6 +67,7 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  info.frames_encoded,
                  info.frames_dropped,
                  static_cast<unsigned long long>(info.video_scheduled_frame_drops),
+                 static_cast<unsigned long long>(info.video_unsubmitted_frames),
                  info.capture_resize_failures,
                  info.capture_texture_acquisition_failures,
                  info.queue_drops,
@@ -87,8 +91,12 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  static_cast<unsigned long long>(info.encoder_outputs_produced),
                  static_cast<unsigned long long>(info.encoder_drain_samples),
                  static_cast<unsigned long long>(info.encoder_inputs_not_accepted),
-                 static_cast<unsigned long long>(info.encoder_input_queue_backpressure_waits),
-                 static_cast<unsigned long long>(info.encoder_input_queue_backpressure_timeouts),
+                 static_cast<unsigned long long>(info.encoder_input_backpressure_attempts),
+                 static_cast<unsigned long long>(info.encoder_input_backpressure_timeouts),
+                 static_cast<unsigned long long>(info.encoder_input_backpressure_recoveries),
+                 static_cast<unsigned long long>(info.encoder_input_backpressure_cancellations),
+                 static_cast<unsigned long long>(info.encoder_input_backpressure_max_wait_us),
+                 static_cast<unsigned long long>(info.encoder_input_backpressure_p95_wait_us),
                  static_cast<unsigned long long>(info.encoder_input_errors),
                  static_cast<unsigned long long>(info.encoder_inputs_deferred),
                  static_cast<unsigned long long>(info.encoder_inputs_abandoned),

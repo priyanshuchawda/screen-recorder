@@ -596,6 +596,7 @@ void VideoEncoder::async_worker_loop() {
                     while (pending > high && !pending_input_high_watermark_.compare_exchange_weak(
                                high, pending, std::memory_order_relaxed)) {}
                     async_scheduler_->mark_input_accepted();
+                    notify_pipeline(PipelineWakeSource::EncoderInputCapacity);
                     try {
                         async_pending_frames_.push_back({ input.frame_id, input.pts, input.synthetic,
                                                           std::chrono::steady_clock::now() });
@@ -794,8 +795,6 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     input_samples_offered_.store(0, std::memory_order_relaxed);
     input_samples_accepted_.store(0, std::memory_order_relaxed);
     input_samples_not_accepted_.store(0, std::memory_order_relaxed);
-    input_queue_backpressure_waits_.store(0, std::memory_order_relaxed);
-    input_queue_backpressure_timeouts_.store(0, std::memory_order_relaxed);
     input_samples_deferred_without_event_.store(0, std::memory_order_relaxed);
     input_errors_.store(0, std::memory_order_relaxed);
     output_samples_produced_.store(0, std::memory_order_relaxed);
@@ -1090,23 +1089,15 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         queued.synthetic = synthetic;
         queued.force_keyframe = force_keyframe;
         queued.queued_at = std::chrono::steady_clock::now();
-        bool was_backpressured = false;
-        if (!async_scheduler_->enqueue_input_wait(
-                std::move(queued), std::chrono::seconds(5), &was_backpressured)) {
-            if (was_backpressured &&
-                !async_scheduler_->failed() && !async_scheduler_->stopped()) {
-                input_queue_backpressure_timeouts_.fetch_add(1, std::memory_order_relaxed);
-                async_scheduler_->fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
-            }
+        if (!async_scheduler_->enqueue_input(std::move(queued))) {
             pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
-            SR_LOG_ERROR(L"Async encoder could not enqueue frame %llu (backpressure_waited=%u failed=%u stopped=%u)",
-                         static_cast<unsigned long long>(frame_id), was_backpressured ? 1u : 0u,
+            SR_LOG_ERROR(L"Async encoder could not enqueue frame %llu (queue_full=%u failed=%u stopped=%u)",
+                         static_cast<unsigned long long>(frame_id),
+                         async_scheduler_->input_capacity_available() ? 0u : 1u,
                          async_scheduler_->failed() ? 1u : 0u,
                          async_scheduler_->stopped() ? 1u : 0u);
             return false;
         }
-        if (was_backpressured)
-            input_queue_backpressure_waits_.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 

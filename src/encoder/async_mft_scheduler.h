@@ -81,7 +81,6 @@ public:
         worker_drained_ = false;
         cv_work_.notify_all();
         cv_output_.notify_all();
-        cv_input_space_.notify_all();
     }
 
     bool enqueue_input(Input input) {
@@ -99,33 +98,13 @@ public:
         return true;
     }
 
-    // Apply producer backpressure against the existing bounded queue. The
-    // caller retains only this one input while waiting; queue capacity never
-    // grows to hide an encoder slowdown.
-    bool enqueue_input_wait(Input input, std::chrono::milliseconds timeout,
-                            bool* was_backpressured = nullptr) {
-        std::unique_lock lock(mutex_);
-        const auto terminal = [this] { return stopped_ || failed_ || drain_requested_; };
-        const auto has_capacity = [this] {
-            return inputs_.size() + (request_outstanding_ ? 1u : 0u) < input_capacity_;
-        };
-        if (terminal()) return false;
-        if (!has_capacity()) {
-            if (was_backpressured) *was_backpressured = true;
-            if (!cv_input_space_.wait_for(lock, timeout, [&] {
-                    return terminal() || has_capacity();
-                })) return false;
-        }
-        if (terminal() || !has_capacity()) return false;
-        try {
-            inputs_.push_back(std::move(input));
-        } catch (...) {
-            fail_locked(E_OUTOFMEMORY);
-            return false;
-        }
-        input_queue_high_water_ = (std::max)(input_queue_high_water_, inputs_.size());
-        cv_work_.notify_one();
-        return true;
+    // Producer capacity is queried non-blockingly by the controller. The
+    // controller owns the pending frame and keeps servicing audio/output while
+    // capacity is unavailable.
+    bool input_capacity_available() const {
+        std::lock_guard lock(mutex_);
+        return !stopped_ && !failed_ && !drain_requested_ &&
+               inputs_.size() + (request_outstanding_ ? 1u : 0u) < input_capacity_;
     }
 
     void grant_input(DWORD stream_id) {
@@ -201,7 +180,6 @@ public:
         inputs_.clear();
         input_credits_.clear();
         cv_work_.notify_all();
-        cv_input_space_.notify_all();
         return count;
     }
     std::size_t input_credit_high_water() const {
@@ -254,7 +232,6 @@ public:
         request_outstanding_ = false;
         ++in_flight_;
         cv_work_.notify_one();
-        cv_input_space_.notify_one();
     }
 
     bool retry_input_front(Input input) {
@@ -351,7 +328,6 @@ public:
         if (stopped_ || failed_ || drain_complete_) return;
         drain_requested_ = true;
         cv_work_.notify_all();
-        cv_input_space_.notify_all();
     }
 
     bool take_drain_command() {
@@ -402,7 +378,6 @@ public:
         input_credits_.clear();
         cv_work_.notify_all();
         cv_output_.notify_all();
-        cv_input_space_.notify_all();
     }
     bool stopped() const {
         std::lock_guard lock(mutex_);
@@ -468,13 +443,11 @@ private:
         failure_reason_ = reason;
         cv_work_.notify_all();
         cv_output_.notify_all();
-        cv_input_space_.notify_all();
     }
 
     mutable std::mutex mutex_;
     std::condition_variable cv_work_;
     std::condition_variable cv_output_;
-    std::condition_variable cv_input_space_;
     std::deque<Input> inputs_;
     std::deque<DWORD> input_credits_;
     std::deque<std::pair<Output, std::size_t>> outputs_;
