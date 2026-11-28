@@ -249,7 +249,9 @@ TEST_F(SyncManagerTest, TimestampMapperReportsPauseRejectionSeparatelyFromMissin
     int64_t pts = -1;
     EXPECT_EQ(sync_.map_qpc_ticks(anchor + freq * 8, pts),
               sr::TimestampMappingStatus::OverlapsPause);
-    EXPECT_EQ(sync_.map_qpc_ticks(anchor - 1, pts),
+    // QPC-to-100ns conversion truncates sub-100ns differences, so test a
+    // pre-session value directly on the mapper's 100ns input clock.
+    EXPECT_EQ(sync_.map_qpc_100ns(sync_.anchor_100ns() - 1, 0, pts),
               sr::TimestampMappingStatus::BeforeSession);
     EXPECT_EQ(sync_.map_qpc_ticks(anchor + freq * 2, pts),
               sr::TimestampMappingStatus::Mapped);
