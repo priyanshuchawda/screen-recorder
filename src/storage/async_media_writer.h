@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -30,12 +32,15 @@ public:
     AsyncMediaWriter& operator=(const AsyncMediaWriter&) = delete;
 
     bool start(WriteCallback write, WorkerSetup setup = {}, WorkerTeardown teardown = {}) {
+        std::lock_guard operation_lock(operation_mutex_);
         std::lock_guard lock(lifecycle_mutex_);
         if (started_.load(std::memory_order_acquire) || worker_.joinable() || !write) return false;
         queue_.reset();
         samples_accepted_.store(0, std::memory_order_relaxed);
         samples_written_.store(0, std::memory_order_relaxed);
         write_failures_.store(0, std::memory_order_relaxed);
+        drain_ms_.store(0, std::memory_order_relaxed);
+        close_requested_ns_.store(0, std::memory_order_relaxed);
         failed_.store(false, std::memory_order_release);
         {
             std::lock_guard ready_lock(ready_mutex_);
@@ -76,11 +81,13 @@ public:
     }
 
     bool finish() {
+        std::lock_guard operation_lock(operation_mutex_);
         {
             std::lock_guard lock(lifecycle_mutex_);
             if (!started_.load(std::memory_order_acquire) && !worker_.joinable()) {
                 return !failed_.load(std::memory_order_acquire);
             }
+            close_requested_ns_.store(now_ns(), std::memory_order_release);
             queue_.close();
             started_.store(false, std::memory_order_release);
         }
@@ -92,6 +99,7 @@ public:
     }
 
     void abort() {
+        std::lock_guard operation_lock(operation_mutex_);
         {
             std::lock_guard lock(lifecycle_mutex_);
             queue_.close_and_discard();
@@ -105,6 +113,7 @@ public:
         uint64_t samples_accepted = 0;
         uint64_t samples_written = 0;
         uint64_t write_failures = 0;
+        uint64_t drain_ms = 0;
         bool failed = false;
         bool started = false;
     };
@@ -113,9 +122,12 @@ public:
         return {queue_.snapshot(), samples_accepted_.load(std::memory_order_relaxed),
                 samples_written_.load(std::memory_order_relaxed),
                 write_failures_.load(std::memory_order_relaxed),
+                drain_ms_.load(std::memory_order_relaxed),
                 failed_.load(std::memory_order_acquire),
                 started_.load(std::memory_order_acquire)};
     }
+
+    bool failed() const { return failed_.load(std::memory_order_acquire); }
 
 private:
     void worker_loop(WriteCallback write, WorkerSetup setup, WorkerTeardown teardown) {
@@ -129,6 +141,11 @@ private:
             failed_.store(true, std::memory_order_release);
             write_failures_.fetch_add(1, std::memory_order_relaxed);
             queue_.close_and_discard();
+            try {
+                if (teardown) teardown();
+            } catch (...) {
+                write_failures_.fetch_add(1, std::memory_order_relaxed);
+            }
             signal_worker_ready(false);
             return;
         }
@@ -141,6 +158,10 @@ private:
             } catch (...) {
                 succeeded = false;
             }
+            // Drop the last sample reference before releasing its active byte
+            // reservation so producers cannot temporarily exceed the budget.
+            packet->payload = Payload{};
+            queue_.release_active(*packet);
             if (!succeeded) {
                 failed_.store(true, std::memory_order_release);
                 write_failures_.fetch_add(1, std::memory_order_relaxed);
@@ -149,6 +170,11 @@ private:
             }
             samples_written_.fetch_add(1, std::memory_order_relaxed);
         }
+
+        int64_t drain_started = close_requested_ns_.load(std::memory_order_acquire);
+        if (drain_started == 0) drain_started = now_ns();
+        const uint64_t elapsed_ns = static_cast<uint64_t>((std::max)(int64_t{0}, now_ns() - drain_started));
+        drain_ms_.store(elapsed_ns / 1'000'000, std::memory_order_release);
 
         try {
             if (teardown) teardown();
@@ -167,7 +193,13 @@ private:
         ready_cv_.notify_all();
     }
 
+    static int64_t now_ns() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
     BoundedMediaQueue<Payload> queue_;
+    std::mutex operation_mutex_;
     mutable std::mutex lifecycle_mutex_;
     std::mutex ready_mutex_;
     std::condition_variable ready_cv_;
@@ -175,6 +207,8 @@ private:
     std::atomic<uint64_t> samples_accepted_{0};
     std::atomic<uint64_t> samples_written_{0};
     std::atomic<uint64_t> write_failures_{0};
+    std::atomic<uint64_t> drain_ms_{0};
+    std::atomic<int64_t> close_requested_ns_{0};
     std::atomic<bool> failed_{false};
     std::atomic<bool> started_{false};
     bool worker_ready_ = false;

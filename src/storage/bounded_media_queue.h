@@ -21,6 +21,7 @@ struct MediaPacket {
     uint64_t bytes = 0;
     int64_t pts_100ns = 0;
     int64_t duration_100ns = 0;
+    uint64_t allocated_bytes = 0;
 };
 
 enum class MediaQueueResult : uint8_t {
@@ -37,6 +38,7 @@ struct MediaQueueLimits {
     size_t max_packets = 1024;
     uint64_t max_bytes = 16ull * 1024 * 1024;
     int64_t max_stream_span_100ns = 5ll * 10'000'000;
+    uint64_t max_allocated_bytes = 32ull * 1024 * 1024;
 };
 
 struct MediaQueueSnapshot {
@@ -44,12 +46,19 @@ struct MediaQueueSnapshot {
     size_t packet_high_watermark = 0;
     uint64_t queued_bytes = 0;
     uint64_t queued_bytes_high_watermark = 0;
+    uint64_t queued_allocated_bytes = 0;
+    uint64_t queued_allocated_bytes_high_watermark = 0;
+    uint64_t total_allocated_bytes_high_watermark = 0;
+    uint64_t active_payload_bytes = 0;
+    uint64_t active_allocated_bytes = 0;
     uint64_t rejected_packets = 0;
     uint64_t discarded_packets = 0;
     uint64_t discarded_bytes = 0;
+    uint64_t discarded_allocated_bytes = 0;
     int64_t video_span_100ns = 0;
     int64_t audio_span_100ns = 0;
     int64_t max_stream_span_100ns = 0;
+    int64_t stream_span_high_watermark_100ns = 0;
     bool closed = false;
 };
 
@@ -69,6 +78,7 @@ public:
             ++rejected_packets_;
             return MediaQueueResult::InvalidPacket;
         }
+        if (packet.allocated_bytes == 0) packet.allocated_bytes = packet.bytes;
 
         std::lock_guard lock(mutex_);
         if (closed_) {
@@ -83,6 +93,14 @@ public:
             ++rejected_packets_;
             return MediaQueueResult::ByteLimit;
         }
+        const uint64_t in_flight_capacity = active_allocated_bytes_;
+        if (packet.allocated_bytes > limits_.max_allocated_bytes ||
+            queued_allocated_bytes_ > limits_.max_allocated_bytes - packet.allocated_bytes ||
+            in_flight_capacity > limits_.max_allocated_bytes - packet.allocated_bytes -
+                                     queued_allocated_bytes_) {
+            ++rejected_packets_;
+            return MediaQueueResult::ByteLimit;
+        }
         if (span_with_packet_locked(packet.stream, packet.pts_100ns,
                                     packet.pts_100ns + packet.duration_100ns) >
             limits_.max_stream_span_100ns) {
@@ -91,16 +109,26 @@ public:
         }
 
         const uint64_t packet_bytes = packet.bytes;
+        const uint64_t allocated_bytes = packet.allocated_bytes;
         queued_bytes_ += packet_bytes;
+        queued_allocated_bytes_ += allocated_bytes;
         try {
             queue_.push_back(std::move(packet));
         } catch (...) {
             queued_bytes_ -= packet_bytes;
+            queued_allocated_bytes_ -= allocated_bytes;
             ++rejected_packets_;
             return MediaQueueResult::AllocationFailure;
         }
         packet_high_watermark_ = (std::max)(packet_high_watermark_, queue_.size());
         queued_bytes_high_watermark_ = (std::max)(queued_bytes_high_watermark_, queued_bytes_);
+        queued_allocated_bytes_high_watermark_ = (std::max)(
+            queued_allocated_bytes_high_watermark_, queued_allocated_bytes_);
+        total_allocated_bytes_high_watermark_ = (std::max)(
+            total_allocated_bytes_high_watermark_, queued_allocated_bytes_ + active_allocated_bytes_);
+        stream_span_high_watermark_ = (std::max)(stream_span_high_watermark_,
+            span_with_packet_locked(packet.stream, packet.pts_100ns,
+                                    packet.pts_100ns + packet.duration_100ns));
         cv_.notify_one();
         return MediaQueueResult::Accepted;
     }
@@ -113,7 +141,19 @@ public:
     std::optional<MediaPacket<Payload>> wait_pop() {
         std::unique_lock lock(mutex_);
         cv_.wait(lock, [this] { return closed_ || !queue_.empty(); });
-        return pop_locked();
+        return pop_locked(true);
+    }
+
+    // Release the byte-budget reservation after the consumer no longer owns
+    // the sample's payload. This keeps an active blocking write inside the
+    // same allocation budget as queued packets.
+    void release_active(const MediaPacket<Payload>& packet) {
+        std::lock_guard lock(mutex_);
+        const uint64_t allocated = packet.allocated_bytes ? packet.allocated_bytes : packet.bytes;
+        active_payload_bytes_ = packet.bytes > active_payload_bytes_
+            ? 0 : active_payload_bytes_ - packet.bytes;
+        active_allocated_bytes_ = allocated > active_allocated_bytes_
+            ? 0 : active_allocated_bytes_ - allocated;
     }
 
     void close() {
@@ -131,9 +171,12 @@ public:
             for (const auto& packet : queue_) {
                 ++discarded_packets_;
                 discarded_bytes_ += packet.bytes;
+                discarded_allocated_bytes_ += packet.allocated_bytes
+                    ? packet.allocated_bytes : packet.bytes;
             }
             queue_.clear();
             queued_bytes_ = 0;
+            queued_allocated_bytes_ = 0;
         }
         cv_.notify_all();
     }
@@ -143,11 +186,18 @@ public:
         std::lock_guard lock(mutex_);
         queue_.clear();
         queued_bytes_ = 0;
+        queued_allocated_bytes_ = 0;
+        active_payload_bytes_ = 0;
+        active_allocated_bytes_ = 0;
         packet_high_watermark_ = 0;
         queued_bytes_high_watermark_ = 0;
+        queued_allocated_bytes_high_watermark_ = 0;
+        total_allocated_bytes_high_watermark_ = 0;
         rejected_packets_ = 0;
         discarded_packets_ = 0;
         discarded_bytes_ = 0;
+        discarded_allocated_bytes_ = 0;
+        stream_span_high_watermark_ = 0;
         closed_ = false;
     }
 
@@ -156,9 +206,12 @@ public:
         const auto video = span_locked(MediaStream::Video);
         const auto audio = span_locked(MediaStream::Audio);
         return {queue_.size(), packet_high_watermark_, queued_bytes_,
-                queued_bytes_high_watermark_, rejected_packets_, discarded_packets_,
-                discarded_bytes_, video, audio,
-                (std::max)(video, audio), closed_};
+                queued_bytes_high_watermark_, queued_allocated_bytes_,
+                queued_allocated_bytes_high_watermark_, total_allocated_bytes_high_watermark_,
+                active_payload_bytes_,
+                active_allocated_bytes_, rejected_packets_, discarded_packets_,
+                discarded_bytes_, discarded_allocated_bytes_, video, audio,
+                (std::max)(video, audio), stream_span_high_watermark_, closed_};
     }
 
 private:
@@ -188,11 +241,17 @@ private:
         return latest - earliest;
     }
 
-    std::optional<MediaPacket<Payload>> pop_locked() {
+    std::optional<MediaPacket<Payload>> pop_locked(bool track_active = false) {
         if (queue_.empty()) return std::nullopt;
         MediaPacket<Payload> packet = std::move(queue_.front());
         queue_.pop_front();
         queued_bytes_ -= packet.bytes;
+        const uint64_t allocated = packet.allocated_bytes ? packet.allocated_bytes : packet.bytes;
+        queued_allocated_bytes_ -= allocated;
+        if (track_active) {
+            active_payload_bytes_ += packet.bytes;
+            active_allocated_bytes_ += allocated;
+        }
         return packet;
     }
 
@@ -201,11 +260,18 @@ private:
     std::condition_variable cv_;
     std::deque<MediaPacket<Payload>> queue_;
     uint64_t queued_bytes_ = 0;
+    uint64_t queued_allocated_bytes_ = 0;
+    uint64_t active_payload_bytes_ = 0;
+    uint64_t active_allocated_bytes_ = 0;
     size_t packet_high_watermark_ = 0;
     uint64_t queued_bytes_high_watermark_ = 0;
+    uint64_t queued_allocated_bytes_high_watermark_ = 0;
+    uint64_t total_allocated_bytes_high_watermark_ = 0;
     uint64_t rejected_packets_ = 0;
     uint64_t discarded_packets_ = 0;
     uint64_t discarded_bytes_ = 0;
+    uint64_t discarded_allocated_bytes_ = 0;
+    int64_t stream_span_high_watermark_ = 0;
     bool closed_ = false;
 };
 

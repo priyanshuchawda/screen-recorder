@@ -51,6 +51,41 @@ TEST(BoundedMediaQueueTest, EnforcesByteLimitWithoutEviction) {
     EXPECT_EQ(stats.rejected_packets, 1u);
 }
 
+TEST(BoundedMediaQueueTest, CountsAllocatedCapacityAndActiveWriteAgainstBudget) {
+    Queue queue({4, 100, 50'000'000, 100});
+    Packet first = packet(sr::MediaStream::Video, 1, 20, 0, 10'000'000);
+    first.allocated_bytes = 80;
+    ASSERT_EQ(queue.try_push(std::move(first)), sr::MediaQueueResult::Accepted);
+    auto active = queue.wait_pop();
+    ASSERT_TRUE(active.has_value());
+    EXPECT_EQ(queue.snapshot().active_allocated_bytes, 80u);
+    EXPECT_EQ(queue.snapshot().total_allocated_bytes_high_watermark, 80u);
+
+    Packet second = packet(sr::MediaStream::Audio, 2, 20, 0, 10'000'000);
+    second.allocated_bytes = 21;
+    EXPECT_EQ(queue.try_push(std::move(second)), sr::MediaQueueResult::ByteLimit);
+    queue.release_active(*active);
+
+    Packet third = packet(sr::MediaStream::Audio, 3, 20, 0, 10'000'000);
+    third.allocated_bytes = 21;
+    EXPECT_EQ(queue.try_push(std::move(third)), sr::MediaQueueResult::Accepted);
+    EXPECT_EQ(queue.snapshot().queued_allocated_bytes_high_watermark, 80u);
+    EXPECT_EQ(queue.snapshot().total_allocated_bytes_high_watermark, 80u);
+}
+
+TEST(BoundedMediaQueueTest, PreservesHistoricalMaximumStreamSpanAfterDrain) {
+    Queue queue({4, 100, 50'000'000});
+    ASSERT_EQ(queue.try_push(packet(sr::MediaStream::Video, 1, 10, 0, 10'000'000)),
+              sr::MediaQueueResult::Accepted);
+    ASSERT_EQ(queue.try_push(packet(sr::MediaStream::Video, 2, 10, 20'000'000, 10'000'000)),
+              sr::MediaQueueResult::Accepted);
+    EXPECT_EQ(queue.snapshot().stream_span_high_watermark_100ns, 30'000'000);
+    (void)queue.try_pop();
+    (void)queue.try_pop();
+    EXPECT_EQ(queue.snapshot().max_stream_span_100ns, 0);
+    EXPECT_EQ(queue.snapshot().stream_span_high_watermark_100ns, 30'000'000);
+}
+
 TEST(BoundedMediaQueueTest, EnforcesPerStreamTimestampSpan) {
     Queue queue({8, 1024, 20'000'000});
     EXPECT_EQ(queue.try_push(packet(sr::MediaStream::Audio, 1, 10, 10'000'000, 5'000'000)),

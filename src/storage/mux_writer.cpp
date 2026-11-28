@@ -42,6 +42,7 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
     last_video_pts_.store(-1, std::memory_order_relaxed);
     last_audio_pts_.store(-1, std::memory_order_relaxed);
     bytes_written_.store(0, std::memory_order_relaxed);
+    final_file_bytes_.store(0, std::memory_order_relaxed);
     video_samples_written_.store(0, std::memory_order_relaxed);
     audio_samples_written_.store(0, std::memory_order_relaxed);
     video_samples_enqueued_.store(0, std::memory_order_relaxed);
@@ -50,6 +51,7 @@ bool MuxWriter::initialize(const std::wstring& partial_path,
     write_max_us_.store(0, std::memory_order_relaxed);
     write_latency_.reset();
     active_sample_bytes_.store(0, std::memory_order_relaxed);
+    active_sample_allocated_bytes_.store(0, std::memory_order_relaxed);
     writer_drain_ms_.store(0, std::memory_order_relaxed);
     sink_finalize_ms_.store(0, std::memory_order_relaxed);
     invalid_sample_rejections_.store(0, std::memory_order_relaxed);
@@ -196,7 +198,8 @@ bool MuxWriter::create_sink_writer_on_worker() {
 }
 
 void MuxWriter::shutdown_sink_writer_on_worker() {
-    if (worker_sink_writer_ && finalize_requested_.load(std::memory_order_acquire)) {
+    if (worker_sink_writer_ &&
+        (finalize_requested_.load(std::memory_order_acquire) || writer_.failed())) {
         const ULONGLONG started_ms = GetTickCount64();
         const HRESULT hr = worker_sink_writer_->Finalize();
         sink_finalize_ms_.store(GetTickCount64() - started_ms, std::memory_order_relaxed);
@@ -225,6 +228,31 @@ bool MuxWriter::enqueue_sample(MediaStream stream, IMFSample* sample) {
         return false;
     }
 
+    DWORD buffer_count = 0;
+    hr = sample->GetBufferCount(&buffer_count);
+    if (FAILED(hr) || buffer_count == 0) {
+        invalid_sample_rejections_.fetch_add(1, std::memory_order_relaxed);
+        last_error_.store(FAILED(hr) ? hr : E_INVALIDARG, std::memory_order_release);
+        SR_LOG_ERROR(L"Could not inspect media sample buffers for allocation accounting: 0x%08X",
+                     last_error_.load(std::memory_order_acquire));
+        return false;
+    }
+    uint64_t allocated_bytes = 0;
+    for (DWORD index = 0; index < buffer_count; ++index) {
+        ComPtr<IMFMediaBuffer> buffer;
+        DWORD capacity = 0;
+        hr = sample->GetBufferByIndex(index, &buffer);
+        if (SUCCEEDED(hr)) hr = buffer->GetMaxLength(&capacity);
+        if (FAILED(hr) || capacity > (std::numeric_limits<uint64_t>::max)() - allocated_bytes) {
+            invalid_sample_rejections_.fetch_add(1, std::memory_order_relaxed);
+            last_error_.store(FAILED(hr) ? hr : E_INVALIDARG, std::memory_order_release);
+            SR_LOG_ERROR(L"Could not measure allocated media sample capacity: 0x%08X",
+                         last_error_.load(std::memory_order_acquire));
+            return false;
+        }
+        allocated_bytes += capacity;
+    }
+
     LONGLONG duration = 0;
     hr = sample->GetSampleDuration(&duration);
     if (FAILED(hr) || duration <= 0) {
@@ -245,8 +273,9 @@ bool MuxWriter::enqueue_sample(MediaStream stream, IMFSample* sample) {
 
     QueuedSample queued;
     queued.sample = sample;
-    const auto result = writer_.enqueue(AsyncWriter::Packet{
-        stream, std::move(queued), bytes, pts, duration});
+    AsyncWriter::Packet packet{stream, std::move(queued), bytes, pts, duration};
+    packet.allocated_bytes = (std::max<uint64_t>)(allocated_bytes, bytes);
+    const auto result = writer_.enqueue(std::move(packet));
     if (result == MediaQueueResult::Accepted) {
         if (stream == MediaStream::Video) {
             video_samples_enqueued_.fetch_add(1, std::memory_order_relaxed);
@@ -273,6 +302,7 @@ bool MuxWriter::write_sample(AsyncWriter::Packet& packet) {
     const LONGLONG pts = packet.pts_100ns;
     active_write_started_ms_.store(active_started_ms, std::memory_order_release);
     active_sample_bytes_.store(packet.bytes, std::memory_order_release);
+    active_sample_allocated_bytes_.store(packet.allocated_bytes, std::memory_order_release);
 #ifdef SR_LOCAL_RECORDING_PROBE
     if (packet.stream == MediaStream::Audio &&
         try_trigger_probe_audio_stall(++audio_write_count_)) {
@@ -286,6 +316,7 @@ bool MuxWriter::write_sample(AsyncWriter::Packet& packet) {
     const HRESULT hr = worker_sink_writer_->WriteSample(stream_index, packet.payload.sample.Get());
     active_write_started_ms_.store(0, std::memory_order_release);
     active_sample_bytes_.store(0, std::memory_order_release);
+    active_sample_allocated_bytes_.store(0, std::memory_order_release);
     const uint64_t elapsed_us = static_cast<uint64_t>(std::chrono::duration_cast<
         std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
     const uint64_t elapsed_ms = elapsed_us / 1000;
@@ -328,12 +359,14 @@ MuxWriter::StatsSnapshot MuxWriter::snapshot() const {
             state.write_failures,
             invalid_sample_rejections_.load(std::memory_order_relaxed),
             bytes_written_.load(std::memory_order_relaxed),
+            final_file_bytes_.load(std::memory_order_relaxed),
             write_total_us_.load(std::memory_order_relaxed),
             write_max_us_.load(std::memory_order_relaxed),
             writer_drain_ms_.load(std::memory_order_relaxed),
             sink_finalize_ms_.load(std::memory_order_relaxed),
             write_latency_.snapshot(),
             active_sample_bytes_.load(std::memory_order_acquire),
+            active_sample_allocated_bytes_.load(std::memory_order_acquire),
             active_write_started_ms_.load(std::memory_order_acquire),
             last_video_pts(), last_audio_pts(),
             last_error_.load(std::memory_order_acquire), state.failed};
@@ -344,9 +377,8 @@ bool MuxWriter::finalize() {
     initialized_.store(false, std::memory_order_release);
     finalize_requested_.store(true, std::memory_order_release);
 
-    const ULONGLONG drain_started_ms = GetTickCount64();
     const bool packets_drained = writer_.finish();
-    writer_drain_ms_.store(GetTickCount64() - drain_started_ms, std::memory_order_relaxed);
+    writer_drain_ms_.store(writer_.snapshot().drain_ms, std::memory_order_relaxed);
     const auto writer_state = snapshot();
 
     const HRESULT hr = sink_finalize_result_.load(std::memory_order_acquire);
@@ -371,6 +403,12 @@ bool MuxWriter::finalize() {
                          partial_path_.c_str(), final_path_.c_str(), err);
             return false;
         }
+        WIN32_FILE_ATTRIBUTE_DATA file_data{};
+        if (GetFileAttributesExW(final_path_.c_str(), GetFileExInfoStandard, &file_data)) {
+            final_file_bytes_.store(
+                (static_cast<uint64_t>(file_data.nFileSizeHigh) << 32) | file_data.nFileSizeLow,
+                std::memory_order_relaxed);
+        }
         SR_LOG_INFO(L"Recording saved: %s", final_path_.c_str());
     }
 
@@ -382,12 +420,14 @@ void MuxWriter::abort() {
     writer_.abort();
     active_write_started_ms_.store(0, std::memory_order_release);
     active_sample_bytes_.store(0, std::memory_order_release);
+    active_sample_allocated_bytes_.store(0, std::memory_order_release);
     worker_sink_writer_.Reset();
     sink_finalize_result_.store(E_PENDING, std::memory_order_relaxed);
     finalize_requested_.store(false, std::memory_order_relaxed);
     video_stream_index_ = 0;
     audio_stream_index_ = 1;
     bytes_written_.store(0, std::memory_order_relaxed);
+    final_file_bytes_.store(0, std::memory_order_relaxed);
     audio_write_count_ = 0;
     last_video_pts_.store(-1, std::memory_order_relaxed);
     last_audio_pts_.store(-1, std::memory_order_relaxed);

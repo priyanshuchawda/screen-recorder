@@ -61,7 +61,7 @@ public:
     void abort();
 
     bool        initialized()  const { return initialized_.load(std::memory_order_acquire); }
-    bool        healthy() const { return !writer_.snapshot().failed; }
+    bool        healthy() const { return !writer_.failed(); }
     uint64_t    bytes_written()const { return bytes_written_.load(std::memory_order_relaxed); }
     std::wstring final_path()  const { return final_path_; }
     struct StatsSnapshot {
@@ -75,12 +75,14 @@ public:
         uint64_t write_failures = 0;
         uint64_t invalid_sample_rejections = 0;
         uint64_t bytes_written = 0;
+        uint64_t final_file_bytes = 0;
         uint64_t write_total_us = 0;
         uint64_t write_max_us = 0;
         uint64_t writer_drain_ms = 0;
         uint64_t sink_finalize_ms = 0;
         LatencyHistogram::Snapshot write_latency{};
         uint64_t active_sample_bytes = 0;
+        uint64_t active_sample_allocated_bytes = 0;
         uint64_t active_write_started_ms = 0;
         int64_t last_video_pts = -1;
         int64_t last_audio_pts = -1;
@@ -115,6 +117,7 @@ private:
     DWORD                 audio_stream_index_ = 1;
     std::atomic<bool>     initialized_{false};
     std::atomic<uint64_t> bytes_written_{0};
+    std::atomic<uint64_t> final_file_bytes_{0};
     uint64_t              audio_write_count_  = 0;
     std::atomic<uint64_t> active_write_started_ms_{0};
     std::atomic<int64_t> last_video_pts_{-1};
@@ -127,6 +130,7 @@ private:
     std::atomic<uint64_t> write_max_us_{0};
     LatencyHistogram write_latency_;
     std::atomic<uint64_t> active_sample_bytes_{0};
+    std::atomic<uint64_t> active_sample_allocated_bytes_{0};
     std::atomic<uint64_t> writer_drain_ms_{0};
     std::atomic<uint64_t> sink_finalize_ms_{0};
     std::atomic<uint64_t> invalid_sample_rejections_{0};
@@ -134,7 +138,7 @@ private:
     std::atomic<HRESULT> sink_finalize_result_{E_PENDING};
     std::atomic<bool> finalize_requested_{false};
     AsyncWriter writer_{MediaQueueLimits{1024, 16ull * 1024 * 1024,
-                                          5ll * 10'000'000}};
+                                          5ll * 10'000'000, 32ull * 1024 * 1024}};
 };
 
 } // namespace sr

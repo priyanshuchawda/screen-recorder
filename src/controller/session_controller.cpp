@@ -595,8 +595,16 @@ bool SessionController::stop() {
         L" audio_written=" + std::to_wstring(writer_final.audio_samples_written) +
         L" queue_high_packets=" + std::to_wstring(writer_final.queue.packet_high_watermark) +
         L" queue_high_bytes=" + std::to_wstring(writer_final.queue.queued_bytes_high_watermark) +
+        L" queue_high_allocated_bytes=" +
+            std::to_wstring(writer_final.queue.queued_allocated_bytes_high_watermark) +
+        L" total_allocated_bytes_high_watermark=" +
+            std::to_wstring(writer_final.queue.total_allocated_bytes_high_watermark) +
+        L" active_sample_payload_bytes=" +
+            std::to_wstring(writer_final.queue.active_payload_bytes) +
+        L" active_sample_allocated_bytes=" +
+            std::to_wstring(writer_final.queue.active_allocated_bytes) +
         L" queue_max_stream_span_100ns=" +
-        std::to_wstring(writer_final.queue.max_stream_span_100ns) +
+        std::to_wstring(writer_final.queue.stream_span_high_watermark_100ns) +
         L" rejected=" + std::to_wstring(writer_final.queue.rejected_packets) +
         L" discarded=" + std::to_wstring(writer_final.queue.discarded_packets) +
         L" write_failures=" + std::to_wstring(writer_final.write_failures) +
@@ -608,7 +616,8 @@ bool SessionController::stop() {
         L" write_p50_us=" + std::to_wstring(writer_final.write_latency.p50_upper_us) +
         L" write_p95_us=" + std::to_wstring(writer_final.write_latency.p95_upper_us) +
         L" write_p99_us=" + std::to_wstring(writer_final.write_latency.p99_upper_us) +
-        L" bytes_written=" + std::to_wstring(writer_final.bytes_written) +
+        L" sink_payload_bytes_written=" + std::to_wstring(writer_final.bytes_written) +
+        L" final_file_bytes=" + std::to_wstring(writer_final.final_file_bytes) +
         L" last_error_hr=" + std::to_wstring(static_cast<uint32_t>(writer_final.last_error)));
 
     // Stop/join diagnostics before publishing Idle; a new session must not
@@ -992,8 +1001,15 @@ void SessionController::diagnostics_monitor_loop() {
                 L" queue_high_packets=" + std::to_wstring(writer.queue.packet_high_watermark) +
                 L" queue_bytes=" + std::to_wstring(writer.queue.queued_bytes) +
                 L" queue_high_bytes=" + std::to_wstring(writer.queue.queued_bytes_high_watermark) +
+                L" queue_allocated_bytes=" + std::to_wstring(writer.queue.queued_allocated_bytes) +
+                L" queue_high_allocated_bytes=" +
+                    std::to_wstring(writer.queue.queued_allocated_bytes_high_watermark) +
+                L" total_allocated_bytes_high_watermark=" +
+                    std::to_wstring(writer.queue.total_allocated_bytes_high_watermark) +
                 L" video_span_100ns=" + std::to_wstring(writer.queue.video_span_100ns) +
                 L" audio_span_100ns=" + std::to_wstring(writer.queue.audio_span_100ns) +
+                L" stream_span_high_watermark_100ns=" +
+                    std::to_wstring(writer.queue.stream_span_high_watermark_100ns) +
                 L" accepted=" + std::to_wstring(writer.samples_enqueued) +
                 L" written=" + std::to_wstring(writer.samples_written) +
                 L" video_written=" + std::to_wstring(writer.video_samples_written) +
@@ -1003,6 +1019,8 @@ void SessionController::diagnostics_monitor_loop() {
                 L" failures=" + std::to_wstring(writer.write_failures) +
                 L" active_write_age_ms=" + std::to_wstring(active_write_age_ms) +
                 L" active_sample_bytes=" + std::to_wstring(writer.active_sample_bytes) +
+                L" active_sample_allocated_bytes=" +
+                    std::to_wstring(writer.active_sample_allocated_bytes) +
                 L" write_avg_us=" + std::to_wstring(writer.samples_written
                     ? writer.write_total_us / writer.samples_written : 0) +
                 L" write_max_us=" + std::to_wstring(writer.write_max_us) +
