@@ -583,6 +583,9 @@ void VideoEncoder::async_worker_loop() {
                     std::chrono::microseconds>(std::chrono::steady_clock::now() - process_started).count()));
                 if (SUCCEEDED(input_hr)) {
                     input_samples_accepted_.fetch_add(1, std::memory_order_relaxed);
+                    if (input.was_deferred) {
+                        input_samples_retried_.fetch_add(1, std::memory_order_relaxed);
+                    }
                     const uint64_t pending = pending_input_count_.fetch_add(1, std::memory_order_relaxed) + 1;
                     uint64_t high = pending_input_high_watermark_.load(std::memory_order_relaxed);
                     while (pending > high && !pending_input_high_watermark_.compare_exchange_weak(
@@ -1374,10 +1377,11 @@ bool VideoEncoder::async_drain_to(std::vector<AsyncEncodedOutput>& out_samples, 
         }
 
         if (async_scheduler_->failed()) break;
-        if (async_scheduler_->worker_drained() && async_scheduler_->drain_complete() &&
-            async_scheduler_->output_events_pending() == 0 &&
-            async_scheduler_->input_count() == 0 &&
-            pending_input_count_.load(std::memory_order_relaxed) == 0) {
+        if (async_encoder_drain_complete(
+                async_scheduler_->worker_drained(), async_scheduler_->drain_complete(),
+                async_scheduler_->output_events_pending(), async_scheduler_->input_count(),
+                async_scheduler_->output_count(),
+                pending_input_count_.load(std::memory_order_relaxed))) {
             break;
         }
 
@@ -1387,12 +1391,15 @@ bool VideoEncoder::async_drain_to(std::vector<AsyncEncodedOutput>& out_samples, 
         async_scheduler_->wait_for_output_or_terminal(std::chrono::milliseconds(remaining));
     }
 
-    if (!async_scheduler_->drain_complete() && !async_scheduler_->failed()) {
+    const bool drain_complete_before_join = async_encoder_drain_complete(
+        async_scheduler_->worker_drained(), async_scheduler_->drain_complete(),
+        async_scheduler_->output_events_pending(), async_scheduler_->input_count(),
+        async_scheduler_->output_count(),
+        pending_input_count_.load(std::memory_order_relaxed));
+    if (!drain_complete_before_join && !async_scheduler_->failed()) {
         timed_out = GetTickCount64() >= deadline;
-        if (timed_out) {
-            scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
-            async_scheduler_->fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
-        }
+        scheduler_errors_.fetch_add(1, std::memory_order_relaxed);
+        async_scheduler_->fail(timed_out ? HRESULT_FROM_WIN32(ERROR_TIMEOUT) : E_FAIL);
     }
     if (async_scheduler_->failed()) {
         const uint64_t queued = static_cast<uint64_t>(async_scheduler_->abandon_queued_inputs());
@@ -1413,8 +1420,10 @@ bool VideoEncoder::async_drain_to(std::vector<AsyncEncodedOutput>& out_samples, 
     }
 
     const uint64_t pending = pending_input_count_.load(std::memory_order_relaxed);
-    const bool drain_ok = !async_scheduler_->failed() && async_scheduler_->input_count() == 0 &&
-        async_scheduler_->output_events_pending() == 0 && pending == 0 && async_pending_frames_.empty();
+    const bool drain_ok = !async_scheduler_->failed() && async_encoder_drain_complete(
+        async_scheduler_->worker_drained(), async_scheduler_->drain_complete(),
+        async_scheduler_->output_events_pending(), async_scheduler_->input_count(),
+        async_scheduler_->output_count(), pending) && async_pending_frames_.empty();
     if (!drain_ok && pending != 0) {
         pending_inputs_abandoned_.fetch_add(pending, std::memory_order_relaxed);
         pending_input_count_.store(0, std::memory_order_relaxed);
