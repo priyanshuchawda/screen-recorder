@@ -57,6 +57,13 @@ TEST(SessionDiagnosticsTest, StopSummaryMarksIncompleteEncoderDrain) {
     info.encoder_inputs_accepted = 10;
     info.encoder_outputs_produced = 9;
     info.encoder_inputs_retried = 2;
+    info.encoder_input_backpressure_attempts = 4;
+    info.encoder_input_backpressure_timeouts = 1;
+    info.encoder_input_backpressure_recoveries = 2;
+    info.encoder_input_backpressure_cancellations = 1;
+    info.encoder_input_backpressure_failures = 3;
+    info.encoder_input_backpressure_max_wait_us = 1200;
+    info.encoder_input_backpressure_p95_wait_us = 1024;
     info.audio_write_failures = 1;
     info.audio_source_start_failures = 2;
     info.diagnostic_log_dropped = 2;
@@ -72,6 +79,13 @@ TEST(SessionDiagnosticsTest, StopSummaryMarksIncompleteEncoderDrain) {
     EXPECT_NE(summary.find(L"encoder_inputs_accepted=10"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_outputs_produced=9"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_inputs_retried=2"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_backpressure_attempts=4"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_backpressure_timeouts=1"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_backpressure_recoveries=2"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_backpressure_cancellations=1"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_backpressure_failures=3"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_backpressure_max_wait_us=1200"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_backpressure_p95_wait_us=1024"), std::wstring::npos);
     EXPECT_NE(summary.find(L"audio_write_failures=1"), std::wstring::npos);
     EXPECT_NE(summary.find(L"audio_source_start_failures=2"), std::wstring::npos);
     EXPECT_NE(summary.find(L"diagnostic_log_dropped=2"), std::wstring::npos);
@@ -85,4 +99,12 @@ TEST(SessionDiagnosticsTest, StopSummaryIncludesCaptureSetupFailures) {
     const std::wstring summary = sr::SessionDiagnostics::format_stop_summary(info);
     EXPECT_NE(summary.find(L"capture_resize_failures=2"), std::wstring::npos);
     EXPECT_NE(summary.find(L"capture_texture_acquisition_failures=3"), std::wstring::npos);
+}
+
+TEST(SessionDiagnosticsTest, StopSummaryReportsMissedFixedFrameSlots) {
+    sr::SessionDiagnostics::StopInfo info;
+    info.status = L"incomplete";
+    info.video_scheduled_frame_drops = 3;
+    const std::wstring summary = sr::SessionDiagnostics::format_stop_summary(info);
+    EXPECT_NE(summary.find(L"video_scheduled_frame_drops=3"), std::wstring::npos);
 }

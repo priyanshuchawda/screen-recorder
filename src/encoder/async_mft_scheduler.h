@@ -79,6 +79,7 @@ public:
         request_outstanding_ = drain_requested_ = drain_command_sent_ = false;
         drain_complete_ = failed_ = stopped_ = false;
         worker_drained_ = false;
+        input_capacity_waiter_ = false;
         cv_work_.notify_all();
         cv_output_.notify_all();
     }
@@ -96,6 +97,23 @@ public:
         input_queue_high_water_ = (std::max)(input_queue_high_water_, inputs_.size());
         cv_work_.notify_one();
         return true;
+    }
+
+    // Producer capacity is queried non-blockingly by the controller. The
+    // controller owns the pending frame and keeps servicing audio/output while
+    // capacity is unavailable.
+    bool input_capacity_available() const {
+        std::lock_guard lock(mutex_);
+        return input_capacity_available_locked();
+    }
+
+    // Returns true when capacity opened before registration; otherwise a
+    // future accepted input will request a producer wake if it opens a slot.
+    bool register_input_capacity_waiter() {
+        std::lock_guard lock(mutex_);
+        if (input_capacity_available_locked()) return true;
+        input_capacity_waiter_ = true;
+        return false;
     }
 
     void grant_input(DWORD stream_id) {
@@ -217,12 +235,15 @@ public:
 
     // Call after ProcessInput returns S_OK. On MF_E_NOTACCEPTING, return the
     // exact sample with retry_input_front(); a future NeedInput grants a new credit.
-    void mark_input_accepted() {
+    bool mark_input_accepted() {
         std::lock_guard lock(mutex_);
-        if (!request_outstanding_) return;
+        if (!request_outstanding_) return false;
         request_outstanding_ = false;
         ++in_flight_;
         cv_work_.notify_one();
+        const bool wake_producer = input_capacity_waiter_ && input_capacity_available_locked();
+        if (wake_producer) input_capacity_waiter_ = false;
+        return wake_producer;
     }
 
     bool retry_input_front(Input input) {
@@ -429,6 +450,11 @@ public:
 private:
     static constexpr std::size_t kMaxQueuedEvents = 16;
 
+    bool input_capacity_available_locked() const {
+        return !stopped_ && !failed_ && !drain_requested_ &&
+               inputs_.size() + (request_outstanding_ ? 1u : 0u) < input_capacity_;
+    }
+
     void fail_locked(HRESULT reason) {
         failed_ = true;
         failure_reason_ = reason;
@@ -462,6 +488,7 @@ private:
     bool drain_command_sent_ = false;
     bool drain_complete_ = false;
     bool worker_drained_ = false;
+    bool input_capacity_waiter_ = false;
     bool failed_ = false;
     bool stopped_ = false;
 };

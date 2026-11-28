@@ -27,6 +27,8 @@ public:
         uint32_t frames_captured = 0;
         uint32_t frames_encoded = 0;
         uint32_t frames_dropped = 0;
+        uint64_t video_scheduled_frame_drops = 0;
+        uint64_t video_unsubmitted_frames = 0;
         uint32_t capture_resize_failures = 0;
         uint32_t capture_texture_acquisition_failures = 0;
         uint32_t queue_drops = 0;
@@ -49,6 +51,15 @@ public:
         uint64_t encoder_inputs_accepted = 0;
         uint64_t encoder_outputs_produced = 0;
         uint64_t encoder_inputs_not_accepted = 0;
+        uint64_t encoder_input_backpressure_attempts = 0;
+        // Counts episodes ending with the async transform's explicit timeout
+        // HRESULT; this is not a controller-side five-second wait deadline.
+        uint64_t encoder_input_backpressure_timeouts = 0;
+        uint64_t encoder_input_backpressure_recoveries = 0;
+        uint64_t encoder_input_backpressure_cancellations = 0;
+        uint64_t encoder_input_backpressure_failures = 0;
+        uint64_t encoder_input_backpressure_max_wait_us = 0;
+        uint64_t encoder_input_backpressure_p95_wait_us = 0;
         uint64_t encoder_input_errors = 0;
         uint64_t encoder_inputs_deferred = 0;
         uint64_t encoder_inputs_abandoned = 0;

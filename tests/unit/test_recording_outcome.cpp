@@ -19,6 +19,33 @@ TEST(RecordingOutcomeTest, FinalizedContainerWithKnownMediaLossIsIncomplete) {
     EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
 }
 
+TEST(RecordingOutcomeTest, MissedFixedFrameSlotsMakeFinalizedRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.video_scheduled_frame_drops = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
+TEST(RecordingOutcomeTest, OnlyMissedVideoDeadlinesAreEligibleForSavedWithWarningUi) {
+    sr::RecordingOutcomeInputs input{};
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.video_scheduled_frame_drops = 1;
+    EXPECT_TRUE(sr::has_only_scheduled_video_deadline_misses(input));
+
+    input.audio_queue_drops = 1;
+    EXPECT_FALSE(sr::has_only_scheduled_video_deadline_misses(input));
+}
+
+TEST(RecordingOutcomeTest, UnsubmittedVideoFrameMakesFinalizedRecordingIncomplete) {
+    sr::RecordingOutcomeInputs input;
+    input.finalized = true;
+    input.encoder_drain_complete = true;
+    input.video_unsubmitted_frames = 1;
+    EXPECT_EQ(sr::classify_recording_outcome(input), sr::RecordingOutcome::Incomplete);
+}
+
 TEST(RecordingOutcomeTest, CaptureResizeFailureMakesFinalizedRecordingIncomplete) {
     sr::RecordingOutcomeInputs input;
     input.finalized = true;

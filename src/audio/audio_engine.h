@@ -129,6 +129,10 @@ public:
     uint32_t resampler_failures() const {
         return resampler_failures_.load(std::memory_order_relaxed);
     }
+    uint64_t discontinuities() const { return discontinuities_.load(std::memory_order_relaxed); }
+    uint64_t estimated_missing_duration_100ns() const {
+        return estimated_missing_duration_100ns_.load(std::memory_order_relaxed);
+    }
 
     // Native device rate (before resampling) — for diagnostics
     uint32_t native_sample_rate() const { return sample_rate_; }
@@ -168,6 +172,8 @@ private:
     std::atomic<bool> muted_  { false };
     std::atomic<uint32_t> queue_drops_{ 0 };
     std::atomic<uint32_t> resampler_failures_{ 0 };
+    std::atomic<uint64_t> discontinuities_{ 0 };
+    std::atomic<uint64_t> estimated_missing_duration_100ns_{ 0 };
     std::thread       thread_;
 
     int64_t  pts_anchor_100ns_ = 0;   // 100ns epoch offset

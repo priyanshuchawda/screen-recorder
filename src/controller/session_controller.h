@@ -14,9 +14,11 @@
 #include <mutex>
 #include <thread>
 #include <functional>
+#include <memory>
 #include <string>
 #include "controller/session_machine.h"
 #include "controller/recording_outcome.h"
+#include "controller/encoder_backpressure_metrics.h"
 #include "encoder/encoder_probe.h"
 #include "encoder/power_mode.h"      // T042
 #include "sync/sync_manager.h"
@@ -42,6 +44,7 @@ class StorageManager;
 // Callback for UI status updates
 using StatusCallback = std::function<void(const std::wstring& status)>;
 using ErrorCallback  = std::function<void(const std::wstring& error)>;
+using WarningCallback = std::function<void(const std::wstring& warning)>;
 using StopRequestCallback = std::function<void()>;
 
 class SessionController {
@@ -53,7 +56,8 @@ public:
     bool initialize(StorageManager* storage,
                     StatusCallback on_status = nullptr,
                     ErrorCallback  on_error  = nullptr,
-                    StopRequestCallback on_stop_requested = nullptr);
+                    StopRequestCallback on_stop_requested = nullptr,
+                    WarningCallback on_warning = nullptr);
 
     // Start recording — transitions state machine Idle->Recording
     bool start();
@@ -171,7 +175,7 @@ private:
     SessionMachine  machine_;
     SyncManager     sync_;
     ProbeResult     probe_;
-    FramePacer      pacer_;      // T038: frame pacing
+    FixedFramePacer pacer_;      // M4: one authoritative fixed-FPS output clock
     TelemetryStore  telemetry_;  // T037: live counters
     std::atomic<bool> last_power_ac_{ true }; // T042: published power source state
     bool            active_high_quality_ = false;
@@ -186,6 +190,7 @@ private:
     StorageManager*                storage_ = nullptr;
 
     // Queues shared between capture/audio producers and encode consumer
+    std::shared_ptr<PipelineWakeSignal> pipeline_wake_ = std::make_shared<PipelineWakeSignal>();
     std::unique_ptr<FrameQueue> frame_queue_;
     std::unique_ptr<AudioQueue> audio_queue_;      // microphone
     std::unique_ptr<AudioQueue> loopback_queue_;   // system audio
@@ -194,6 +199,11 @@ private:
     std::thread       encode_thread_;
     std::atomic<bool> encode_running_{ false };
     std::atomic<bool> pacer_reset_requested_{ false };
+    std::atomic<uint64_t> scheduled_video_frames_{ 0 };
+    std::atomic<int64_t> first_scheduled_video_pts_{ -1 };
+    std::atomic<int64_t> last_scheduled_video_pts_{ -1 };
+    EncoderBackpressureMetrics encoder_backpressure_metrics_;
+    std::atomic<uint64_t> video_unsubmitted_frames_{ 0 };
 
     // Low-frequency independent heartbeat keeps recording/stop diagnostics
     // useful even if the capture or encode thread stalls.
@@ -243,9 +253,11 @@ private:
     StatusCallback on_status_;
     ErrorCallback  on_error_;
     StopRequestCallback on_stop_requested_;
+    WarningCallback on_warning_;
 
     void notify_status(const std::wstring& msg);
     void notify_error (const std::wstring& msg);
+    void notify_warning(const std::wstring& msg);
     void report_recording_loss(const wchar_t* stage);
 };
 

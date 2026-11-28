@@ -18,50 +18,42 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <cmath>
+#include <cstdlib>
 #include <random>
 
 #include "sync/frame_pacer.h"
 #include "sync/sync_manager.h"
+#include "utils/logging.h"
 
 namespace {
 
-// Simulate 60-minute recording at 30fps with ±10ms timing jitter.
+// Simulate 60-minute recording at 30fps with 0-10ms scheduler wake delay.
 // Verify that:
-//   (a) FramePacer output PTS is monotonic
-//   (b) Total drift between first and last PTS is within 2× target interval
-//   (c) Drop rate is < 5%
+//   (a) fixed output PTS remains monotonic and on the exact CFR grid
+//   (b) wake jitter does not add extra samples or create cumulative drift
+//   (c) no output deadline is skipped under this bounded delay
 TEST(T041_StabilityHarness, SimulatedSixtyMinuteAtThirtyFps) {
     constexpr uint32_t kFps          = 30;
-    constexpr int64_t  kTargetMs     = 1000 / kFps;           // 33ms
     constexpr int64_t  kTarget100ns  = 10'000'000LL / kFps;   // 333'333 100ns
     constexpr int      kTotalFrames  = 60 * 60 * kFps;        // 108000
 
-    sr::FramePacer pacer;
-    pacer.initialize(kFps);
+    sr::FixedFramePacer pacer(kFps);
+    pacer.begin(0);
 
     // Deterministic jitter: ±10ms using known seed
     std::mt19937_64 rng(0xDEADBEEF);
     std::uniform_int_distribution<int64_t> jitter_dist(-100'000LL, 100'000LL); // ±10ms in 100ns
 
-    int64_t raw_pts   = 0;
     int64_t prev_paced= -1;
     int64_t max_gap   = 0;
-    uint32_t drops    = 0;
-    uint32_t dups     = 0;
+    uint32_t outputs  = 0;
 
     for (int f = 0; f < kTotalFrames; ++f) {
-        // Advance raw PTS by one nominal interval + jitter
-        raw_pts += kTarget100ns + jitter_dist(rng);
-        if (raw_pts < 0) raw_pts = 0;
-
-        int64_t out_pts = 0;
-        sr::PaceAction action = pacer.pace_frame(raw_pts, /*queue_full=*/false, &out_pts);
-
-        if (action == sr::PaceAction::Drop) {
-            ++drops;
-            continue;
-        }
-        if (action == sr::PaceAction::Duplicate) ++dups;
+        // The timer may wake late, but less than one output interval late.
+        const int64_t deadline = static_cast<int64_t>(f) * 10'000'000LL / kFps;
+        const int64_t wake_pts = deadline + std::llabs(jitter_dist(rng));
+        ASSERT_TRUE(pacer.output_due(wake_pts));
+        const int64_t out_pts = pacer.emit_due(wake_pts, true);
 
         // Verify monotonicity
         if (prev_paced >= 0) {
@@ -72,19 +64,14 @@ TEST(T041_StabilityHarness, SimulatedSixtyMinuteAtThirtyFps) {
             if (gap_100ns > max_gap) max_gap = gap_100ns;
         }
         prev_paced = out_pts;
+        ++outputs;
     }
 
-    // Drop rate < 5%
-    double drop_rate = static_cast<double>(drops) / kTotalFrames;
-    EXPECT_LT(drop_rate, 0.05)
-        << "Drop rate " << drop_rate * 100 << "% exceeds 5% limit";
-
-    // Max gap should not exceed 3× target interval (clamp logic)
-    EXPECT_LE(max_gap, kTarget100ns * 3)
-        << "Max inter-frame gap " << max_gap << " exceeds 3× target";
-
-    SR_LOG_INFO(L"[T041] 60-min simulation: %u frames, drops=%u (%.1f%%), dups=%u, max_gap=%lld 100ns",
-                kTotalFrames, drops, drop_rate * 100.0, dups, max_gap);
+    EXPECT_EQ(outputs, static_cast<uint32_t>(kTotalFrames));
+    EXPECT_EQ(pacer.skipped_slots(), 0u);
+    EXPECT_LE(max_gap, kTarget100ns + 1);
+    EXPECT_EQ(prev_paced,
+        static_cast<int64_t>(kTotalFrames - 1) * 10'000'000LL / kFps);
 
     SUCCEED();
 }

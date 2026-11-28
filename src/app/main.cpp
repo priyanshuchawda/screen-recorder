@@ -43,6 +43,7 @@
 #define ID_LABEL_PROFILE 1011
 #define ID_BTN_RESOLUTION 1012
 #define ID_TIMER_UPDATE  1
+#define ID_TIMER_WARNING 2
 static constexpr UINT kIdleUiRefreshMs = 2000;
 static constexpr UINT kActiveUiRefreshMs = 500;
 static constexpr ULONGLONG kPowerProfileRefreshMs = 5000;
@@ -52,6 +53,7 @@ static constexpr ULONGLONG kPowerProfileRefreshMs = 5000;
 #define WM_SR_ERROR   (WM_USER + 2)
 #define WM_SR_STOP_COMPLETE (WM_USER + 3)
 #define WM_SR_STOP_REQUEST (WM_USER + 4)
+#define WM_SR_WARNING (WM_USER + 5)
 
 // Global state
 static sr::AppSettings       g_settings;
@@ -85,6 +87,7 @@ static HFONT  g_font_metric = nullptr;
 static HWND   g_hot_button  = nullptr;
 static bool   g_motion_enabled = true;
 static sr::SessionState g_last_ui_state = sr::SessionState::Idle;
+static bool g_saved_with_warnings = false;
 
 static constexpr COLORREF kBgColor     = sr::ui::kWindowBackground;
 static constexpr COLORREF kTextColor   = sr::ui::kText;
@@ -255,7 +258,10 @@ void UpdateUI()
     g_last_ui_state = display_state;
 
     switch (display_state) {
-        case sr::SessionState::Idle:      SetWindowTextW(g_lbl_status, L"Idle");      break;
+        case sr::SessionState::Idle:
+            SetWindowTextW(g_lbl_status, g_saved_with_warnings
+                ? L"Saved with warnings · view diagnostics" : L"Idle");
+            break;
         case sr::SessionState::Recording: SetWindowTextW(g_lbl_status, L"Recording"); break;
         case sr::SessionState::Paused:    SetWindowTextW(g_lbl_status, L"Paused");    break;
         case sr::SessionState::Stopping:  SetWindowTextW(g_lbl_status, L"Stopping");  break;
@@ -739,6 +745,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
         UpdateUI();
         break;
     }
+    case WM_SR_WARNING: {
+        g_saved_with_warnings = true;
+        UpdateUI();
+        break;
+    }
     case WM_SR_STOP_COMPLETE: {
         JoinStopThreadIfFinished();
         const bool exit_after_stop = g_stop_flow.complete_stop();
@@ -760,6 +771,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
         case ID_BTN_START:
             if (g_controller.start()) {
+                g_saved_with_warnings = false;
                 g_record_start_ms = static_cast<int64_t>(sr::QPCClock::instance().now_ms());
                 g_paused_total_ms = 0;
                 SR_LOG_INFO(L"Recording started");
@@ -966,6 +978,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
         },
         []() {
             if (g_hwnd) PostMessageW(g_hwnd, WM_SR_STOP_REQUEST, 0, 0);
+        },
+        [](const std::wstring&) {
+            if (g_hwnd) PostMessageW(g_hwnd, WM_SR_WARNING, 0, 0);
         }
     );
 

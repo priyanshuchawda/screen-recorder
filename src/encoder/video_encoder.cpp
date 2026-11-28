@@ -388,6 +388,10 @@ bool VideoEncoder::try_pop_async_output(AsyncEncodedOutput& output) {
     return true;
 }
 
+void VideoEncoder::notify_pipeline(PipelineWakeSource source) {
+    if (auto signal = pipeline_wake_signal_.lock()) signal->notify(source);
+}
+
 void VideoEncoder::async_worker_loop() {
     const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool com_initialized = SUCCEEDED(com_hr);
@@ -430,6 +434,7 @@ void VideoEncoder::async_worker_loop() {
         if (async_scheduler_->publish_output(*blocked_output, bytes)) {
             blocked_output.reset();
             watchdog.mark_progress(AsyncMftStallWatchdog::Clock::now());
+            notify_pipeline(PipelineWakeSource::EncoderOutput);
             return true;
         }
         if (async_scheduler_->failed()) {
@@ -590,7 +595,9 @@ void VideoEncoder::async_worker_loop() {
                     uint64_t high = pending_input_high_watermark_.load(std::memory_order_relaxed);
                     while (pending > high && !pending_input_high_watermark_.compare_exchange_weak(
                                high, pending, std::memory_order_relaxed)) {}
-                    async_scheduler_->mark_input_accepted();
+                    if (async_scheduler_->mark_input_accepted()) {
+                        notify_pipeline(PipelineWakeSource::EncoderInputCapacity);
+                    }
                     try {
                         async_pending_frames_.push_back({ input.frame_id, input.pts, input.synthetic,
                                                           std::chrono::steady_clock::now() });
@@ -682,6 +689,7 @@ void VideoEncoder::async_worker_loop() {
         }
     }
     async_scheduler_->signal_worker_drained();
+    if (async_scheduler_->failed()) notify_pipeline(PipelineWakeSource::EncoderFailure);
 }
 
 // ---------------------------------------------------------------------------
@@ -1083,10 +1091,12 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         queued.force_keyframe = force_keyframe;
         queued.queued_at = std::chrono::steady_clock::now();
         if (!async_scheduler_->enqueue_input(std::move(queued))) {
-            input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
             pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
-            SR_LOG_ERROR(L"Async encoder input queue is full or closed; frame %llu was not accepted",
-                         static_cast<unsigned long long>(frame_id));
+            SR_LOG_ERROR(L"Async encoder could not enqueue frame %llu (queue_full=%u failed=%u stopped=%u)",
+                         static_cast<unsigned long long>(frame_id),
+                         async_scheduler_->input_capacity_available() ? 0u : 1u,
+                         async_scheduler_->failed() ? 1u : 0u,
+                         async_scheduler_->stopped() ? 1u : 0u);
             return false;
         }
         return true;

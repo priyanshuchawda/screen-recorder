@@ -16,6 +16,8 @@ struct RecordingOutcomeInputs {
     bool finalized = false;
     bool encoder_drain_complete = false;
     uint64_t frame_drops = 0;
+    uint64_t video_scheduled_frame_drops = 0;
+    uint64_t video_unsubmitted_frames = 0;
     uint64_t capture_resize_failures = 0;
     uint64_t capture_texture_acquisition_failures = 0;
     uint64_t video_write_failures = 0;
@@ -38,12 +40,30 @@ struct RecordingOutcomeInputs {
     uint64_t warnings = 0;
 };
 
+inline bool has_only_scheduled_video_deadline_misses(
+    const RecordingOutcomeInputs& input) noexcept {
+    return input.finalized && input.encoder_drain_complete &&
+        input.video_scheduled_frame_drops != 0 && input.frame_drops == 0 &&
+        input.video_unsubmitted_frames == 0 && input.capture_resize_failures == 0 &&
+        input.capture_texture_acquisition_failures == 0 && input.video_write_failures == 0 &&
+        input.audio_queue_drops == 0 && input.audio_resampler_failures == 0 &&
+        input.audio_write_failures == 0 && input.audio_source_start_failures == 0 &&
+        input.audio_mixer_dropped_packets == 0 && input.audio_mixer_rejected_packets == 0 &&
+        input.encoder_inputs_not_accepted == 0 && input.encoder_input_errors == 0 &&
+        input.encoder_inputs_abandoned == 0 && input.encoder_timestamp_errors == 0 &&
+        input.encoder_input_preparation_errors == 0 && input.encoder_output_errors == 0 &&
+        input.encoder_scheduler_errors == 0 && input.encoder_input_accounting_errors == 0 &&
+        input.encoder_pending_inputs == 0 && input.warnings == 0;
+}
+
 inline RecordingOutcome classify_recording_outcome(
     const RecordingOutcomeInputs& input) noexcept {
     if (!input.finalized) return RecordingOutcome::FailedPartialKept;
 
     const bool media_loss = !input.encoder_drain_complete ||
         input.frame_drops != 0 ||
+        input.video_scheduled_frame_drops != 0 ||
+        input.video_unsubmitted_frames != 0 ||
         input.capture_resize_failures != 0 ||
         input.capture_texture_acquisition_failures != 0 ||
         input.video_write_failures != 0 ||

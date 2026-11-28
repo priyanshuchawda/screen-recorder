@@ -6,6 +6,7 @@
 // WinRT / WGC includes (kept in .cpp to isolate from header via PIMPL)
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Metadata.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <windows.graphics.capture.interop.h>
@@ -80,7 +81,42 @@ struct CaptureEngineImpl {
     int64_t        start_100ns     = 0;   // absolute 100ns at session start
     LARGE_INTEGER  qpc_freq        = {};
     std::atomic<int64_t> capture_interval_100ns{ 333'333 };
+    std::atomic<uint32_t> requested_native_fps{ 30 };
+    uint32_t applied_native_fps = 0; // WGC callback/session setup thread only.
     CaptureCadence capture_cadence;
+    bool min_update_interval_checked = false;
+
+    void apply_min_update_interval(uint32_t fps) {
+        if (!session) return;
+        fps = (std::max)(1u, fps);
+        if (applied_native_fps == fps) return;
+        try {
+            if (!min_update_interval_checked) {
+                const bool supported = winrt::Windows::Foundation::Metadata::ApiInformation::IsPropertyPresent(
+                    L"Windows.Graphics.Capture.GraphicsCaptureSession", L"MinUpdateInterval");
+                parent->wgc_min_update_interval_supported_.store(supported, std::memory_order_relaxed);
+                min_update_interval_checked = true;
+            }
+            if (!parent->wgc_min_update_interval_supported_.load(std::memory_order_relaxed)) {
+                parent->wgc_min_update_interval_applied_.store(false, std::memory_order_relaxed);
+                applied_native_fps = fps;
+                return;
+            }
+            session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{
+                10'000'000LL / static_cast<int64_t>(fps)});
+            parent->wgc_min_update_interval_applied_.store(true, std::memory_order_relaxed);
+            applied_native_fps = fps;
+        } catch (const winrt::hresult_error& error) {
+            parent->wgc_min_update_interval_applied_.store(false, std::memory_order_relaxed);
+            applied_native_fps = fps;
+            SR_LOG_WARN(L"WGC MinUpdateInterval unavailable at runtime: 0x%08X; software cadence remains active",
+                        error.code().value);
+        } catch (...) {
+            parent->wgc_min_update_interval_applied_.store(false, std::memory_order_relaxed);
+            applied_native_fps = fps;
+            SR_LOG_WARN(L"WGC MinUpdateInterval could not be applied; software cadence remains active");
+        }
+    }
 
     // -----------------------------------------------------------------------
     // setup_video_processor — create D3D11 VP from in_w x in_h (BGRA) to
@@ -261,6 +297,7 @@ struct CaptureEngineImpl {
 
         auto frame = pool.TryGetNextFrame();
         if (!frame) return;
+        apply_min_update_interval(requested_native_fps.load(std::memory_order_relaxed));
 
         if (parent->sync_manager_ && parent->sync_manager_->is_paused()) return;
 
@@ -270,15 +307,45 @@ struct CaptureEngineImpl {
         uint32_t frame_w = static_cast<uint32_t>(content_size.Width);
         uint32_t frame_h = static_cast<uint32_t>(content_size.Height);
 
-        LARGE_INTEGER now{};
-        QueryPerformanceCounter(&now);
         int64_t capture_pts = 0;
-        if (parent->sync_manager_) {
-            if (!parent->sync_manager_->try_map_qpc_ticks(now.QuadPart, capture_pts)) return;
+        int64_t absolute_qpc_100ns = 0;
+        bool system_relative_available = false;
+        try {
+            const auto system_relative_time = frame.SystemRelativeTime();
+            absolute_qpc_100ns = system_relative_time.count();
+            system_relative_available = absolute_qpc_100ns > 0;
+        } catch (...) {
+            // Older runtimes or transient WGC metadata failures use callback QPC.
+        }
+        if (system_relative_available && parent->sync_manager_) {
+            const auto mapping = parent->sync_manager_->map_qpc_100ns(
+                absolute_qpc_100ns, 0, capture_pts);
+            if (mapping != TimestampMappingStatus::Mapped) {
+                if (mapping == TimestampMappingStatus::OverlapsPause) {
+                    parent->system_relative_pause_rejections_.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    parent->system_relative_pre_session_rejections_.fetch_add(1, std::memory_order_relaxed);
+                }
+                // A valid compositor timestamp that belongs to an excluded
+                // pause or predates this session is not missing metadata.
+                // Never retimestamp it using callback time.
+                return;
+            }
+            parent->system_relative_timestamp_frames_.fetch_add(1, std::memory_order_relaxed);
+        } else if (system_relative_available) {
+            capture_pts = absolute_qpc_100ns - start_100ns;
+            parent->system_relative_timestamp_frames_.fetch_add(1, std::memory_order_relaxed);
         } else {
-            capture_pts = static_cast<int64_t>(
-                static_cast<double>(now.QuadPart) * 10'000'000.0 /
-                static_cast<double>(qpc_freq.QuadPart)) - start_100ns;
+            LARGE_INTEGER now{};
+            QueryPerformanceCounter(&now);
+            if (parent->sync_manager_) {
+                if (!parent->sync_manager_->try_map_qpc_ticks(now.QuadPart, capture_pts)) return;
+            } else {
+                capture_pts = static_cast<int64_t>(
+                    static_cast<double>(now.QuadPart) * 10'000'000.0 /
+                    static_cast<double>(qpc_freq.QuadPart)) - start_100ns;
+            }
+            parent->qpc_timestamp_fallback_frames_.fetch_add(1, std::memory_order_relaxed);
         }
         if (!capture_cadence.accept(
                 capture_pts, capture_interval_100ns.load(std::memory_order_relaxed))) {
@@ -511,9 +578,11 @@ bool CaptureEngine::initialize_impl(ID3D11Device* device,
     );
 
     impl_->session = impl_->frame_pool.CreateCaptureSession(impl_->item);
+    impl_->requested_native_fps.store(target_fps, std::memory_order_relaxed);
 
     // Disable yellow border (Win11 22H2+, non-fatal if unavailable)
     try { impl_->session.IsBorderRequired(false); } catch (...) {}
+    impl_->apply_min_update_interval(target_fps);
 
     // Subscribe to frame-arrived events
     impl_->frame_token = impl_->frame_pool.FrameArrived(
@@ -535,6 +604,7 @@ void CaptureEngine::set_target_fps(uint32_t fps) {
         impl_->capture_interval_100ns.store(
             10'000'000LL / static_cast<int64_t>(fps),
             std::memory_order_relaxed);
+        impl_->requested_native_fps.store(fps, std::memory_order_relaxed);
     }
 }
 
