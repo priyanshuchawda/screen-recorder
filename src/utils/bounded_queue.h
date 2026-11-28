@@ -25,6 +25,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include "utils/pipeline_wake_signal.h"
 
 namespace sr {
 
@@ -36,6 +37,11 @@ class BoundedQueue {
 
 public:
     BoundedQueue() : head_(0), tail_(0) {}
+
+    // Install before starting queue producers. The signal must outlive them.
+    void set_wake_signal(PipelineWakeSignal* signal) {
+        wake_signal_.store(signal, std::memory_order_release);
+    }
 
     // Non-blocking push. Returns false if queue is full (caller applies drop policy).
     // Thread-safe for multiple concurrent producers (mutex-protected).
@@ -51,6 +57,7 @@ public:
         update_high_watermark(size());
         lock.unlock();
         cv_.notify_one();
+        notify_pipeline();
         return true;
     }
 
@@ -107,6 +114,7 @@ public:
         if (dropped_oldest) *dropped_oldest = dropped;
         lock.unlock();
         cv_.notify_one();
+        notify_pipeline();
         return true;
     }
 
@@ -140,6 +148,12 @@ public:
     }
 
 private:
+    void notify_pipeline() {
+        if (auto* signal = wake_signal_.load(std::memory_order_acquire)) {
+            signal->notify();
+        }
+    }
+
     void update_high_watermark(size_t occupancy) {
         size_t observed = high_watermark_.load(std::memory_order_relaxed);
         while (occupancy > observed &&
@@ -154,6 +168,7 @@ private:
     std::atomic<size_t> high_watermark_{ 0 };
     std::mutex push_mutex_; // Serializes concurrent producers
     std::condition_variable cv_;
+    std::atomic<PipelineWakeSignal*> wake_signal_{ nullptr };
 };
 
 } // namespace sr

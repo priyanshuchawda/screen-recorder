@@ -1,109 +1,93 @@
 #pragma once
-// frame_pacer.h — T038: Frame pacing normalization layer
-//
-// Absorbs WGC timestamp jitter so the encoder receives smoothly-spaced frames:
-//   • Detects gaps > 1.5× target interval → caller should insert a duplicate frame
-//   • Preserves the source timeline even when frames are dropped
-//   • On backpressure (queue full) → returns Drop so the caller discards the frame
-//   • Tracks duplicate count and drop count as telemetry
-//
-// Usage (in encode_loop):
-//   pacer_.initialize(fps);
-//   ...
-//   int64_t out_pts;
-//   PaceAction action = pacer_.pace_frame(frame.pts, queue_full, &out_pts);
-//   if (action == PaceAction::Drop)      { skip; }
-//   if (action == PaceAction::Duplicate) { encode last frame again with out_pts; }
-//   encode frame using out_pts;
+// frame_pacer.h — authoritative fixed-frame-rate output schedule.
 
 #include <cstdint>
 #include <algorithm>
-#include "utils/logging.h"
+#include <limits>
 
 namespace sr {
 
-// Select the timestamp for a repeat after capture has been quiet. Skip a long
-// missed interval rather than encoding a backlog of stale frames after a stall.
-inline int64_t idle_repeat_pts(int64_t now, int64_t previous, int64_t interval) {
-    return (std::max)(previous + interval, now - interval);
-}
-
-enum class PaceAction {
-    Accept,     // Frame is fine — use *out_pts as the corrected PTS
-    Duplicate,  // Gap > 1.5× target — insert a duplicate of the PREVIOUS frame first
-    Drop,       // Queue backpressure — caller should discard this frame entirely
-};
-
-class FramePacer {
+// Fixed-rate output clock. Capture arrivals only replace the pending image;
+// this clock is the sole authority that decides when a video sample is emitted.
+class FixedFramePacer {
 public:
-    FramePacer() = default;
+    explicit FixedFramePacer(uint32_t fps = 30) { set_fps(fps); }
 
-    // Call once before recording starts (or on resume after reset()).
-    // fps: target frames per second (e.g. 30 or 60)
-    void initialize(uint32_t fps) {
-        target_interval_100ns_ = (fps > 0)
-            ? (10'000'000LL / static_cast<int64_t>(fps))
-            : 333'333LL;
-        last_pts_     = -1;
-        dups_         = 0;
-        drops_        = 0;
-        SR_LOG_INFO(L"[FramePacer] Initialized: target interval %lld 100ns (~%u fps)",
-                    target_interval_100ns_, fps);
+    void set_fps(uint32_t fps) {
+        fps_ = (std::max)(1u, fps);
+        reset();
+        repeats_ = 0;
+        skipped_ = 0;
     }
 
-    // Call after pause to prevent a gap being mistaken for a frame skip.
+    void begin(int64_t first_pts) {
+        started_ = true;
+        origin_pts_ = first_pts;
+        next_slot_ = 0;
+    }
+
     void reset() {
-        last_pts_     = -1;
+        started_ = false;
+        origin_pts_ = 0;
+        next_slot_ = 0;
     }
 
-    // Classify the incoming raw_pts and compute a corrected PTS.
-    //   queue_full — true when the frame queue is at capacity (backpressure)
-    //   *out_pts  — receives the PTS to stamp on the encoded frame
-    // Returns PaceAction indicating how the caller should handle this frame.
-    PaceAction pace_frame(int64_t raw_pts, bool queue_full, int64_t* out_pts) {
-        // Backpressure: drop this frame entirely
-        if (queue_full) {
-            ++drops_;
-            *out_pts = raw_pts;
-            return PaceAction::Drop;
-        }
-
-        // First frame — bootstrap pacing state
-        if (last_pts_ < 0) {
-            last_pts_     = raw_pts;
-            *out_pts      = raw_pts;
-            return PaceAction::Accept;
-        }
-
-        // Preserve elapsed source time; clamping gaps makes video end early.
-        const int64_t output_pts = (std::max)(raw_pts, last_pts_ + 1);
-        int64_t gap = output_pts - last_pts_;
-        int64_t threshold_150pct = target_interval_100ns_ * 3 / 2;
-        bool need_dup = gap > threshold_150pct &&
-                        gap <= target_interval_100ns_ * 2;
-
-        if (need_dup) {
-            ++dups_;
-            if (dups_ <= 3 || (dups_ % 30) == 0) {
-                SR_LOG_INFO(L"[FramePacer] Gap %lld > 1.5× target %lld — signalling duplicate (count=%u)",
-                            gap, target_interval_100ns_, dups_);
-            }
-        }
-
-        last_pts_ = output_pts;
-        *out_pts = output_pts;
-
-        return need_dup ? PaceAction::Duplicate : PaceAction::Accept;
+    bool started() const { return started_; }
+    int64_t next_deadline() const {
+        return started_ ? deadline_for_slot(next_slot_) : (std::numeric_limits<int64_t>::max)();
+    }
+    bool output_due(int64_t now_pts) const {
+        return started_ && now_pts >= next_deadline();
     }
 
-    uint32_t duplicates_inserted() const { return dups_; }
-    uint32_t drops()               const { return drops_; }
+    // Returns -1 when no output is due. If several slots elapsed, emits only
+    // the latest due slot and counts the earlier slots as skipped (no burst).
+    int64_t emit_due(int64_t now_pts, bool has_new_frame) {
+        if (!output_due(now_pts)) return -1;
+
+        const int64_t elapsed = now_pts - origin_pts_;
+        const uint64_t whole_seconds = static_cast<uint64_t>(elapsed / kTicksPerSecond);
+        const uint64_t remainder = static_cast<uint64_t>(elapsed % kTicksPerSecond);
+        // Deadlines use floor(slot * ticks / fps). Invert that exact rule:
+        // the greatest slot whose floored deadline is <= elapsed is
+        // floor((((elapsed + 1) * fps) - 1) / ticks). The split form avoids
+        // multiplying the full elapsed timestamp and handles 30-FPS rounding.
+        const uint64_t due_slot = whole_seconds * fps_ +
+            (remainder * fps_ + fps_ - 1) / kTicksPerSecond;
+        if (due_slot > next_slot_) {
+            skipped_ += due_slot - next_slot_;
+            next_slot_ = due_slot;
+        }
+
+        return emit_next(has_new_frame);
+    }
+
+    // Drain one newest captured image during stop if it arrived before its
+    // next nominal slot. This prevents it being silently left in the queue.
+    int64_t emit_next(bool has_new_frame) {
+        if (!started_) return -1;
+        const int64_t result = deadline_for_slot(next_slot_);
+        if (!has_new_frame) ++repeats_;
+        ++next_slot_;
+        return result;
+    }
+
+    uint64_t emitted_repeats() const { return repeats_; }
+    uint64_t skipped_slots() const { return skipped_; }
+    uint32_t fps() const { return fps_; }
 
 private:
-    int64_t  target_interval_100ns_ = 333'333;
-    int64_t  last_pts_              = -1;
-    uint32_t dups_                  = 0;
-    uint32_t drops_                 = 0;
+    int64_t deadline_for_slot(uint64_t slot) const {
+        return origin_pts_ + static_cast<int64_t>(slot * kTicksPerSecond / fps_);
+    }
+
+    static constexpr uint64_t kTicksPerSecond = 10'000'000;
+    uint32_t fps_ = 30;
+    bool started_ = false;
+    int64_t origin_pts_ = 0;
+    uint64_t next_slot_ = 0;
+    uint64_t repeats_ = 0;
+    uint64_t skipped_ = 0;
 };
 
 } // namespace sr

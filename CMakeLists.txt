@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ScreenRecorder VERSION 0.3.17 LANGUAGES CXX)
+project(ScreenRecorder VERSION 0.3.18 LANGUAGES CXX)
 
 # Embed the source revision in recording diagnostics so hardware results can
 # be tied to the exact candidate. Fall back cleanly for source archives.

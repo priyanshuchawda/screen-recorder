@@ -89,12 +89,17 @@ SessionController::SessionController()
     , frame_queue_(std::make_unique<FrameQueue>())
     , audio_queue_(std::make_unique<AudioQueue>())
     , loopback_queue_(std::make_unique<AudioQueue>())
-{}
+{
+    frame_queue_->set_wake_signal(&pipeline_wake_);
+    audio_queue_->set_wake_signal(&pipeline_wake_);
+    loopback_queue_->set_wake_signal(&pipeline_wake_);
+}
 
 SessionController::~SessionController() {
     stop_diagnostics_monitor();
     if (!machine_.is_idle()) {
         encode_running_.store(false, std::memory_order_release);
+        pipeline_wake_.notify();
         capture_->stop();
         audio_->shutdown();
         loopback_audio_->shutdown();
@@ -133,6 +138,7 @@ void SessionController::rollback_startup(const wchar_t* reason) {
     audio_->shutdown();
     loopback_audio_->shutdown();
     encode_running_.store(false, std::memory_order_release);
+    pipeline_wake_.notify();
     if (encode_thread_.joinable()) encode_thread_.join();
     encoder_->shutdown();
     muxer_->abort(); // Keep any partial file; never relabel an unvalidated startup output.
@@ -149,6 +155,7 @@ void SessionController::rollback_startup(const wchar_t* reason) {
                                   std::memory_order_release);
     if (machine_.is_stopping()) machine_.transition(SessionEvent::Finalized);
     encode_running_.store(false, std::memory_order_release);
+    pipeline_wake_.notify();
     stopping_from_pause_.store(false, std::memory_order_release);
     notify_status(L"Idle");
 }
@@ -373,6 +380,9 @@ bool SessionController::start() {
     video_encode_timing_.reset();
     video_mux_timing_.reset();
     audio_mux_timing_.reset();
+    scheduled_video_frames_.store(0, std::memory_order_relaxed);
+    first_scheduled_video_pts_.store(-1, std::memory_order_relaxed);
+    last_scheduled_video_pts_.store(-1, std::memory_order_relaxed);
     capture_->reset_counters();
     frame_queue_->reset_high_watermark();
     audio_queue_->reset_high_watermark();
@@ -380,7 +390,7 @@ bool SessionController::start() {
     telemetry_.reset(); // T037: clear counters for new session
 
     // T038: initialise frame pacer for this session's fps
-    pacer_.initialize(enc_prof.fps);
+    pacer_.set_fps(enc_prof.fps);
 
     // T039: register device-lost callback — fires when D3D device is removed
     capture_->set_device_lost_callback([this]() {
@@ -402,6 +412,7 @@ bool SessionController::start() {
         encode_thread_ = std::thread(&SessionController::encode_loop, this);
     } catch (const std::system_error& e) {
         encode_running_.store(false, std::memory_order_release);
+        pipeline_wake_.notify();
         SR_LOG_ERROR(L"Could not create recording pipeline thread: %S", e.what());
         rollback_startup(L"encode_thread_creation_failed");
         return false;
@@ -491,6 +502,7 @@ bool SessionController::stop() {
     diagnostics_stage_.store(DiagnosticsStage::JoiningEncodeThread, std::memory_order_relaxed);
     diagnostics_.write_event(L"event=stop_stage stage=join_encode_thread state=begin");
     encode_running_.store(false, std::memory_order_release);
+    pipeline_wake_.notify();
     if (encode_thread_.joinable()) encode_thread_.join();
     diagnostics_.write_event(L"event=stop_stage stage=join_encode_thread state=complete");
 
@@ -586,6 +598,19 @@ bool SessionController::stop() {
         notify_error(L"Failed to finalize recording file. Partial file kept.");
     }
     const auto writer_final = muxer_->snapshot();
+    const int64_t first_video_pts = first_scheduled_video_pts_.load(std::memory_order_relaxed);
+    const int64_t last_video_pts = last_scheduled_video_pts_.load(std::memory_order_relaxed);
+    const uint64_t scheduled_duration_100ns = first_video_pts >= 0 && last_video_pts >= first_video_pts
+        ? static_cast<uint64_t>(last_video_pts - first_video_pts +
+            10'000'000LL / (std::max)(1u, encoder_->output_fps())) : 0;
+    const uint64_t written_output_fps_milli = scheduled_duration_100ns > 0
+        ? writer_final.video_samples_written * 10'000'000'000ULL / scheduled_duration_100ns : 0;
+    diagnostics_.write_event(
+        L"event=fixed_fps_final requested_fps=" + std::to_wstring(encoder_->output_fps()) +
+        L" scheduled_frames=" + std::to_wstring(scheduled_video_frames_.load(std::memory_order_relaxed)) +
+        L" written_frames=" + std::to_wstring(writer_final.video_samples_written) +
+        L" video_duration_100ns=" + std::to_wstring(scheduled_duration_100ns) +
+        L" actual_written_fps_milli=" + std::to_wstring(written_output_fps_milli));
     diagnostics_.write_event(
         L"event=writer_final accepted=" + std::to_wstring(writer_final.samples_enqueued) +
         L" written=" + std::to_wstring(writer_final.samples_written) +
@@ -619,6 +644,23 @@ bool SessionController::stop() {
         L" sink_payload_bytes_written=" + std::to_wstring(writer_final.bytes_written) +
         L" final_file_bytes=" + std::to_wstring(writer_final.final_file_bytes) +
         L" last_error_hr=" + std::to_wstring(static_cast<uint32_t>(writer_final.last_error)));
+    diagnostics_.write_event(
+        L"event=capture_timing system_relative_frames=" +
+        std::to_wstring(capture_->system_relative_timestamp_frames()) +
+        L" callback_qpc_fallback_frames=" +
+        std::to_wstring(capture_->qpc_timestamp_fallback_frames()) +
+        L" wgc_min_update_supported=" +
+        std::to_wstring(capture_->wgc_min_update_interval_supported() ? 1 : 0) +
+        L" wgc_min_update_applied=" +
+        std::to_wstring(capture_->wgc_min_update_interval_applied() ? 1 : 0) +
+        L" cadence_rejections=" + std::to_wstring(capture_->cadence_rejections()));
+    diagnostics_.write_event(
+        L"event=audio_discontinuities microphone_count=" +
+        std::to_wstring(audio_->discontinuities()) + L" microphone_estimated_missing_100ns=" +
+        std::to_wstring(audio_->estimated_missing_duration_100ns()) +
+        L" loopback_count=" + std::to_wstring(loopback_audio_->discontinuities()) +
+        L" loopback_estimated_missing_100ns=" +
+        std::to_wstring(loopback_audio_->estimated_missing_duration_100ns()));
 
     // Stop/join diagnostics before publishing Idle; a new session must not
     // overlap the prior session's sampler or persistent log path.
@@ -1159,6 +1201,7 @@ bool SessionController::pause() {
     if (!machine_.transition(SessionEvent::Pause)) return false;
     sync_.pause();
     pacer_reset_requested_.store(true, std::memory_order_release);
+    pipeline_wake_.notify();
     notify_status(L"Paused");
     return true;
 }
@@ -1167,6 +1210,7 @@ bool SessionController::resume() {
     if (!machine_.transition(SessionEvent::Resume)) return false;
     sync_.resume();
     pacer_reset_requested_.store(true, std::memory_order_release);
+    pipeline_wake_.notify();
     // Force an IDR keyframe on the next encoded frame so the resumed segment
     // is independently decodable and seeks work correctly after pause gaps.
     encoder_->request_keyframe();
@@ -1240,6 +1284,13 @@ void SessionController::encode_loop() {
     std::shared_ptr<TextureSurfaceLease> last_surface_lease;
     bool        have_last_frame  = false;
     int64_t     last_paced_pts   = 0;
+    std::optional<RenderFrame> pending_video_frame;
+    uint64_t coalesced_capture_frames = 0;
+    uint64_t controller_wakeups = 0;
+    uint64_t controller_deadline_wakeups = 0;
+    uint64_t scheduled_output_frames = 0;
+    int64_t first_scheduled_pts = -1;
+    int64_t last_scheduled_pts = -1;
     ULONGLONG   last_power_check_ms = 0;
     constexpr ULONGLONG kPowerCheckIntervalMs = 10'000;
     constexpr uint32_t kAudioOutputRate = 48'000;
@@ -1399,92 +1450,82 @@ void SessionController::encode_loop() {
         return false;
     };
 
-    // Interleave video and audio: write video first, then any pending audio
+    // Interleave video and audio. Captures only update the pending image;
+    // FixedFramePacer is the sole authority for video sample cadence.
     while (encode_running_.load(std::memory_order_acquire) ||
-           !frame_queue_->empty() || !audio_queue_->empty() || !loopback_queue_->empty())
+           !frame_queue_->empty() || !audio_queue_->empty() || !loopback_queue_->empty() ||
+           pending_video_frame.has_value())
     {
+        const uint64_t observed_wake_generation = pipeline_wake_.generation();
         drain_async_outputs();
         if (pacer_reset_requested_.exchange(false, std::memory_order_acq_rel)) {
             pacer_.reset();
+            pending_video_frame.reset();
+            // A static desktop may not trigger a new WGC callback after resume.
+            // Re-anchor the existing image to the resumed session clock.
+            if (machine_.is_recording() && have_last_frame && last_texture) {
+                pacer_.begin(sync_.now_pts());
+            }
         }
         diagnostics_stage_.store(DiagnosticsStage::WaitingForFrame, std::memory_order_relaxed);
-        uint32_t target_fps = encoder_ ? encoder_->output_fps() : 24;
-        auto wait_interval = std::chrono::milliseconds(
-            500 / (std::max)(1u, target_fps));
-
-        // --- Video ---
-        if (auto opt_frame = frame_queue_->wait_pop(wait_interval)) {
-            auto& frame = *opt_frame;
-
-            // Skip frames while paused
+        // Coalesce queued captures to the newest image. Replacing a pending
+        // image is intentional cadence coalescing, not a media-loss drop.
+        while (auto captured = frame_queue_->try_pop()) {
             if (machine_.is_paused() ||
-                stopping_from_pause_.load(std::memory_order_acquire)) {
-                continue;
+                stopping_from_pause_.load(std::memory_order_acquire)) continue;
+            if (pending_video_frame) ++coalesced_capture_frames;
+            pending_video_frame = std::move(*captured);
+        }
+
+        if (!pacer_.started() && pending_video_frame && machine_.is_recording()) {
+            pacer_.begin(pending_video_frame->pts);
+        }
+
+        const int64_t now_pts = sync_.now_pts();
+        const bool session_accepts_video = machine_.is_recording() || machine_.is_stopping();
+        const bool encode_active = encode_running_.load(std::memory_order_acquire);
+        const bool deadline_due = encode_active && pacer_.output_due(now_pts);
+        const bool final_pending_frame = !encode_active &&
+                                         pending_video_frame.has_value();
+        if (session_accepts_video && (deadline_due || final_pending_frame)) {
+            const bool has_new_frame = pending_video_frame.has_value();
+            const int64_t output_pts = deadline_due
+                ? pacer_.emit_due(now_pts, has_new_frame)
+                : pacer_.emit_next(has_new_frame);
+            if (output_pts >= 0) {
+                if (first_scheduled_pts < 0) first_scheduled_pts = output_pts;
+                last_scheduled_pts = output_pts;
+                ++scheduled_output_frames;
+                if (scheduled_output_frames == 1)
+                    first_scheduled_video_pts_.store(output_pts, std::memory_order_relaxed);
+                last_scheduled_video_pts_.store(output_pts, std::memory_order_relaxed);
+                scheduled_video_frames_.fetch_add(1, std::memory_order_relaxed);
             }
-
-            // T038: pace the incoming PTS and decide what to do
-            // We already popped one frame, so this queue cannot be full here.
-            bool   queue_full = false;
-            int64_t paced_pts = frame.pts;
-            PaceAction action = pacer_.pace_frame(frame.pts, queue_full, &paced_pts);
-
-            if (action == PaceAction::Drop) {
-                // Backpressure drop — discard this frame
-                telemetry_.on_frame_dropped();
-                continue;
-            }
-
-            // T038: duplicate — encode the last frame again with a synthetic PTS
-            if (action == PaceAction::Duplicate && have_last_frame && last_texture) {
-                // Duplicate PTS = midpoint between last and current frame.
-                int64_t dup_pts = last_paced_pts + (paced_pts - last_paced_pts) / 2;
-                ComPtr<IMFSample> dup_sample;
-                diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-                if (encode_frame_timed(last_texture.Get(), dup_pts, last_surface_lease,
-                                       dup_sample, true) && dup_sample) {
-                    diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                    account_video_write(dup_sample.Get(), true, 0);
-                }
-                drain_async_outputs();
-            }
-
-            // Cache this texture (ComPtr copy AddRefs it) before encoding
-            last_texture = frame.texture;
-            last_surface_lease = frame.surface_lease;
-
-            // Encode current frame
-            ComPtr<IMFSample> encoded;
-            diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-            if (encode_frame_timed(frame.texture.Get(), paced_pts, frame.surface_lease, encoded, false) && encoded) {
-                diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
-                account_video_write(encoded.Get(), false, 0);
-            }
-            drain_async_outputs();
-
-            have_last_frame = true;
-            last_paced_pts  = paced_pts;
-        } else if (machine_.is_recording() && have_last_frame && last_texture &&
-                   encode_running_.load(std::memory_order_acquire)) {
-            // WGC can stop delivering frames when the desktop is unchanged.
-            // Keep the video timeline advancing so the sink sees both streams
-            // progress and the last desktop image remains visible.
-            const int64_t interval = 10'000'000LL / (std::max)(1u, target_fps);
-            const int64_t now_pts = sync_.now_pts();
-            const int64_t next_pts = last_paced_pts + interval;
-            if (now_pts >= next_pts + interval / 2) {
-                const int64_t repeat_pts = idle_repeat_pts(now_pts, last_paced_pts, interval);
-                int64_t paced_pts = repeat_pts;
-                pacer_.pace_frame(repeat_pts, false, &paced_pts);
+            if (has_new_frame) {
+                auto frame = std::move(*pending_video_frame);
+                pending_video_frame.reset();
+                last_texture = frame.texture;
+                last_surface_lease = frame.surface_lease;
+                have_last_frame = true;
                 ComPtr<IMFSample> encoded;
                 diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
-                if (encode_frame_timed(last_texture.Get(), paced_pts, last_surface_lease,
+                if (encode_frame_timed(frame.texture.Get(), output_pts, frame.surface_lease,
+                                       encoded, false) && encoded) {
+                    diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
+                    account_video_write(encoded.Get(), false, 0);
+                }
+                drain_async_outputs();
+            } else if (have_last_frame && last_texture) {
+                ComPtr<IMFSample> encoded;
+                diagnostics_stage_.store(DiagnosticsStage::EncodingVideo, std::memory_order_relaxed);
+                if (encode_frame_timed(last_texture.Get(), output_pts, last_surface_lease,
                                        encoded, true) && encoded) {
                     diagnostics_stage_.store(DiagnosticsStage::MuxingVideo, std::memory_order_relaxed);
                     account_video_write(encoded.Get(), true, 0);
                 }
                 drain_async_outputs();
-                last_paced_pts = paced_pts;
             }
+            last_paced_pts = output_pts;
         }
 
         // --- Audio: timestamp-align mic and loopback, mix, and write one stream ---
@@ -1553,7 +1594,44 @@ void SessionController::encode_loop() {
             last_power_check_ms = now_ms;
         }
 
+        // Do not sleep before draining any media already queued when this
+        // iteration began. The generation was captured before queue inspection,
+        // so arrivals during processing wake immediately without lost signals.
+        if (encode_running_.load(std::memory_order_acquire)) {
+            auto sleep_for = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::hours(24));
+            if (machine_.is_recording() && pacer_.started()) {
+                const int64_t remaining_100ns = pacer_.next_deadline() - sync_.now_pts();
+                if (remaining_100ns > 0) {
+                    const auto until_deadline = std::chrono::milliseconds(
+                        (remaining_100ns + 9'999) / 10'000);
+                    sleep_for = (std::max)(std::chrono::milliseconds(1), until_deadline);
+                }
+            }
+            if (pipeline_wake_.wait_for_change(observed_wake_generation, sleep_for)) {
+                ++controller_wakeups;
+            } else {
+                ++controller_deadline_wakeups;
+            }
+        }
+
     }
+
+    const uint64_t output_duration_100ns = first_scheduled_pts >= 0
+        ? static_cast<uint64_t>((std::max)(int64_t{ 1 },
+              last_scheduled_pts - first_scheduled_pts + 10'000'000LL / pacer_.fps()))
+        : 0;
+    const uint64_t output_fps_milli = output_duration_100ns > 0
+        ? scheduled_output_frames * 10'000'000'000ULL / output_duration_100ns : 0;
+    diagnostics_.write_event(L"event=fixed_fps_summary requested_fps=" +
+        std::to_wstring(pacer_.fps()) + L" synthetic_repeats=" +
+        std::to_wstring(pacer_.emitted_repeats()) + L" missed_deadline_slots=" +
+        std::to_wstring(pacer_.skipped_slots()) + L" coalesced_captures=" +
+        std::to_wstring(coalesced_capture_frames) + L" scheduled_frames=" +
+        std::to_wstring(scheduled_output_frames) + L" scheduled_output_fps_milli=" +
+        std::to_wstring(output_fps_milli) + L" controller_wakeups=" +
+        std::to_wstring(controller_wakeups) + L" controller_deadline_wakeups=" +
+        std::to_wstring(controller_deadline_wakeups));
 
     // Capture is stopped before this thread is joined; flush the mixer reorder
     // window so the final microphone/system audio samples reach the MP4.

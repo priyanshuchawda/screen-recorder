@@ -2,7 +2,7 @@
 //
 // Covers:
 //   T037: TelemetryStore / TelemetrySnapshot
-//   T038: FramePacer pacing logic
+//   M4: Fixed-frame output cadence and pipeline wake signal
 //   T039: CaptureEngine device_lost_ flag API
 //   T042: PowerModeDetector clamp_for_power()
 //   T043: CaptureEngine::is_wgc_supported() available without crashing
@@ -148,95 +148,108 @@ TEST(T037_Telemetry, EncoderModeLabelStrings) {
     s.encoder_mode = 2; EXPECT_STREQ(s.encoder_mode_label(), L"SW 720p");
 }
 
-// ============================================================
-// T038: FramePacer
-// ============================================================
-
-TEST(T038_FramePacer, IdleRepeatDoesNotReplayLongStaleBacklog) {
-    EXPECT_EQ(sr::idle_repeat_pts(10'000'000, 0, 333'333), 9'666'667);
-    EXPECT_EQ(sr::idle_repeat_pts(500'000, 0, 333'333), 333'333);
-}
-
-TEST(T038_FramePacer, FirstFrameAlwaysAccepted) {
-    sr::FramePacer pacer;
-    pacer.initialize(30);
-    int64_t out = -1;
-    auto action = pacer.pace_frame(333333LL, false, &out);
-    EXPECT_EQ(action, sr::PaceAction::Accept);
-    EXPECT_EQ(out, 333333LL);
-}
-
-TEST(T038_FramePacer, NormalFramesAccepted) {
-    sr::FramePacer pacer;
-    pacer.initialize(30);
-    int64_t out = 0;
-    int64_t pts = 0;
-    for (int i = 0; i < 30; ++i) {
-        pts += 333333LL;
-        auto action = pacer.pace_frame(pts, false, &out);
-        EXPECT_NE(action, sr::PaceAction::Drop);
-        EXPECT_GT(out, 0LL);
+TEST(M4FixedFramePacer, ProducesExactThirtyAndSixtyFpsDeadlines) {
+    for (const uint32_t fps : {30u, 60u}) {
+        sr::FixedFramePacer pacer(fps);
+        pacer.begin(1'000'000);
+        EXPECT_EQ(pacer.next_deadline(), 1'000'000);
+        const int64_t first = pacer.emit_due(1'000'000, true);
+        EXPECT_EQ(first, 1'000'000);
+        EXPECT_EQ(pacer.next_deadline(), 1'000'000 + 10'000'000LL / fps);
+        EXPECT_FALSE(pacer.output_due(pacer.next_deadline() - 1));
+        EXPECT_TRUE(pacer.output_due(pacer.next_deadline()));
+        EXPECT_EQ(pacer.emit_due(pacer.next_deadline(), false),
+                  1'000'000 + 10'000'000LL / fps);
     }
 }
 
-TEST(T038_FramePacer, GapLargerThan1p5xTriggersDuplicate) {
-    sr::FramePacer pacer;
-    pacer.initialize(30);
-
-    int64_t out = 0;
-    // First frame
-    pacer.pace_frame(333333LL, false, &out);
-    // Gap of 2× interval triggers Duplicate
-    int64_t big_gap_pts = 333333LL + 333333LL * 2; // 3× target from start
-    auto action = pacer.pace_frame(big_gap_pts, false, &out);
-    EXPECT_EQ(action, sr::PaceAction::Duplicate);
-    EXPECT_EQ(pacer.duplicates_inserted(), 1u);
+TEST(M4FixedFramePacer, StaticScreenRepeatsOnlyOnOutputDeadlines) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin(0);
+    EXPECT_EQ(pacer.emit_due(0, true), 0);
+    EXPECT_EQ(pacer.emit_due(100'000, false), -1);
+    EXPECT_EQ(pacer.emit_due(333'333, false), 333'333);
+    EXPECT_EQ(pacer.emitted_repeats(), 1u);
+    EXPECT_EQ(pacer.next_deadline(), 666'666);
 }
 
-TEST(T038_FramePacer, QueueFullCausesDrop) {
-    sr::FramePacer pacer;
-    pacer.initialize(30);
-    int64_t out = 0;
-    pacer.pace_frame(333333LL, false, &out); // first frame — bootstrap
-    auto action = pacer.pace_frame(666666LL, /*queue_full=*/true, &out);
-    EXPECT_EQ(action, sr::PaceAction::Drop);
-    EXPECT_EQ(pacer.drops(), 1u);
+TEST(M4FixedFramePacer, SkipsMissedSlotsWithoutCatchupBurst) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin(0);
+    EXPECT_EQ(pacer.emit_due(0, true), 0);
+    const auto due = pacer.emit_due(1'200'000, true);
+    EXPECT_EQ(due, 1'000'000);
+    EXPECT_EQ(pacer.skipped_slots(), 2u);
+    EXPECT_EQ(pacer.next_deadline(), 1'333'333);
 }
 
-TEST(T038_FramePacer, ResetClearsPacingState) {
-    sr::FramePacer pacer;
-    pacer.initialize(30);
-    int64_t out = 0;
-    pacer.pace_frame(333333LL, false, &out);
+TEST(M4FixedFramePacer, LateWakeAtRoundedThirtyFpsDeadlineDoesNotCatchUp) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin(0);
+    EXPECT_EQ(pacer.emit_due(0, true), 0);
+
+    // Slot 5's deadline is floor(5 * 10,000,000 / 30) = 1,666,666.
+    // Even after waking at that exact rounded deadline, emit only slot 5.
+    EXPECT_EQ(pacer.emit_due(1'666'666, true), 1'666'666);
+    EXPECT_EQ(pacer.skipped_slots(), 4u);
+    EXPECT_EQ(pacer.next_deadline(), 2'000'000);
+    EXPECT_EQ(pacer.emit_due(1'666'666, true), -1);
+}
+
+TEST(M4FixedFramePacer, ResetReanchorsAfterPause) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin(0);
+    EXPECT_EQ(pacer.emit_due(0, true), 0);
     pacer.reset();
-    // After reset, next frame should behave as the first frame again
-    auto action = pacer.pace_frame(50'000'000LL, false, &out); // large PTS
-    EXPECT_EQ(action, sr::PaceAction::Accept); // no duplicate since state was reset
-    EXPECT_EQ(pacer.duplicates_inserted(), 0u);
+    pacer.begin(9'000'000);
+    EXPECT_EQ(pacer.next_deadline(), 9'000'000);
+    EXPECT_EQ(pacer.emit_due(9'000'000, true), 9'000'000);
+    EXPECT_EQ(pacer.skipped_slots(), 0u);
 }
 
-TEST(T038_FramePacer, OutputPTSMonotonicUnderJitter) {
-    sr::FramePacer pacer;
-    pacer.initialize(30);
+TEST(M4FixedFramePacer, EmitsFinalPendingFrameAtNextSlot) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin(0);
+    EXPECT_EQ(pacer.emit_due(0, true), 0);
+    EXPECT_EQ(pacer.emit_next(true), 333'333);
+    EXPECT_EQ(pacer.next_deadline(), 666'666);
+    EXPECT_EQ(pacer.emitted_repeats(), 0u);
+}
 
-    int64_t raw_pts  = 0;
-    int64_t prev_out = -1;
-    bool    monotonic= true;
-
-    for (int i = 0; i < 300; ++i) {
-        // ±5ms jitter around 33ms nominal
-        int64_t jitter = (i % 3 == 0) ? 50'000LL : -50'000LL;
-        raw_pts += 333'333LL + jitter;
-        if (raw_pts < 0) raw_pts = 0;
-
-        int64_t out = 0;
-        auto action = pacer.pace_frame(raw_pts, false, &out);
-        if (action == sr::PaceAction::Drop) continue;
-
-        if (prev_out >= 0 && out <= prev_out) { monotonic = false; break; }
-        prev_out = out;
+TEST(M4FixedFramePacer, DoesNotExceedRequestedRateDuringIrregularArrivals) {
+    sr::FixedFramePacer pacer(30);
+    pacer.begin(0);
+    uint64_t outputs = 0;
+    int64_t previous_pts = -1;
+    for (int64_t now = 0; now <= 100'000'000; now += 17'000 + (now % 13'000)) {
+        if (pacer.output_due(now)) {
+            const int64_t pts = pacer.emit_due(now, (now % 97'000) < 30'000);
+            ASSERT_GT(pts, previous_pts);
+            if (previous_pts >= 0) EXPECT_GE(pts - previous_pts, 333'333);
+            previous_pts = pts;
+            ++outputs;
+        }
     }
-    EXPECT_TRUE(monotonic) << "FramePacer output PTS is not monotonic under jitter";
+    EXPECT_EQ(pacer.skipped_slots(), 0u) << "outputs=" << outputs << " last=" << previous_pts;
+    EXPECT_LE(outputs, 301u); // Includes the tick at t=10s; no extra gap duplicates.
+    EXPECT_GT(outputs, 290u);
+}
+
+TEST(M4PipelineWake, NotificationBeforeWaitIsNotLost) {
+    sr::PipelineWakeSignal wake;
+    const auto observed = wake.generation();
+    wake.notify();
+    EXPECT_TRUE(wake.wait_for_change(observed, std::chrono::milliseconds(0)));
+}
+
+TEST(M4PipelineWake, QueuePushNotifiesSharedConsumer) {
+    sr::PipelineWakeSignal wake;
+    sr::BoundedQueue<int, 2> queue;
+    queue.set_wake_signal(&wake);
+    const auto observed = wake.generation();
+    EXPECT_TRUE(queue.try_push(7));
+    EXPECT_TRUE(wake.wait_for_change(observed, std::chrono::milliseconds(0)));
+    ASSERT_TRUE(queue.try_pop().has_value());
 }
 
 // ============================================================

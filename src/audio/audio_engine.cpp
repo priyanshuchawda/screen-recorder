@@ -23,6 +23,8 @@ namespace sr {
 
 bool AudioEngine::initialize(AudioQueue* queue, AudioCaptureMode mode) {
     shutdown();
+    discontinuities_.store(0, std::memory_order_relaxed);
+    estimated_missing_duration_100ns_.store(0, std::memory_order_relaxed);
     queue_ = queue;
     mode_  = mode;
     bool initialized = false;
@@ -320,7 +322,6 @@ void AudioEngine::capture_loop() {
     }
 
     std::vector<uint8_t> resampled_buf;
-    bool logged_discontinuity = false;
     bool logged_timestamp_error = false;
     int64_t last_packet_end_pts = -1;
     while (running_.load(std::memory_order_acquire)) {
@@ -340,29 +341,44 @@ void AudioEngine::capture_loop() {
                 &data, &frames_available, &flags, nullptr, &qpc_position))
                && frames_available > 0)
         {
-            if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) && !logged_discontinuity) {
-                logged_discontinuity = true;
-                SR_LOG_WARN(L"[%s] WASAPI reported an audio data discontinuity",
-                            mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone");
-            }
             int64_t pts = last_packet_end_pts >= 0
                 ? last_packet_end_pts
                 : start_pts_100ns_ + static_cast<int64_t>(sample_count_) *
                     10'000'000LL / static_cast<int64_t>(sample_rate_);
             bool timestamp_in_pause = sync_manager_ && sync_manager_->is_paused();
-            if (qpc_position != 0 && !(flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR)) {
+            const bool timestamp_valid = qpc_position != 0 &&
+                !(flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR);
+            bool timestamp_mapped = false;
+            if (timestamp_valid) {
                 if (sync_manager_) {
                     const int64_t packet_duration = static_cast<int64_t>(frames_available) *
                         10'000'000LL / static_cast<int64_t>(sample_rate_);
-                    timestamp_in_pause = !sync_manager_->try_map_qpc_100ns(
+                    timestamp_mapped = sync_manager_->try_map_qpc_100ns(
                         static_cast<int64_t>(qpc_position), packet_duration, pts);
+                    timestamp_in_pause = !timestamp_mapped;
                 } else {
                     pts = static_cast<int64_t>(qpc_position) - pts_anchor_100ns_;
+                    timestamp_mapped = true;
                 }
             } else if ((flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) && !logged_timestamp_error) {
                 logged_timestamp_error = true;
                 SR_LOG_WARN(L"[%s] WASAPI timestamp uncertain; using sample clock",
                             mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone");
+            }
+            if (flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) {
+                const uint64_t total = discontinuities_.fetch_add(1, std::memory_order_relaxed) + 1;
+                int64_t estimated_gap_100ns = 0;
+                if (timestamp_mapped && last_packet_end_pts >= 0 && pts > last_packet_end_pts) {
+                    estimated_gap_100ns = pts - last_packet_end_pts;
+                    estimated_missing_duration_100ns_.fetch_add(
+                        static_cast<uint64_t>(estimated_gap_100ns), std::memory_order_relaxed);
+                }
+                if (total == 1 || (total % 100) == 0) {
+                    SR_LOG_WARN(L"[%s] WASAPI discontinuity count=%llu estimated_gap_ms=%lld",
+                        mode_ == AudioCaptureMode::Loopback ? L"Loopback" : L"Microphone",
+                        static_cast<unsigned long long>(total),
+                        static_cast<long long>(estimated_gap_100ns / 10'000));
+                }
             }
             if (timestamp_in_pause) {
                 capture_client_->ReleaseBuffer(frames_available);

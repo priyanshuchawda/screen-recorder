@@ -171,7 +171,7 @@ private:
     SessionMachine  machine_;
     SyncManager     sync_;
     ProbeResult     probe_;
-    FramePacer      pacer_;      // T038: frame pacing
+    FixedFramePacer pacer_;      // M4: one authoritative fixed-FPS output clock
     TelemetryStore  telemetry_;  // T037: live counters
     std::atomic<bool> last_power_ac_{ true }; // T042: published power source state
     bool            active_high_quality_ = false;
@@ -186,6 +186,7 @@ private:
     StorageManager*                storage_ = nullptr;
 
     // Queues shared between capture/audio producers and encode consumer
+    PipelineWakeSignal pipeline_wake_;
     std::unique_ptr<FrameQueue> frame_queue_;
     std::unique_ptr<AudioQueue> audio_queue_;      // microphone
     std::unique_ptr<AudioQueue> loopback_queue_;   // system audio
@@ -194,6 +195,9 @@ private:
     std::thread       encode_thread_;
     std::atomic<bool> encode_running_{ false };
     std::atomic<bool> pacer_reset_requested_{ false };
+    std::atomic<uint64_t> scheduled_video_frames_{ 0 };
+    std::atomic<int64_t> first_scheduled_video_pts_{ -1 };
+    std::atomic<int64_t> last_scheduled_video_pts_{ -1 };
 
     // Low-frequency independent heartbeat keeps recording/stop diagnostics
     // useful even if the capture or encode thread stalls.
