@@ -57,6 +57,8 @@ TEST(SessionDiagnosticsTest, StopSummaryMarksIncompleteEncoderDrain) {
     info.encoder_inputs_accepted = 10;
     info.encoder_outputs_produced = 9;
     info.encoder_inputs_retried = 2;
+    info.encoder_input_queue_backpressure_waits = 4;
+    info.encoder_input_queue_backpressure_timeouts = 1;
     info.audio_write_failures = 1;
     info.audio_source_start_failures = 2;
     info.diagnostic_log_dropped = 2;
@@ -72,6 +74,8 @@ TEST(SessionDiagnosticsTest, StopSummaryMarksIncompleteEncoderDrain) {
     EXPECT_NE(summary.find(L"encoder_inputs_accepted=10"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_outputs_produced=9"), std::wstring::npos);
     EXPECT_NE(summary.find(L"encoder_inputs_retried=2"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_queue_backpressure_waits=4"), std::wstring::npos);
+    EXPECT_NE(summary.find(L"encoder_input_queue_backpressure_timeouts=1"), std::wstring::npos);
     EXPECT_NE(summary.find(L"audio_write_failures=1"), std::wstring::npos);
     EXPECT_NE(summary.find(L"audio_source_start_failures=2"), std::wstring::npos);
     EXPECT_NE(summary.find(L"diagnostic_log_dropped=2"), std::wstring::npos);

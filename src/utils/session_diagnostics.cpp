@@ -51,7 +51,8 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  L"encoder_deferred_inputs_pending=%llu encoder_deferred_inputs_high_watermark=%llu "
                  L"encoder_inputs_offered=%llu encoder_inputs_accepted=%llu encoder_outputs_produced=%llu "
                  L"encoder_drain_samples=%llu "
-                 L"encoder_inputs_not_accepted=%llu encoder_input_errors=%llu "
+                 L"encoder_inputs_not_accepted=%llu encoder_input_queue_backpressure_waits=%llu "
+                 L"encoder_input_queue_backpressure_timeouts=%llu encoder_input_errors=%llu "
                  L"encoder_inputs_deferred=%llu encoder_inputs_abandoned=%llu encoder_inputs_retried=%llu "
                  L"encoder_timestamp_errors=%llu encoder_input_preparation_errors=%llu "
                  L"encoder_output_errors=%llu encoder_scheduler_errors=%llu "
@@ -86,6 +87,8 @@ std::wstring SessionDiagnostics::format_stop_summary(const StopInfo& info) {
                  static_cast<unsigned long long>(info.encoder_outputs_produced),
                  static_cast<unsigned long long>(info.encoder_drain_samples),
                  static_cast<unsigned long long>(info.encoder_inputs_not_accepted),
+                 static_cast<unsigned long long>(info.encoder_input_queue_backpressure_waits),
+                 static_cast<unsigned long long>(info.encoder_input_queue_backpressure_timeouts),
                  static_cast<unsigned long long>(info.encoder_input_errors),
                  static_cast<unsigned long long>(info.encoder_inputs_deferred),
                  static_cast<unsigned long long>(info.encoder_inputs_abandoned),

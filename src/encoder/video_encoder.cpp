@@ -794,6 +794,8 @@ bool VideoEncoder::initialize(const EncoderProfile& profile,
     input_samples_offered_.store(0, std::memory_order_relaxed);
     input_samples_accepted_.store(0, std::memory_order_relaxed);
     input_samples_not_accepted_.store(0, std::memory_order_relaxed);
+    input_queue_backpressure_waits_.store(0, std::memory_order_relaxed);
+    input_queue_backpressure_timeouts_.store(0, std::memory_order_relaxed);
     input_samples_deferred_without_event_.store(0, std::memory_order_relaxed);
     input_errors_.store(0, std::memory_order_relaxed);
     output_samples_produced_.store(0, std::memory_order_relaxed);
@@ -1088,13 +1090,23 @@ bool VideoEncoder::encode_frame(ID3D11Texture2D* nv12_texture, int64_t pts,
         queued.synthetic = synthetic;
         queued.force_keyframe = force_keyframe;
         queued.queued_at = std::chrono::steady_clock::now();
-        if (!async_scheduler_->enqueue_input(std::move(queued))) {
-            input_samples_not_accepted_.fetch_add(1, std::memory_order_relaxed);
+        bool was_backpressured = false;
+        if (!async_scheduler_->enqueue_input_wait(
+                std::move(queued), std::chrono::seconds(5), &was_backpressured)) {
+            if (was_backpressured &&
+                !async_scheduler_->failed() && !async_scheduler_->stopped()) {
+                input_queue_backpressure_timeouts_.fetch_add(1, std::memory_order_relaxed);
+                async_scheduler_->fail(HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+            }
             pending_inputs_abandoned_.fetch_add(1, std::memory_order_relaxed);
-            SR_LOG_ERROR(L"Async encoder input queue is full or closed; frame %llu was not accepted",
-                         static_cast<unsigned long long>(frame_id));
+            SR_LOG_ERROR(L"Async encoder could not enqueue frame %llu (backpressure_waited=%u failed=%u stopped=%u)",
+                         static_cast<unsigned long long>(frame_id), was_backpressured ? 1u : 0u,
+                         async_scheduler_->failed() ? 1u : 0u,
+                         async_scheduler_->stopped() ? 1u : 0u);
             return false;
         }
+        if (was_backpressured)
+            input_queue_backpressure_waits_.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
 

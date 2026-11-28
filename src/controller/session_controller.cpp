@@ -737,6 +737,10 @@ bool SessionController::stop() {
     diagnostics_stop.encoder_inputs_accepted = encoder_final_state.input_samples_accepted;
     diagnostics_stop.encoder_outputs_produced = encoder_final_state.output_samples_produced;
     diagnostics_stop.encoder_inputs_not_accepted = encoder_final_state.input_samples_not_accepted;
+    diagnostics_stop.encoder_input_queue_backpressure_waits =
+        encoder_final_state.input_queue_backpressure_waits;
+    diagnostics_stop.encoder_input_queue_backpressure_timeouts =
+        encoder_final_state.input_queue_backpressure_timeouts;
     diagnostics_stop.encoder_input_errors = encoder_final_state.input_errors;
     diagnostics_stop.encoder_inputs_deferred = encoder_final_state.input_samples_deferred_without_event;
     diagnostics_stop.encoder_inputs_abandoned = encoder_final_state.pending_inputs_abandoned;

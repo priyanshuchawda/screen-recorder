@@ -50,6 +50,8 @@ public:
         uint64_t encoder_inputs_accepted = 0;
         uint64_t encoder_outputs_produced = 0;
         uint64_t encoder_inputs_not_accepted = 0;
+        uint64_t encoder_input_queue_backpressure_waits = 0;
+        uint64_t encoder_input_queue_backpressure_timeouts = 0;
         uint64_t encoder_input_errors = 0;
         uint64_t encoder_inputs_deferred = 0;
         uint64_t encoder_inputs_abandoned = 0;
